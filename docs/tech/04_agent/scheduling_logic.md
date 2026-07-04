@@ -1,0 +1,288 @@
+# Agent 调度逻辑说明
+
+本文档基于当前实现梳理调度链路，主要对应：
+
+- `src/service/roomService.py`
+- `src/service/schedulerService.py`
+- `src/service/agentService/agent.py`
+- `src/service/agentService/agentTaskConsumer.py`
+- `src/service/agentService/agentTurnRunner.py`
+- `src/service/funcToolService/tools.py`
+
+## 1. 核心角色
+
+- `ChatRoom`：房间级状态机，维护当前发言位、轮次计数、跳过窗口与 `INIT / SCHEDULING / IDLE` 状态。
+- `schedulerService`：订阅 `ROOM_AGENT_TURN`，为目标 Agent 创建数据库任务记录，并按需拉起消费协程。
+- `Agent`：纯 facade，对外暴露 `start_consumer_task()` 等高层接口，内部委托给 `AgentTaskConsumer`。
+- `AgentTaskConsumer`：串行消费数据库任务，管理 Agent 运行时状态（`status`、`current_db_task`）。
+- `AgentTurnRunner`：执行一轮推理、工具调用与收尾。实现 `AgentDriverHost` 协议。
+- `funcToolService`：提供 `send_chat_msg` / `finish_action` 等工具，驱动 turn 真正推进。
+
+Scheduler 不维护独立的运行中 Agent / Task 列表，消费协程句柄归 `AgentTaskConsumer` 自身持有。
+
+## 2. 关键状态
+
+### 2.1 ChatRoom
+
+- `_turn_pos`：当前发言位在 `_agent_names` 中的索引。
+- `_turn_count`：完成整圈发言后的轮次计数。
+- `_current_turn_has_content`：当前发言位是否已经产出过真实消息。
+- `_round_skipped_set`：自上次真实消息以来，已跳过发言的成员集合。
+- `_state`：`INIT / SCHEDULING / IDLE`。
+- `_state_after_init`：`INIT` 退出后应恢复到的目标状态。
+
+### 2.2 Agent 运行时状态
+
+以下状态由 `AgentTaskConsumer` 持有，`Agent` 通过 property 代理暴露：
+
+- `status`：`ACTIVE / IDLE / FAILED`。
+- `_aio_consumer_task`：当前 Agent 的消费协程句柄。
+- `current_db_task`：当前认领中的数据库任务记录（`GtScheculeTask`）。
+
+### 2.3 消息总线事件
+
+- `ROOM_STATUS_CHANGED`：房间状态或发言人变更；payload 为 `gt_room / state / current_turn_agent_id / need_scheduling`。
+  - `need_scheduling=True` 表示当前发言位是普通 AI Agent，调度器需为其创建任务；
+  - `need_scheduling=False` 表示房间进入 IDLE、等待人类输入或命中停止条件。
+- `ROOM_MSG_ADDED`：消息插入 store 时（含 pending 状态）；payload 为 `gt_room / gt_message`。
+- `ROOM_MSG_CHANGED`：消息状态变化（升级为 immediately 或被消费分配 seq）；payload 为 `gt_room / gt_message`。
+- `AGENT_STATUS_CHANGED`：Agent 忙闲状态变更；payload 为 `gt_agent / status`。
+
+## 3. 启动与恢复
+
+### 3.1 启动顺序
+
+`backend_main.main()` 的调度相关启动顺序是：
+
+1. `agentService.load_all_team()`
+2. `roomService.load_rooms_from_db()`
+3. `agentService.restore_state()`
+4. `roomService.restore_state()`
+5. `schedulerService.start_scheduling()`
+
+其中：
+
+- `roomService.restore_state()` 会从持久化消息和已读进度重建房间运行态。
+- `schedulerService.start_scheduling()` 只负责调用 `roomService.activate_rooms()`，统一激活房间调度。
+- `agentService.restore_state()` 从数据库加载 Agent 历史消息（通过 `agent.inject_history_messages()`），并将遗留 RUNNING 任务标记为 FAILED。
+
+### 3.2 Team 热更新
+
+`teamService.hot_reload_team()` 当前顺序是：
+
+1. `schedulerService.stop_team(team.id)`
+2. `agentService.reload_team(team.id)`
+3. `roomService.refresh_rooms_for_team(team.id)`
+4. `schedulerService.start_scheduling(team_name)`
+
+也就是说，热更新会先停掉旧消费者，再重建 Team 下的 Agent 与 Room 运行态，最后重新触发调度。
+
+## 4. 单个 Turn 的生命周期
+
+### 4.1 房间发布轮次
+
+当房间进入 `SCHEDULING`，或当前发言人 `finish_turn()` 成功后，`ChatRoom` 会：
+
+1. `_go_next_turn()` + `_persist_room_state()` 推进发言位
+2. 先检查 `_is_stop_condition_met()`，命中则切 IDLE
+3. 调用 `_advance_to_next_dispatchable()` 跳过不可调度成员（如 GROUP 中的 OPERATOR）
+4. 若返回 Agent ID，发布 `ROOM_AGENT_TURN`；否则等待输入或已 IDLE
+
+### 4.2 Scheduler 创建数据库任务
+
+`schedulerService._on_room_status_changed()` 收到 `ROOM_STATUS_CHANGED` 后会：
+
+1. 若 `need_scheduling=False`，直接忽略
+2. 检查调度闸门 `_schedule_state`，非 `RUNNING` 时跳过
+3. 从 payload 中读取 `current_turn_agent_id` 对应的 Agent
+4. 检查该 Agent 是否已经存在同一 `room_id` 的 `PENDING` 数据库任务
+5. 若无重复，则创建 `GtScheculeTask(type=ROOM_MESSAGE, task_data={"room_id": room_id})`
+6. 调用 `agent.start_consumer_task()`
+
+这里的去重粒度是"同一 Agent、同一房间、仍处于 `PENDING` 的数据库任务"。
+
+### 4.3 AgentTaskConsumer 消费数据库任务
+
+`Agent.start_consumer_task()` 转发给 `AgentTaskConsumer.start()`，后者只负责保证消费协程存在：
+
+- 若 `_aio_consumer_task` 仍在运行，则直接跳过
+- 否则创建 `asyncio.create_task(self.consume())`
+
+`AgentTaskConsumer.consume()` 的主要流程：
+
+1. 将 `status` 置为 `ACTIVE` 并发布 `AGENT_STATUS_CHANGED`
+2. 循环读取该 Agent 的首个 `PENDING` 任务
+3. 通过 `transition_task_status()` 原子认领任务（PENDING → RUNNING）
+4. 设置 `current_db_task`
+5. 调用 `_turn_runner.run_chat_turn(task)`
+6. 成功则将任务标记为 `COMPLETED`
+7. 失败则将任务标记为 `FAILED`，并将 Agent 状态置为 `FAILED`
+8. 循环直到没有待处理任务
+
+在清理逻辑中：
+
+- 非失败态会回到 `IDLE`
+- 若当前协程仍是 `_aio_consumer_task`，会清空句柄
+- 退出时若又检测到待处理任务，会再次 `start()`
+
+因此当前模型是：
+
+- Scheduler 负责"投递数据库任务并唤起消费者"
+- AgentTaskConsumer 负责"串行消费数据库任务"
+
+### 4.4 AgentTurnRunner 执行一轮聊天
+
+`AgentTurnRunner.run_chat_turn(task)` 会：
+
+1. 从 `task.task_data["room_id"]` 获取房间，设置 `_current_room` 上下文
+2. 调用 `pull_room_messages_to_history(room)` 同步未读消息
+3. 调用 `driver.run_chat_turn(task, synced_count)` 执行本轮
+4. 清除 `_current_room` 上下文
+
+这里需要区分两个层级：
+
+- `turn`：处理“当前房间轮到该 Agent 发言”的整轮过程
+- `step`：turn 内部的一次推进动作，由 `AgentTurnRunner._advance_step(...)` 执行
+
+在 host-managed turn loop 下，TurnRunner 通过工具完成本轮：
+
+- `send_chat_msg`：向当前房间或其他房间写消息
+- `finish_action`：显式结束当前轮次
+- `turn_setup.max_retries`：控制“失败行动”的连续重试次数；失败行动指本次推理未产出任何可执行的工具推进（如直接输出文本或空响应）
+
+其中：
+
+- `send_chat_msg` 只写消息，不推进 turn
+- 只有 `finish_action` 才会调用 `ChatRoom.finish_turn()` 交棒给下一位
+- 单个 step 的推进结果由 `TurnStepResult` 表达：
+  - `TURN_DONE`：当前 step 执行后，turn 完成
+  - `NO_ACTION`：当前 step 未产出可执行动作
+  - `CONTINUE`：当前 step 已完成，turn 继续推进
+
+## 5. ChatRoom 的状态推进
+
+### 5.1 `add_message()`
+
+房间收到消息后会：
+
+1. 追加消息并发布 `ROOM_MSG_ADDED`
+2. 如果消息发送者正是当前发言位，则将 `_current_turn_has_content=True`
+3. 如果是插话，只记录消息，不推进 turn
+4. 只要收到真实消息（非 `SYSTEM`），就清空 `_round_skipped_set`
+5. 如果房间原本是 `IDLE`，则重置轮次并重新激活调度
+
+### 5.2 `finish_turn()`
+
+当前发言人结束行动时：
+
+1. 校验 `sender` 是否就是当前发言人
+2. 若本轮没有发言内容，则把当前发言人加入 `_round_skipped_set`
+3. 清空 `_current_turn_has_content`
+4. 推进 `_turn_pos`
+5. 如果跨轮则增加 `_turn_count`
+6. 解析下一位可调度成员并按需发布事件
+
+## 6. 停止条件与特殊成员策略
+
+### 6.1 停止条件
+
+停止逻辑统一收敛在 `ChatRoom._is_stop_condition_met()`，满足任一条件进入 `IDLE`：
+
+1. `_max_turns > 0 and _turn_count >= _max_turns`（`_max_turns <= 0` 表示无限轮次，永不触发）
+2. 所有 AI 成员都已进入 `_round_skipped_set`
+
+这里"所有 AI 成员"不包含 `OPERATOR`。
+
+### 6.2 Group 房间中的 Operator
+
+当房间满足以下条件时：
+
+- 当前发言位是 `OPERATOR`
+- 房间类型是 `GROUP`
+- 房间成员数大于 2
+
+`_advance_to_next_dispatchable()` 内部的 `_should_auto_skip_agent_turn()` 会自动跳过 `OPERATOR`，将其加入 `_round_skipped_set` 并推进到下一位 AI 成员。
+
+### 6.3 Private 房间中的 Operator
+
+在 `PRIVATE` 房间中，`OPERATOR` 不会被自动跳过。
+
+当前行为是：
+
+- `_advance_to_next_dispatchable()` 检测到当前发言位是 `OPERATOR`（SpecialAgent）时返回 `None`
+- 房间停在 `OPERATOR` 发言位，等待外部输入
+- 前端 / API 通过 `roomController.RoomMessagesHandler.post()` 让 `OPERATOR` 写入消息
+- 写入消息后由控制器显式调用 `room.finish_turn(SpecialAgent.OPERATOR.name)`，再把轮次交给 AI
+
+也就是说，私聊中的 `OPERATOR` 回合是"等待人类输入"，调度器不会为此发布 `ROOM_AGENT_TURN`。
+
+## 7. IDLE 唤醒
+
+房间一旦进入 `IDLE`，任何新消息都会触发 `_update_turn_state_on_message()` 的唤醒逻辑：
+
+1. 重置 `_turn_count`
+2. 清空 `_round_skipped_set`
+3. 清空 `_current_turn_has_content`
+4. 将状态切回 `SCHEDULING`
+5. 重新解析下一位并按需发布 `ROOM_AGENT_TURN`
+
+因此唤醒逻辑依赖的是房间状态，而不是 `_turn_count` 是否已到上限。
+
+## 8. 关键方法索引
+
+### 8.1 `src/service/roomService/chatRoom.py`
+
+- `ChatRoom.activate_scheduling`
+- `ChatRoom.add_message`
+- `ChatRoom.finish_turn`
+- `ChatRoom._advance_to_next_dispatchable`
+- `ChatRoom._should_auto_skip_agent_turn`
+- `ChatRoom._publish_room_status`
+- `ChatRoom._is_stop_condition_met`
+- `ChatRoom._transition_to_idle_on_stop`
+- `activate_rooms`
+
+### 8.2 `src/service/schedulerService.py`
+
+- `startup`
+- `start_scheduling`
+- `_on_room_status_changed`
+- `stop_team`
+
+**调度闸门 `_schedule_state`（`ScheduleState`）：**
+
+- `RUNNING`：正常调度，收到 `ROOM_STATUS_CHANGED` 时会创建任务
+- `STOPPED`：主动停止（服务未启动或已关闭），不创建任务
+- `BLOCKED`：因故障或初始化未完成暂时阻塞，不创建任务
+
+### 8.3 `src/service/agentService/agent.py`
+
+- `Agent.start_consumer_task` → 转发 `task_consumer.start()`
+- `Agent.stop_consumer_task` → 转发 `task_consumer.stop()`
+- `Agent.startup` → 转发 `task_consumer._turn_runner.driver.startup()`
+- `Agent.close` → 停止消费 + driver.shutdown + tool_registry.clear
+- `Agent.dump_history_messages` → 转发 `task_consumer._turn_runner._history.dump()`
+- `Agent.inject_history_messages` → 转发 `task_consumer._turn_runner._history.replace()`
+
+### 8.4 `src/service/agentService/agentTaskConsumer.py`
+
+- `AgentTaskConsumer.start`
+- `AgentTaskConsumer.stop`
+- `AgentTaskConsumer.consume`
+- `AgentTaskConsumer._execute_task`
+- `AgentTaskConsumer.resume_failed`
+- `AgentTaskConsumer._publish_status`
+
+### 8.5 `src/service/agentService/agentTurnRunner.py`
+
+- `AgentTurnRunner.run_chat_turn`
+- `AgentTurnRunner._run_turn_loop`
+- `AgentTurnRunner._advance_step`
+- `AgentTurnRunner.pull_room_messages_to_history`
+- `AgentTurnRunner._infer_to_item`
+- `AgentTurnRunner._run_tool_to_item`
+
+### 8.6 `src/service/funcToolService/tools.py`
+
+- `send_chat_msg`
+- `finish_action`

@@ -1,0 +1,79 @@
+{
+  "name": "软件研发团队",
+  "uuid": "preset-default-team-v18",
+  "is_default": true,
+  "auto_start": true,
+  "i18n": {
+    "display_name": {
+      "zh-CN": "软件研发团队",
+      "en": "Software R&D Team"
+    }
+  },
+  "agents": [
+    {
+      "name": "小马哥",
+      "role_template": "project_manager",
+      "i18n": {
+        "display_name": {
+          "zh-CN": "小马哥",
+          "en": "Ma"
+        }
+      }
+    },
+    {
+      "name": "阿张",
+      "role_template": "software_engineer",
+      "i18n": {
+        "display_name": {
+          "zh-CN": "阿张",
+          "en": "Azhang"
+        }
+      }
+    },
+    {
+      "name": "李哥",
+      "role_template": "test_engineer",
+      "i18n": {
+        "display_name": {
+          "zh-CN": "李哥",
+          "en": "Brother Li"
+        }
+      }
+    }
+  ],
+  "preset_rooms": [
+    {
+      "name": "小马哥",
+      "agents": ["OPERATOR", "小马哥"],
+      "initial_topic": "你好，小马哥。我们在这里进行私下沟通。",
+      "max_rounds": 100,
+      "i18n": {
+        "display_name": {
+          "zh-CN": "小马哥",
+          "en": "Ma"
+        },
+        "initial_topic": {
+          "zh-CN": "你好，小马哥。我们在这里进行私下沟通。",
+          "en": "Hello Ma. We can communicate privately here."
+        }
+      }
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "研发部",
+    "responsibility": "负责核心产品的开发与交付",
+    "manager": "小马哥",
+    "agents": ["小马哥", "阿张", "李哥"],
+    "children": [],
+    "i18n": {
+      "dept_name": {
+        "zh-CN": "研发部",
+        "en": "R&D Dept"
+      },
+      "responsibility": {
+        "zh-CN": "负责核心产品的开发与交付",
+        "en": "Responsible for core product development and delivery"
+      }
+    }
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "name": "国学命理研究团队",
+  "uuid": "preset-destiny-analysis-v1",
+  "auto_start": false,
+  "i18n": {
+    "display_name": {
+      "zh-CN": "国学命理研究团队",
+      "en": "Chinese Metaphysics Destiny Team"
+    }
+  },
+  "agents": [
+    {
+      "name": "synthesizer",
+      "role_template": "destiny_synthesizer",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "命理综合研判官", "en": "Destiny Synthesizer"}}
+    },
+    {
+      "name": "scholar",
+      "role_template": "classics_scholar",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "经典考证官", "en": "Classics Scholar"}}
+    },
+    {
+      "name": "ziping",
+      "role_template": "ziping_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "子平格局派大师", "en": "Ziping Master"}}
+    },
+    {
+      "name": "dts",
+      "role_template": "dts_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "滴天髓派大师", "en": "Drops of Heaven Master"}}
+    },
+    {
+      "name": "blind",
+      "role_template": "blind_school_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "盲派命理大师", "en": "Blind School Master"}}
+    },
+    {
+      "name": "sizhu_analyst",
+      "role_template": "sizhu_analyst",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "四柱排盘师", "en": "Four Pillars Analyst"}}
+    },
+    {
+      "name": "ziwei",
+      "role_template": "ziwei_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "紫微斗数大师", "en": "Ziwei Master"}}
+    },
+    {
+      "name": "fortune",
+      "role_template": "bagua_fortune",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "运势分析师", "en": "Fortune Analyst"}}
+    },
+    {
+      "name": "meihua",
+      "role_template": "meihua_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "梅花易数大师", "en": "Plum Blossom Master"}}
+    }
+  ],
+  "preset_rooms": [
+    {
+      "name": "命理综合研判室",
+      "agents": ["OPERATOR", "synthesizer", "ziping", "dts", "blind", "ziwei", "meihua", "fortune", "scholar"],
+      "initial_topic": "用户提供生辰八字后，各流派大师分别从八字格局、紫微星盘、梅花易数角度分析，相互辩论驳斥，最终由综合研判官调用 submit_conclusion 提交统一结论，覆盖事业、财运、健康、爱情、家庭、学业等各领域。",
+      "max_rounds": 40,
+      "i18n": {
+        "display_name": {"zh-CN": "命理综合研判室", "en": "Destiny Comprehensive Room"},
+        "initial_topic": {
+          "zh-CN": "用户提供生辰八字后，各流派大师分别从八字格局、紫微星盘、梅花易数角度分析，相互辩论驳斥，最终由综合研判官调用 submit_conclusion 提交统一结论，覆盖事业、财运、健康、爱情、家庭、学业等各领域。",
+          "en": "After user provides birth data, masters from different schools analyze and debate, synthesizer submits unified conclusion covering career, wealth, health, love, family, education."
+        }
+      }
+    },
+    {
+      "name": "四柱八字研讨室",
+      "agents": ["OPERATOR", "ziping", "dts", "blind", "sizhu_analyst"],
+      "initial_topic": "四柱八字专项辩论：子平格局派、滴天髓派、盲派从不同角度分析同一命局，排盘师提供客观排盘数据。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "四柱八字研讨室", "en": "Four Pillars Lab"},
+        "initial_topic": {
+          "zh-CN": "四柱八字专项辩论：子平格局派、滴天髓派、盲派从不同角度分析同一命局，排盘师提供客观排盘数据。",
+          "en": "Four Pillars debate: Ziping, Drops of Heaven, and Blind school analyze the same chart from different angles."
+        }
+      }
+    },
+    {
+      "name": "紫微斗数研讨室",
+      "agents": ["OPERATOR", "ziwei", "fortune"],
+      "initial_topic": "紫微斗数专项分析：根据生辰排紫微星盘，分析十四主星、四化飞星、大限流年，由运势分析师分领域解读。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "紫微斗数研讨室", "en": "Ziwei Dou Shu Lab"},
+        "initial_topic": {
+          "zh-CN": "紫微斗数专项分析：根据生辰排紫微星盘，分析十四主星、四化飞星、大限流年，由运势分析师分领域解读。",
+          "en": "Ziwei chart analysis: 14 main stars, four transformations, decadal and annual cycles."
+        }
+      }
+    },
+    {
+      "name": "梅花易数研讨室",
+      "agents": ["OPERATOR", "meihua"],
+      "initial_topic": "梅花易数占卜：以时间、数字或方位起卦，分析体用生克与万物类象，断吉凶趋势。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "梅花易数研讨室", "en": "Plum Blossom Lab"},
+        "initial_topic": {
+          "zh-CN": "梅花易数占卜：以时间、数字或方位起卦，分析体用生克与万物类象，断吉凶趋势。",
+          "en": "Plum Blossom divination: cast hexagram by time/number/direction, analyze body-use relationship."
+        }
+      }
+    },
+    {
+      "name": "排盘请求室",
+      "agents": ["OPERATOR", "sizhu_analyst"],
+      "initial_topic": "用户在此提供出生年月日时（注明性别和阳历/农历），排盘师将排出完整的四柱八字、十神、大运流年排盘表，并同步到研讨室。",
+      "max_rounds": 100,
+      "i18n": {
+        "display_name": {"zh-CN": "排盘请求室", "en": "Chart Casting Room"},
+        "initial_topic": {
+          "zh-CN": "用户在此提供出生年月日时（注明性别和阳历/农历），排盘师将排出完整的四柱八字、十神、大运流年排盘表，并同步到研讨室。",
+          "en": "Provide birth date/time (with gender and calendar type), analyst casts full Four Pillars chart."
+        }
+      }
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "命理研判委员会",
+    "responsibility": "统筹国学命理各流派协作与综合研判",
+    "manager": "synthesizer",
+    "agents": ["synthesizer", "scholar", "ziping", "ziwei", "meihua"],
+    "children": [
+      {
+        "dept_name": "四柱八字组",
+        "responsibility": "从子平格局、滴天髓、盲派等角度分析四柱八字",
+        "manager": "ziping",
+        "agents": ["ziping", "dts", "blind", "sizhu_analyst"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "四柱八字组", "en": "Four Pillars Group"},
+          "responsibility": {"zh-CN": "从子平格局、滴天髓、盲派等角度分析四柱八字", "en": "Analyze Four Pillars from Ziping, Drops of Heaven, and Blind school perspectives"}
+        }
+      },
+      {
+        "dept_name": "紫微斗数组",
+        "responsibility": "排紫微星盘并分领域解读运势",
+        "manager": "ziwei",
+        "agents": ["ziwei", "fortune"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "紫微斗数组", "en": "Ziwei Group"},
+          "responsibility": {"zh-CN": "排紫微星盘并分领域解读运势", "en": "Cast Ziwei chart and interpret fortune by domain"}
+        }
+      },
+      {
+        "dept_name": "梅花易数组",
+        "responsibility": "以梅花易数起卦断吉凶",
+        "manager": "meihua",
+        "agents": ["meihua", "scholar"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "梅花易数组", "en": "Plum Blossom Group"},
+          "responsibility": {"zh-CN": "以梅花易数起卦断吉凶", "en": "Cast Plum Blossom hexagram for divination"}
+        }
+      }
+    ],
+    "i18n": {
+      "dept_name": {"zh-CN": "命理研判委员会", "en": "Destiny Council"},
+      "responsibility": {"zh-CN": "统筹国学命理各流派协作与综合研判", "en": "Coordinate all Chinese metaphysics schools for comprehensive destiny analysis"}
+    }
+  }
+}

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 允许网络访问 -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- 允许接收用户选择的文件路径 -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- 允许自动化操作（菜单栏托盘） -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <!-- 允许 JIT（cffi/cryptography 等包需要） -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- 允许未签名的可执行内存 -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

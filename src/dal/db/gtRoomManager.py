@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+from typing import Sequence
+
+from peewee import SQL
+
+from constants import RoomType
+from model.dbModel.gtRoom import GtRoom
+
+async def get_rooms_by_team(team_id: int) -> list[GtRoom]:
+    """获取 Team 下的所有 Room。"""
+    return list(
+        await GtRoom.select()
+        .where(GtRoom.team_id == team_id)
+        .order_by(GtRoom.name)
+        .aio_execute()
+    )
+
+
+async def get_operator_control_room(team_id: int, agent_id: int) -> GtRoom | None:
+    """查找 team 下同时包含 OPERATOR(-1) 和指定 agent_id 的 PRIVATE 控制房间。"""
+    operator_id = -1
+    rows = list(
+        await GtRoom.select()
+        .where(
+            GtRoom.team_id == team_id,
+            GtRoom.type == RoomType.PRIVATE,
+            SQL("EXISTS (SELECT 1 FROM json_each(agent_ids) WHERE value = ?)", [int(agent_id)]),
+            SQL("EXISTS (SELECT 1 FROM json_each(agent_ids) WHERE value = ?)", [operator_id]),
+        )
+        .limit(1)
+        .aio_execute()
+    )
+    return rows[0] if rows else None
+
+
+async def get_room_by_biz_id(team_id: int, biz_id: str) -> GtRoom | None:
+    """通过 biz_id 获取房间。"""
+    return await GtRoom.aio_get_or_none(
+        GtRoom.team_id == team_id,
+        GtRoom.biz_id == biz_id,
+    )
+
+
+async def get_room_by_id(room_id: int) -> GtRoom | None:
+    """通过主键 ID 获取房间。"""
+    return await GtRoom.aio_get_or_none(GtRoom.id == room_id)
+
+
+async def get_room_by_team_and_name(team_id: int, name: str) -> GtRoom | None:
+    """通过 team_id + name 获取房间。"""
+    return await GtRoom.aio_get_or_none(
+        GtRoom.team_id == team_id,
+        GtRoom.name == name,
+    )
+
+
+async def get_rooms_by_team_and_names(team_id: int, names: list[str]) -> list[GtRoom]:
+    """通过 team_id + names 批量获取房间，按 names 顺序返回（不存在的名称自动忽略）。"""
+    if not names:
+        return []
+
+    gt_rooms = list(
+        await GtRoom.select()
+        .where(
+            GtRoom.team_id == team_id,
+            GtRoom.name.in_(names),  # type: ignore[attr-defined]
+        )
+        .order_by(GtRoom.name)
+        .aio_execute()
+    )
+    room_map = {room.name: room for room in gt_rooms}
+    return [room_map[name] for name in names if name in room_map]
+
+
+async def get_room_by_team_and_id_or_name(team_id: int, room_id: int | None, name: str) -> GtRoom | None:
+    """按配置查询房间：有 room_id 则按 ID 查，否则按 name 查。"""
+    condition = (GtRoom.id == room_id) if room_id is not None else (GtRoom.name == name)
+    return await GtRoom.aio_get_or_none(
+        GtRoom.team_id == team_id,
+        condition,
+    )
+
+
+async def save_room(room: GtRoom) -> GtRoom:
+    """保存房间对象：无 id 时插入，有 id 时更新。"""
+    if room.id is None:
+        room_id = await GtRoom.insert(
+            team_id=room.team_id,
+            name=room.name,
+            type=room.type,
+            initial_topic=room.initial_topic,
+            max_rounds=room.max_rounds,
+            agent_ids=room.agent_ids or [],
+            agent_read_index=room.agent_read_index,
+            biz_id=room.biz_id,
+            tags=room.tags or [],
+            i18n=room.i18n or {},
+        ).aio_execute()
+        saved = await get_room_by_id(room_id)
+        assert saved is not None, f"room insert failed: team_id={room.team_id}, name={room.name}"
+        return saved
+
+    await (
+        GtRoom.update(
+            team_id=room.team_id,
+            name=room.name,
+            type=room.type,
+            initial_topic=room.initial_topic,
+            max_rounds=room.max_rounds,
+            agent_ids=room.agent_ids or [],
+            agent_read_index=room.agent_read_index,
+            biz_id=room.biz_id,
+            tags=room.tags or [],
+            i18n=room.i18n or {},
+        )
+        .where(GtRoom.id == room.id)
+        .aio_execute()
+    )
+    saved = await get_room_by_id(room.id)
+    assert saved is not None, f"room update failed: room_id={room.id}"
+    return saved
+
+
+async def batch_save_rooms(rooms: Sequence[GtRoom]) -> None:
+    """批量保存房间对象（逐个 upsert）。"""
+    for room in rooms:
+        await save_room(room)
+
+
+async def delete_rooms_by_team(team_id: int) -> None:
+    """删除 Team 下的所有 Rooms。"""
+    await GtRoom.delete().where(GtRoom.team_id == team_id).aio_execute()
+
+
+async def delete_rooms_by_ids(room_ids: list[int]) -> int:
+    """按 ID 列表删除房间，返回删除数量。"""
+    if not room_ids:
+        return 0
+    return await GtRoom.delete().where(GtRoom.id.in_(room_ids)).aio_execute()  # type: ignore[attr-defined]
+
+
+async def delete_room(room_id: int) -> None:
+    """通过数据库 ID 删除指定 Room。"""
+    await GtRoom.delete().where(GtRoom.id == room_id).aio_execute()
+
+
+# Room State CRUD (persistence)
+async def update_room_state(room_id: int, agent_read_index: dict[str, int], speaker_index: int | None = None) -> None:
+    """保存房间运行时状态（agent_read_index + speaker_index）。"""
+    await (
+        GtRoom.update(
+            agent_read_index=agent_read_index,
+            speaker_index=speaker_index,
+        )
+        .where(GtRoom.id == room_id)
+        .aio_execute()
+    )
+
+
+async def get_room_state(room_id: int) -> tuple[dict[str, int] | None, int | None]:
+    """获取房间运行时状态（agent_read_index, speaker_index）。"""
+    room = await GtRoom.aio_get_or_none(GtRoom.id == room_id)
+    if room is None:
+        return None, None
+    return room.agent_read_index, room.speaker_index
+
+
+async def delete_rooms_by_biz_ids_not_in(team_id: int, biz_ids: list[str]) -> None:
+    """删除 biz_id 不在指定列表中的部门房间（只删除 tags 包含 'DEPT' 的房间）。"""
+    query = GtRoom.delete().where(
+        GtRoom.team_id == team_id,
+        SQL("EXISTS (SELECT 1 FROM json_each(rooms.tags) WHERE value = 'DEPT')"),
+    )
+
+    if not biz_ids:
+        # biz_ids 为空时删除 team 下所有 DEPT 房间
+        await query.aio_execute()
+        return
+
+    # 兼容旧逻辑：biz_id 为 NULL 的 DEPT 房间也视为"不在列表中"，应被删除
+    await query.where(
+        GtRoom.biz_id.is_null(True) |  # type: ignore[attr-defined]
+        (~GtRoom.biz_id.in_(biz_ids))  # type: ignore[attr-defined]
+    ).aio_execute()
+
+
+async def reset_room_runtime_state(team_id: int) -> None:
+    """重置 Team 下所有房间的运行时状态（agent_read_index 和 speaker_index）。
+
+    在清空消息数据后调用，确保房间重新激活时 agent 从 seq=0 读取初始消息。
+    """
+    await (
+        GtRoom.update(agent_read_index=None, speaker_index=None)
+        .where(GtRoom.team_id == team_id)
+        .aio_execute()
+    )

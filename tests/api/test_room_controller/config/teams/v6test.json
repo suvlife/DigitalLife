@@ -1,0 +1,38 @@
+{
+  "name": "v6test",
+  "agents": [
+    { "name": "alice", "role_template": "alice" },
+    { "name": "bob", "role_template": "bob" }
+  ],
+  "dept_tree": {
+    "dept_name": "测试组",
+    "responsibility": "负责房间测试",
+    "manager": "alice",
+    "agents": ["alice", "bob"],
+    "children": [],
+    "i18n": {
+      "dept_name": {
+        "zh-CN": "测试组",
+        "en": "QA Team"
+      },
+      "responsibility": {
+        "zh-CN": "负责房间测试",
+        "en": "Responsible for room testing"
+      }
+    }
+  },
+  "preset_rooms": [
+    {
+      "name": "alice_private",
+      "agents": ["OPERATOR", "alice"],
+      "initial_topic": "v6 private test",
+      "max_rounds": 10
+    },
+    {
+      "name": "public_group",
+      "agents": ["alice", "bob"],
+      "initial_topic": "v6 group test",
+      "max_rounds": 10
+    }
+  ]
+}

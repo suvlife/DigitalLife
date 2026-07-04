@@ -1,0 +1,213 @@
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+from constants import AgentStatus, AgentTaskStatus, AgentTaskType
+from dal.db import gtTeamManager, gtAgentManager, gtAgentHistoryManager, gtScheculeTaskManager
+from model.dbModel.gtAgent import GtAgent
+from model.dbModel.gtAgentHistory import GtAgentHistory
+from model.dbModel.gtScheculeTask import GtScheculeTask
+from model.dbModel.gtDept import GtDept
+from model.dbModel.gtTeam import GtTeam
+from service import presetService, agentService, ormService, persistenceService, roomService, messageBus, deptService
+from service.agentService import Agent
+from util import configUtil
+from util.llmApiUtil import OpenAIMessage, OpenaiApiRole
+from util.configTypes import TeamPreset, AgentPreset, TeamRoomPreset, DeptNodePreset
+from ...base import ServiceTestCase
+
+TEAM = "test_team"
+TEAMS_CONFIG = [TeamPreset(
+    name=TEAM,
+    agents=[
+        AgentPreset(name="alice", role_template="alice"),
+        AgentPreset(name="bob", role_template="bob"),
+    ],
+    dept_tree=DeptNodePreset(
+        dept_name="研发部",
+        responsibility="负责协作与开发",
+        manager="alice",
+        agents=["alice", "bob"],
+    ),
+    preset_rooms=[TeamRoomPreset(name="r1", agents=["alice", "bob"], max_rounds=3)],
+)]
+
+if os.name == "posix" and sys.platform == "darwin":
+    os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
+
+
+class TestRestoreRoomHistory(ServiceTestCase):
+    """重启后 restore_runtime_state 能恢复房间消息历史和已读游标。"""
+
+    db_path: Path = None
+
+    @classmethod
+    async def async_setup_class(cls):
+        gtAgentManager.clear_agent_cache()  # 清空缓存，避免测试间数据污染
+        cls.db_path = Path(cls._get_test_db_path())
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+        roomService.shutdown()
+        await messageBus.startup()
+        await ormService.startup(str(cls.db_path))
+        await persistenceService.startup()
+        await agentService.startup()
+        await roomService.startup()
+        team = await gtTeamManager.save_team(GtTeam(name=TEAM))
+        await gtAgentManager.batch_save_agents(
+            team.id,
+            [
+                GtAgent(team_id=team.id, name="alice", role_template_id=0),
+                GtAgent(team_id=team.id, name="bob", role_template_id=0),
+            ],
+        )
+        cls.team_id = team.id
+        alice = await gtAgentManager.get_agent(team.id, "alice")
+        bob = await gtAgentManager.get_agent(team.id, "bob")
+        assert alice is not None and bob is not None
+        cls.alice_id = alice.id
+        cls.bob_id = bob.id
+        await ServiceTestCase.create_room(TEAM, "r1", ["alice", "bob"], max_rounds=3)
+        room = roomService.get_room_by_key(f"r1@{TEAM}")
+        await room.activate_scheduling()
+        await room.add_message(cls.alice_id, "hello")
+        await room.get_unread_messages(cls.bob_id)
+        await room.add_message(cls.bob_id, "world")
+        await room.get_unread_messages(cls.alice_id)
+
+        # 模拟进程重启：关闭再重新打开同一 DB
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+        roomService.shutdown()
+
+        await ormService.startup(str(cls.db_path))
+        await persistenceService.startup()
+        await roomService.startup()
+        await roomService.load_all_rooms()
+        cls.restored = roomService.get_room_by_key(f"r1@{TEAM}")
+        await roomService.restore_all_rooms_runtime_state()
+
+    @classmethod
+    async def async_teardown_class(cls):
+        await messageBus.shutdown()
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+        roomService.shutdown()
+
+    async def test_messages_restored(self):
+        assert [m.content for m in self.restored.messages] == [
+            "系统提示: r1 房间已经创建，当前房间成员：alice、bob",
+            "hello",
+            "world",
+        ]
+
+    async def test_read_index_restored(self):
+        assert self.restored.export_agent_read_index()[self.alice_id] == 3
+        assert self.restored.export_agent_read_index()[self.bob_id] == 2
+
+
+
+class TestRestoreAgentHistory(ServiceTestCase):
+    """重启后 restore_runtime_state 能恢复 Agent 对话历史。"""
+
+    db_path: Path = None
+    running_task_id: int | None = None
+
+    @classmethod
+    async def async_setup_class(cls):
+        gtAgentManager.clear_agent_cache()  # 清空缓存，避免测试间数据污染
+        cls.db_path = Path(cls._get_test_db_path())
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+        await agentService.shutdown()
+        roomService.shutdown()
+        await messageBus.startup()
+        await ormService.startup(str(cls.db_path))
+        await persistenceService.startup()
+        await agentService.startup()
+        await presetService._import_role_templates_from_app_config()
+        configUtil.load(os.path.join(os.path.dirname(__file__), "../../config"), force_reload=True)
+        team = await gtTeamManager.save_team(GtTeam(name=TEAM))
+        # 编辑组织树前必须停用团队
+        await gtTeamManager.set_team_enabled(team.id, False)
+        agents = await ServiceTestCase.convert_to_gt_agents(
+            team.id,
+            [
+                AgentPreset(name="alice", role_template="alice"),
+                AgentPreset(name="bob", role_template="bob"),
+            ],
+        )
+        await gtAgentManager.batch_save_agents(team.id, agents)
+        gt_alice = await gtAgentManager.get_agent(team.id, "alice")
+        gt_bob = await gtAgentManager.get_agent(team.id, "bob")
+        assert gt_alice is not None
+        assert gt_bob is not None
+        await deptService.overwrite_dept_tree(
+            team.id,
+            GtDept(
+                name="研发部",
+                responsibility="负责协作与开发",
+                manager_id=gt_alice.id,
+                agent_ids=[gt_alice.id, gt_bob.id],
+            ),
+        )
+        await gtAgentHistoryManager.append_agent_history_message(
+            GtAgentHistory(
+                agent_id=gt_alice.id,
+                seq=0,
+                role=OpenaiApiRole.USER,
+                message=OpenAIMessage.text(OpenaiApiRole.USER, "u1"),
+            )
+        )
+        await gtAgentHistoryManager.append_agent_history_message(
+            GtAgentHistory(
+                agent_id=gt_alice.id,
+                seq=1,
+                role=OpenaiApiRole.ASSISTANT,
+                message=OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"),
+            )
+        )
+        running_task = await gtScheculeTaskManager.create_task(
+            gt_alice.id,
+            AgentTaskType.ROOM_MESSAGE,
+            {"room_id": 1},
+        )
+        await gtScheculeTaskManager.update_task_status(running_task.id, AgentTaskStatus.RUNNING)
+        cls.running_task_id = running_task.id
+
+        # 模拟进程重启
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+        await agentService.shutdown()
+
+        await ormService.startup(str(cls.db_path))
+        await persistenceService.startup()
+        configUtil.load(os.path.join(os.path.dirname(__file__), "../../config"), force_reload=True)
+        await presetService._import_role_templates_from_app_config()
+        await agentService.startup()
+        await agentService.load_all_team_agents()
+        cls.fresh_agent = agentService.get_agent(gt_alice.id)
+        await agentService.restore_all_agents_runtime_state()
+
+    @classmethod
+    async def async_teardown_class(cls):
+        await messageBus.shutdown()
+        await agentService.shutdown()
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+
+    async def test_history_restored(self):
+        assert [m.content for m in self.fresh_agent.task_consumer._turn_runner._history] == ["u1", "a1"]
+
+    async def test_running_task_marked_failed_after_restore(self):
+        assert self.running_task_id is not None
+        task = await GtScheculeTask.aio_get_or_none(GtScheculeTask.id == self.running_task_id)
+        assert task is not None
+        assert task.status == AgentTaskStatus.FAILED
+        assert task.error_message == "task interrupted by process restart"
+
+    async def test_agent_runtime_status_marked_failed_after_restore(self):
+        assert self.fresh_agent.status == AgentStatus.FAILED

@@ -1,0 +1,45 @@
+from service import funcToolService
+from service.agentService import toolRegistry
+from model.dbModel.gtScheculeTask import GtScheculeTask
+
+from .base import AgentDriver, AgentTurnSetup
+
+_RUN_CHAT_TURN_HINT = (
+    "你必须通过调用工具来行动。如果你不需要发言，或者已经完成了所有行动，"
+    "请务必调用 finish_action 结束行动（即跳过）。"
+)
+_RUN_CHAT_TURN_MAX_RETRIES = 3
+
+
+class NativeAgentDriver(AgentDriver):
+    @property
+    def host_managed_turn_loop(self) -> bool:
+        return True
+
+    async def startup(self) -> None:
+        await super().startup()
+        self.host.tool_registry.clear()
+        tools = funcToolService.get_tools()
+        for tool in tools:
+            function_name = tool.function.name
+            self.host.tool_registry.register(
+                tool,
+                funcToolService.run_tool_call,
+                marks_turn_finish=function_name == "finish_action",
+                self_interrupt=function_name == "reload_team",
+            )
+        effective_specs = toolRegistry.build_runtime_allow_specs(
+            self.config.options.get("tool_allow_specs"),
+            is_root_leader=bool(self.config.options.get("is_root_leader")),
+        )
+        self.host.tool_registry.apply_tool_allow_specs(effective_specs)
+
+    @property
+    def turn_setup(self) -> AgentTurnSetup:
+        return AgentTurnSetup(
+            max_retries=_RUN_CHAT_TURN_MAX_RETRIES,
+            hint_prompt=_RUN_CHAT_TURN_HINT,
+        )
+
+    async def run_task_turn(self, task: GtScheculeTask, synced_count: int) -> None:
+        raise RuntimeError("NativeAgentDriver 不再直接执行 run_task_turn，请使用 Agent.run_task_turn")

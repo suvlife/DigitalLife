@@ -1,0 +1,69 @@
+# Git
+.git
+.gitignore
+.gitmodules
+.claude
+.github
+
+# 开发环境
+.venv
+node_modules
+
+# 测试
+tests/
+.pytest_cache
+.coverage
+htmlcov
+test_data/
+
+# 开发数据
+dev_storage_root/
+
+# 敏感配置（防止开发者本地凭据进入镜像）
+.env*
+*.local.json
+setting.json
+
+# IDE
+.idea
+.vscode
+.agents
+*.swp
+*.swo
+
+# TUI 源码（Docker 镜像不需要）
+tui/
+
+# 配置文件（Docker 不需要 mypy/pytest）
+mypy.ini
+pytest.ini
+.coveragerc
+
+# 构建产物（前端会在 Docker 中重新构建）
+frontend/dist
+
+# 临时文件
+*.pyc
+__pycache__
+*.log
+*.pid
+run/
+
+# 文档（可选，减少镜像大小）
+docs/
+
+# 脚本（打包发布用的，Docker 不需要）
+scripts/build_mac.py
+scripts/build_release.py
+scripts/start_backend.sh
+scripts/stop_backend.sh
+scripts/start_tui.sh
+scripts/stop_tui.sh
+scripts/run_tests.sh
+
+# macOS
+.DS_Store
+
+# 前端开发调试文件（不应进入生产构建）
+frontend/src/components/settings/ThemeDebuggerSection.vue
+frontend/src/components/settings/themeTokens.ts

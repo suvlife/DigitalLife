@@ -1,0 +1,322 @@
+import asyncio
+import os
+import sys
+import time
+
+import aiohttp
+import pytest
+from constants import RoomType, SpecialAgent
+
+from ...base import ServiceTestCase
+
+_TEAM = "e2e"
+_V6_TEAM = "v6test"
+
+if os.name == "posix" and sys.platform == "darwin":
+    os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
+
+class _ApiServiceCase(ServiceTestCase):
+    """API 测试基类：每个测试类在独立子进程中启动后端与 MockLLM。"""
+
+
+class TestRoomController(_ApiServiceCase):
+    """测试 RoomListHandler 和 RoomMessagesHandler，使用默认配置。"""
+
+    requires_backend = True
+    requires_mock_llm = True
+
+    async def _get_team_id(self, team_name: str) -> int:
+        """通过 team_name 获取 team_id。"""
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        team = next(t for t in data["teams"] if t["name"] == team_name)
+        return team["id"]
+
+    async def _get_room_id(self, room_name: str, team_name: str) -> int:
+        """通过 room_name 和 team_name 获取 room_id。"""
+        team_id = await self._get_team_id(team_name)
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/rooms/list.json?team_id={team_id}") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        room = next(r for r in data["rooms"] if r["gt_room"]["name"] == room_name)
+        return room["gt_room"]["id"]
+
+    async def test_get_rooms(self):
+        """验证 GET /rooms 返回正确的房间列表及字段结构。"""
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/rooms/list.json") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        assert "rooms" in data
+        assert len(data["rooms"]) > 0
+        room = data["rooms"][0]
+        assert "gt_room" in room
+        assert "team_id" in room["gt_room"]
+        assert "state" in room
+        assert "agents" in room
+        assert "id" in room["gt_room"]
+        assert "agent_ids" in room["gt_room"]
+        assert "display_name" not in room["gt_room"]
+        assert "i18n" in room["gt_room"]
+        assert "SYSTEM" not in room["agents"]
+
+    async def test_get_room_messages(self):
+        """验证 GET /rooms/{id}/messages 返回消息列表及元数据字段。"""
+        async with aiohttp.ClientSession() as client:
+            async with client.get(
+                f"{self.backend_base_url}/rooms/{await self._get_room_id('general', _TEAM)}/messages/list.json"
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        assert "messages" in data
+        assert "room_id" in data
+        assert "room_name" in data
+        assert "team_name" in data
+        assert len(data["messages"]) > 0
+        msg = data["messages"][0]
+        assert "sender_id" in msg
+        assert "content" in msg
+        assert "send_time" in msg
+
+    async def test_room_not_found(self):
+        """验证请求不存在的房间时返回 404。"""
+        async with aiohttp.ClientSession() as client:
+            async with client.get(
+                f"{self.backend_base_url}/rooms/999999999/messages/list.json"
+            ) as resp:
+                assert resp.status in (400, 404)
+
+    async def test_post_message(self):
+        """验证 POST /rooms/{id}/messages 将消息写入房间。"""
+        room_id = await self._get_room_id("general", _TEAM)
+        payload = {"content": "Hello from operator."}
+        async with aiohttp.ClientSession() as client:
+            async with client.post(
+                f"{self.backend_base_url}/rooms/{room_id}/messages/send.json", json=payload
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["status"] == "ok"
+
+            async with client.get(
+                f"{self.backend_base_url}/rooms/{room_id}/messages/list.json"
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        messages = data["messages"]
+        # Operator 的消息应被真正落库，而不仅仅返回 HTTP 成功。
+        assert any(
+            m["sender_id"] == int(SpecialAgent.OPERATOR.value) and m["content"] == payload["content"]
+            for m in messages
+        )
+
+
+class TestRoomCreateValidation(_ApiServiceCase):
+    """验证房间创建接口的参数校验。"""
+
+    requires_backend = True
+    requires_mock_llm = True
+
+    async def _get_team_id(self, team_name: str) -> int:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        team = next(t for t in data["teams"] if t["name"] == team_name)
+        return team["id"]
+
+    async def _get_agent_id(self, team_id: int, agent_name: str) -> int:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/agents/list.json?team_id={team_id}") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        agent = next(a for a in data["agents"] if a["name"] == agent_name)
+        return agent["id"]
+
+    async def test_create_room_with_one_agent_is_rejected(self):
+        """创建只有一个成员的房间应返回 400 room_agents_too_few。"""
+        team_id = await self._get_team_id(_TEAM)
+        alice_id = await self._get_agent_id(team_id, "alice")
+
+        payload = {
+            "name": "single_member_room",
+            "agent_ids": [alice_id],
+        }
+        async with aiohttp.ClientSession() as client:
+            async with client.post(
+                f"{self.backend_base_url}/teams/{team_id}/rooms/create.json", json=payload
+            ) as resp:
+                assert resp.status == 400
+                data = await resp.json()
+                assert data.get("error_code") == "room_agents_too_few"
+
+    async def test_create_room_with_two_agents_succeeds(self):
+        """创建包含两个成员的房间应成功。"""
+        team_id = await self._get_team_id(_TEAM)
+        alice_id = await self._get_agent_id(team_id, "alice")
+        bob_id = await self._get_agent_id(team_id, "bob")
+
+        payload = {
+            "name": "two_member_room",
+            "agent_ids": [alice_id, bob_id],
+        }
+        async with aiohttp.ClientSession() as client:
+            async with client.post(
+                f"{self.backend_base_url}/teams/{team_id}/rooms/create.json", json=payload
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data.get("status") == "created"
+
+
+class TestRoomControllerPrivate(_ApiServiceCase):
+    """测试 v6 新增的 room_type 字段及私有房间行为，使用自定义配置。"""
+
+    requires_backend = True
+    requires_mock_llm = True
+    use_custom_config = True
+
+    async def _get_team_id(self, team_name: str) -> int:
+        """通过 team_name 获取 team_id。"""
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        team = next(t for t in data["teams"] if t["name"] == team_name)
+        return team["id"]
+
+    async def _get_room_id(self, room_name: str, team_name: str) -> int:
+        """通过 room_name 和 team_name 获取 room_id。"""
+        team_id = await self._get_team_id(team_name)
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/rooms/list.json?team_id={team_id}") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+        room = next(r for r in data["rooms"] if r["gt_room"]["name"] == room_name)
+        return room["gt_room"]["id"]
+
+    async def test_room_types_in_list(self):
+        """验证 GET /rooms 正确返回 room_type 字段。"""
+        team_id = await self._get_team_id(_V6_TEAM)
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/rooms/list.json?team_id={team_id}") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+
+        rooms = data["rooms"]
+        # v6test 包含 3 个房间：alice_private（preset）、public_group（preset）、测试组（dept_tree 自动创建）
+        assert len(rooms) == 3
+
+        private_room = next(r for r in rooms if r["gt_room"]["name"] == "alice_private")
+        assert RoomType.value_of(private_room["gt_room"]["type"]) == RoomType.PRIVATE
+        assert private_room["gt_room"]["team_id"] == team_id
+        assert any(agent_id == int(SpecialAgent.OPERATOR.value) for agent_id in private_room["gt_room"]["agent_ids"])
+        assert "display_name" not in private_room["gt_room"]
+        assert "i18n" in private_room["gt_room"]
+
+        group_room = next(r for r in rooms if r["gt_room"]["name"] == "public_group")
+        assert RoomType.value_of(group_room["gt_room"]["type"]) == RoomType.GROUP
+        assert group_room["gt_room"]["team_id"] == team_id
+        assert not any(agent_id == int(SpecialAgent.OPERATOR.value) for agent_id in group_room["gt_room"]["agent_ids"])
+        assert "display_name" not in group_room["gt_room"]
+        assert "i18n" in group_room["gt_room"]
+
+        dept_room = next(r for r in rooms if r["gt_room"]["biz_id"])
+        assert dept_room["gt_room"]["i18n"]["display_name"]["en"] == "QA Team"
+        assert dept_room["gt_room"]["i18n"]["display_name"]["zh-CN"] == "测试组"
+
+
+    async def test_post_message_to_private_room(self):
+        """验证向 private 房间发送消息后，Operator 消息入库且 Agent 在限时内回复。"""
+        room_id = await self._get_room_id("alice_private", _V6_TEAM)
+        payload = {"content": "Hello Alice, I am the operator."}
+
+        # 先获取 alice 的 agent_id
+        team_id = await self._get_team_id(_V6_TEAM)
+        async with aiohttp.ClientSession() as client:
+            async with client.get(f"{self.backend_base_url}/agents/list.json?team_id={team_id}") as resp:
+                assert resp.status == 200
+                agents_data = await resp.json()
+        alice_agent = next(a for a in agents_data["agents"] if a["name"] == "alice")
+        alice_id = alice_agent["id"]
+
+        async with aiohttp.ClientSession() as client:
+            async with client.post(
+                f"{self.backend_base_url}/rooms/{room_id}/messages/send.json", json=payload
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["status"] == "ok"
+
+            async with client.get(f"{self.backend_base_url}/rooms/{room_id}/messages/list.json") as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                messages = data["messages"]
+                assert messages[1]["content"] == payload["content"]
+                assert messages[1]["sender_id"] == int(SpecialAgent.OPERATOR.value)
+
+        max_wait = 15
+        start_time = time.time()
+        messages = []
+        while time.time() - start_time < max_wait:
+            async with aiohttp.ClientSession() as client:
+                async with client.get(
+                    f"{self.backend_base_url}/rooms/{room_id}/messages/list.json"
+                ) as resp:
+                    assert resp.status == 200
+                    data = await resp.json()
+                    messages = data["messages"]
+                    # Agent 回复由调度异步触发，使用轮询等待可观测结果。
+                    if any(m["sender_id"] == alice_id for m in messages):
+                        break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("Agent Alice 未能在限时内回复 Operator")
+
+        alice_msg = next(m for m in messages if m["sender_id"] == alice_id)
+        assert len(alice_msg["content"]) > 0
+
+    async def test_get_room_messages_supports_history_pagination(self):
+        """验证消息列表支持 limit + before_id 的向前分页。"""
+        room_id = await self._get_room_id("alice_private", _V6_TEAM)
+
+        async with aiohttp.ClientSession() as client:
+            for idx in range(3):
+                async with client.post(
+                    f"{self.backend_base_url}/rooms/{room_id}/messages/send.json",
+                    json={"content": f"pagination-{idx}"},
+                ) as resp:
+                    assert resp.status == 200
+
+            max_wait = 15
+            start_time = time.time()
+            latest_messages = []
+            while time.time() - start_time < max_wait:
+                async with client.get(
+                    f"{self.backend_base_url}/rooms/{room_id}/messages/list.json?limit=2"
+                ) as resp:
+                    assert resp.status == 200
+                    first_page = await resp.json()
+                latest_messages = first_page["messages"]
+                if len(latest_messages) == 2 and first_page["pagination"]["has_more"]:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                pytest.fail("未能在限时内得到可分页的房间消息")
+
+            first_page = first_page
+            oldest_loaded_id = first_page["messages"][0]["id"]
+            async with client.get(
+                f"{self.backend_base_url}/rooms/{room_id}/messages/list.json?limit=2&before_id={oldest_loaded_id}"
+            ) as resp:
+                assert resp.status == 200
+                second_page = await resp.json()
+
+        assert len(first_page["messages"]) == 2
+        assert first_page["pagination"]["has_more"] is True
+        assert len(second_page["messages"]) >= 1
+        assert all(message["id"] < oldest_loaded_id for message in second_page["messages"])

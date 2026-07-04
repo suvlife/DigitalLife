@@ -1,0 +1,283 @@
+{
+  "name": "股票分析大师团队",
+  "uuid": "preset-stock-analysis-v2",
+  "auto_start": false,
+  "i18n": {
+    "display_name": {
+      "zh-CN": "股票分析大师团队",
+      "en": "Stock Analysis Masters Team"
+    }
+  },
+  "agents": [
+    {
+      "name": "cio",
+      "role_template": "chief_investment_officer",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "首席投资官", "en": "Chief Investment Officer"}}
+    },
+    {
+      "name": "risk",
+      "role_template": "stock_risk_controller",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "风控官", "en": "Risk Controller"}}
+    },
+    {
+      "name": "wyckoff",
+      "role_template": "wyckoff_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "威科夫大师", "en": "Wyckoff Master"}}
+    },
+    {
+      "name": "gann",
+      "role_template": "gann_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "江恩大师", "en": "Gann Master"}}
+    },
+    {
+      "name": "dow",
+      "role_template": "dow_theorist",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "道氏理论家", "en": "Dow Theorist"}}
+    },
+    {
+      "name": "elliott",
+      "role_template": "elliott_wave_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "艾略特波浪大师", "en": "Elliott Wave Master"}}
+    },
+    {
+      "name": "vp",
+      "role_template": "volume_price_analyst",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "量价分析师", "en": "Volume-Price Analyst"}}
+    },
+    {
+      "name": "collector",
+      "role_template": "data_collector",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "数据采集员", "en": "Data Collector"}}
+    },
+    {
+      "name": "buffett",
+      "role_template": "buffett_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "巴菲特", "en": "Warren Buffett"}}
+    },
+    {
+      "name": "graham",
+      "role_template": "graham_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "格雷厄姆", "en": "Benjamin Graham"}}
+    },
+    {
+      "name": "fisher",
+      "role_template": "fisher_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "费雪", "en": "Philip Fisher"}}
+    },
+    {
+      "name": "lynch",
+      "role_template": "lynch_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "彼得·林奇", "en": "Peter Lynch"}}
+    },
+    {
+      "name": "oneil",
+      "role_template": "oneil_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "欧尼尔", "en": "William O'Neil"}}
+    },
+    {
+      "name": "livermore",
+      "role_template": "livermore_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "利弗莫尔", "en": "Jesse Livermore"}}
+    },
+    {
+      "name": "schwartz",
+      "role_template": "schwartz_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "舒华兹", "en": "Marty Schwartz"}}
+    },
+    {
+      "name": "simons",
+      "role_template": "simons_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "西蒙斯", "en": "Jim Simons"}}
+    },
+    {
+      "name": "dalio",
+      "role_template": "dalio_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "达里奥", "en": "Ray Dalio"}}
+    },
+    {
+      "name": "soros",
+      "role_template": "soros_master",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "索罗斯", "en": "George Soros"}}
+    },
+    {
+      "name": "intel",
+      "role_template": "market_intel",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "市场情报员", "en": "Market Intelligence"}}
+    },
+    {
+      "name": "mda",
+      "role_template": "market_data_analyst",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "数据分析师", "en": "Market Data Analyst"}}
+    }
+  ],
+  "preset_rooms": [
+    {
+      "name": "综合分析室",
+      "agents": ["OPERATOR", "cio", "wyckoff", "dow", "vp", "risk", "buffett", "lynch", "dalio"],
+      "initial_topic": "综合讨论个股或板块的技术面与基本面，各流派大师辩论后由首席投资官提交综合结论。",
+      "max_rounds": 50,
+      "i18n": {
+        "display_name": {"zh-CN": "综合分析室", "en": "Comprehensive Analysis Room"},
+        "initial_topic": {"zh-CN": "综合讨论个股或板块的技术面与基本面，各流派大师辩论后由首席投资官提交综合结论。", "en": "Comprehensive analysis with multi-school debate, CIO submits final conclusion."}
+      }
+    },
+    {
+      "name": "大师辩论厅",
+      "agents": ["OPERATOR", "cio", "wyckoff", "gann", "dow", "elliott", "vp", "buffett", "graham", "fisher", "lynch", "oneil", "livermore", "schwartz", "simons", "dalio", "soros"],
+      "initial_topic": "全部投资大师就指定个股或板块展开多流派辩论博弈，各抒己见后由首席投资官调用 submit_conclusion 提交综合投资结论。",
+      "max_rounds": 50,
+      "i18n": {
+        "display_name": {"zh-CN": "大师辩论厅", "en": "Masters Debate Hall"},
+        "initial_topic": {"zh-CN": "全部投资大师就指定个股或板块展开多流派辩论博弈，各抒己见后由首席投资官调用 submit_conclusion 提交综合投资结论。", "en": "All investment masters debate from their respective schools, CIO submits final conclusion."}
+      }
+    },
+    {
+      "name": "价值投资研讨室",
+      "agents": ["OPERATOR", "buffett", "graham", "cio"],
+      "initial_topic": "从价值投资角度分析个股：护城河、安全边际、内在价值。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "价值投资研讨室", "en": "Value Investing Lab"},
+        "initial_topic": {"zh-CN": "从价值投资角度分析个股：护城河、安全边际、内在价值。", "en": "Analyze stocks from value investing perspective: moat, margin of safety, intrinsic value."}
+      }
+    },
+    {
+      "name": "成长投资研讨室",
+      "agents": ["OPERATOR", "lynch", "fisher", "oneil", "cio"],
+      "initial_topic": "从成长投资角度分析个股：成长性、PEG、CAN SLIM、十倍股。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "成长投资研讨室", "en": "Growth Investing Lab"},
+        "initial_topic": {"zh-CN": "从成长投资角度分析个股：成长性、PEG、CAN SLIM、十倍股。", "en": "Analyze stocks from growth investing perspective: growth, PEG, CAN SLIM, tenbaggers."}
+      }
+    },
+    {
+      "name": "量化宏观研讨室",
+      "agents": ["OPERATOR", "dalio", "simons", "soros", "cio"],
+      "initial_topic": "从量化与宏观对冲角度分析：经济周期、统计套利、反身性理论。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "量化宏观研讨室", "en": "Quant & Macro Lab"},
+        "initial_topic": {"zh-CN": "从量化与宏观对冲角度分析：经济周期、统计套利、反身性理论。", "en": "Analyze from quantitative and macro hedge perspective: economic cycles, statistical arbitrage, reflexivity."}
+      }
+    },
+    {
+      "name": "周期与波浪研究室",
+      "agents": ["OPERATOR", "gann", "elliott"],
+      "initial_topic": "从时间周期与波浪结构角度研判中长期趋势与变盘窗口。",
+      "max_rounds": 30,
+      "i18n": {
+        "display_name": {"zh-CN": "周期与波浪研究室", "en": "Cycles and Waves Lab"},
+        "initial_topic": {"zh-CN": "从时间周期与波浪结构角度研判中长期趋势与变盘窗口。", "en": "Study medium-to-long term trends and turning windows via cycles and waves."}
+      }
+    },
+    {
+      "name": "数据采集室",
+      "agents": ["OPERATOR", "collector", "intel", "mda"],
+      "initial_topic": "让人类操作者向数据团队下达信息收集任务，获取最新财报、公告、新闻、历史K线和行业数据。",
+      "max_rounds": 100,
+      "i18n": {
+        "display_name": {"zh-CN": "数据采集室", "en": "Data Collection Room"},
+        "initial_topic": {"zh-CN": "让人类操作者向数据团队下达信息收集任务，获取最新财报、公告、新闻、历史K线和行业数据。", "en": "Assign data collection tasks to gather latest financials, news, historical K-lines and industry data."}
+      }
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "投资决策委员会",
+    "responsibility": "统筹股票分析全流派协作与投资判断",
+    "manager": "cio",
+    "agents": ["cio", "risk", "buffett", "lynch", "dalio", "wyckoff", "gann", "intel"],
+    "children": [
+      {
+        "dept_name": "技术研究组",
+        "responsibility": "从技术分析与交易流派角度研判价格行为",
+        "manager": "wyckoff",
+        "agents": ["wyckoff", "dow", "vp", "livermore", "schwartz"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "技术研究组", "en": "Technical Research"},
+          "responsibility": {"zh-CN": "从技术分析与交易流派角度研判价格行为", "en": "Analyze price action from technical analysis and trading schools"}
+        }
+      },
+      {
+        "dept_name": "周期研究组",
+        "responsibility": "研究时间周期、波浪结构与变盘窗口",
+        "manager": "gann",
+        "agents": ["gann", "elliott"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "周期研究组", "en": "Cycle Research"},
+          "responsibility": {"zh-CN": "研究时间周期、波浪结构与变盘窗口", "en": "Study time cycles, Elliott waves and turning windows"}
+        }
+      },
+      {
+        "dept_name": "价值投资组",
+        "responsibility": "从价值投资角度分析企业内在价值与安全边际",
+        "manager": "buffett",
+        "agents": ["buffett", "graham"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "价值投资组", "en": "Value Investing"},
+          "responsibility": {"zh-CN": "从价值投资角度分析企业内在价值与安全边际", "en": "Analyze intrinsic value and margin of safety from value investing perspective"}
+        }
+      },
+      {
+        "dept_name": "成长投资组",
+        "responsibility": "从成长投资角度发掘高成长潜力的股票",
+        "manager": "lynch",
+        "agents": ["lynch", "fisher", "oneil"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "成长投资组", "en": "Growth Investing"},
+          "responsibility": {"zh-CN": "从成长投资角度发掘高成长潜力的股票", "en": "Discover high-growth stocks from growth investing perspective"}
+        }
+      },
+      {
+        "dept_name": "量化宏观组",
+        "responsibility": "从量化模型与宏观对冲角度分析市场",
+        "manager": "dalio",
+        "agents": ["dalio", "simons", "soros"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "量化宏观组", "en": "Quant & Macro"},
+          "responsibility": {"zh-CN": "从量化模型与宏观对冲角度分析市场", "en": "Analyze markets from quantitative models and macro hedge perspective"}
+        }
+      },
+      {
+        "dept_name": "情报支持组",
+        "responsibility": "负责数据采集、市场情报与数据分析",
+        "manager": "intel",
+        "agents": ["intel", "mda", "collector"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "情报支持组", "en": "Intelligence Support"},
+          "responsibility": {"zh-CN": "负责数据采集、市场情报与数据分析", "en": "Data collection, market intelligence and analysis"}
+        }
+      }
+    ],
+    "i18n": {
+      "dept_name": {"zh-CN": "投资决策委员会", "en": "Investment Decision Committee"},
+      "responsibility": {"zh-CN": "统筹股票分析全流派协作与投资判断", "en": "Coordinate all-school collaboration and investment decisions"}
+    }
+  }
+}

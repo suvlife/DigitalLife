@@ -1,0 +1,576 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, List, Sequence
+
+from dal.db import gtRoomManager, gtTeamManager, gtAgentManager, gtRoomMessageManager, atomic_transaction
+from service import messageBus
+from util import configUtil, assertUtil, i18nUtil
+from exception import TogoException
+from model.dbModel.gtDept import DeptRoomSpec
+from model.dbModel.gtRoom import GtRoom
+from model.dbModel.gtRoomMessage import GtRoomMessage
+from model.dbModel.gtScheculeTask import GtScheculeTask
+from model.dbModel.gtTeam import GtTeam
+from model.dbModel.gtAgent import GtAgent
+from constants import MessageBusTopic, RoomState, RoomType, SpecialAgent
+from .chatRoom import ChatRoom
+
+logger = logging.getLogger("service.roomService")
+
+
+def resolve_room_max_rounds(max_rounds: int | None) -> int:
+    if max_rounds is not None:
+        return max_rounds
+    return configUtil.get_app_config().setting.default_room_max_rounds
+
+
+@dataclass
+class ToolCallContext:
+    """工具调用时注入的上下文，包含当前 Agent、工具名和聊天室信息。"""
+    agent_id: int
+    team_id: int
+    chat_room: ChatRoom | None = None
+    tool_name: str = ""
+    schedule_task: GtScheculeTask | None = None
+
+_rooms: Dict[str, ChatRoom] = {}  # room_key -> ChatRoom
+_rooms_by_id: Dict[int, ChatRoom] = {}
+# 序列化房间注册表变更，避免 _rooms/_rooms_by_id 双字典跨 await 不一致。
+_rooms_lock: asyncio.Lock = asyncio.Lock()
+
+
+async def startup() -> None:
+    """初始化房间服务，清空所有房间。"""
+    global _rooms_lock
+    _rooms_lock = asyncio.Lock()
+    _rooms.clear()
+    _rooms_by_id.clear()
+
+
+async def _load_room(gt_team: GtTeam, gt_room: GtRoom) -> None:
+    """将数据库房间装载到运行态（调用方须持有 _rooms_lock）。"""
+    room = ChatRoom(team=gt_team, room=gt_room)
+    _rooms[room.key] = room
+    _rooms_by_id[room.room_id] = room
+
+    logger.info(f"创建并初始化聊天室: room_id={room.room_id}, type={room.room_type.name}, agent_ids={gt_room.agent_ids}")
+
+
+async def load_team_rooms(team_id: int) -> None:
+    """从数据库读取指定 Team 的房间配置，并重建对应的内存房间对象。"""
+    gt_team = await gtTeamManager.get_team_by_id(team_id)
+    if gt_team is None:
+        logger.warning(f"加载 Team 房间失败: Team ID '{team_id}' 不存在")
+        return
+
+    async with _rooms_lock:
+        await _close_team_rooms_locked(team_id)
+
+        gt_rooms = await gtRoomManager.get_rooms_by_team(gt_team.id)
+        for gt_room in gt_rooms:
+            await _load_room(gt_team=gt_team, gt_room=gt_room)
+
+    logger.info(f"Team '{gt_team.name}' 的内存房间已重建，共 {len(gt_rooms)} 个房间")
+
+
+async def load_all_rooms() -> None:
+    """从数据库读取所有房间配置，并创建对应的内存房间对象。"""
+    async with _rooms_lock:
+        for gt_team in await gtTeamManager.get_all_teams():
+            for gt_room in await gtRoomManager.get_rooms_by_team(gt_team.id):
+                await _load_room(gt_team=gt_team, gt_room=gt_room)
+
+
+async def _close_team_rooms_locked(team_id: int) -> None:
+    """关闭并移除指定 Team 的内存房间对象（调用方须持有 _rooms_lock）。"""
+    to_close = [room_key for room_key, room in _rooms.items() if room.team_id == team_id]
+    for room_key in to_close:
+        room = _rooms.pop(room_key)
+        _rooms_by_id.pop(room.room_id, None)
+    logger.info(f"Team ID={team_id} 的 {len(to_close)} 个聊天室已关闭")
+
+
+async def close_team_rooms(team_id: int) -> None:
+    """关闭并移除指定 Team 的内存房间对象。"""
+    async with _rooms_lock:
+        await _close_team_rooms_locked(team_id)
+
+
+async def _restore_room_runtime_state(room: ChatRoom) -> None:
+    """恢复单个房间的消息、已读指针和轮次进度。"""
+    gt_room_messages, _ = await gtRoomMessageManager.get_room_messages(room.room_id)
+    agent_read_index, speaker_index = await gtRoomManager.get_room_state(room.room_id)
+    recovered_from_db = bool(gt_room_messages)
+    restored_messages: list[GtRoomMessage] | None = None
+
+    logger.info(f"[恢复状态] room={room.name}, room_id={room.room_id}, msg_count={len(gt_room_messages)}, read_index={agent_read_index}, speaker_index={speaker_index}")
+    logger.info(f"[恢复状态-详细] room_id={room.room_id}, agent_read_index type={type(agent_read_index)}, speaker_index type={type(speaker_index)}")
+
+    if gt_room_messages:
+        restored_messages = []
+        for row in gt_room_messages:
+            # 从数据库获取 display_name（SYSTEM agent 也有数据库记录）
+            agent = await gtAgentManager.get_agent_by_id(row.sender_id)
+            assert agent, f"sender_id '{row.sender_id}' not found"
+            row.sender_display_name = agent.display_name
+            restored_messages.append(row)
+
+    if restored_messages is not None or agent_read_index is not None:
+        room.inject_runtime_state(
+            messages=restored_messages,
+            agent_read_index=agent_read_index,
+            speaker_index=speaker_index,
+        )
+    elif recovered_from_db and room.messages:
+        room.mark_all_messages_read()
+
+    room.rebuild_state_from_history(persisted_speaker_index=speaker_index if recovered_from_db else None)
+
+
+async def restore_team_rooms_runtime_state(team_id: int) -> None:
+    """恢复指定 Team 下所有内存房间的消息、已读指针和轮次进度。"""
+    for room in get_all_rooms():
+        if room.team_id != team_id:
+            continue
+        await _restore_room_runtime_state(room)
+
+
+async def restore_all_rooms_runtime_state() -> None:
+    """恢复所有内存房间的消息、已读指针和轮次进度。"""
+    for room in get_all_rooms():
+        await _restore_room_runtime_state(room)
+
+
+def get_room_by_key(room_key: str) -> ChatRoom:
+    """通过 room_key（room_name@team_name）返回聊天室实例。"""
+    room = _rooms.get(room_key)
+    if room is None:
+        raise RuntimeError(f"聊天室 '{room_key}' 不存在")
+    return room
+
+
+def get_room(room_id: int) -> ChatRoom | None:
+    """通过数据库主键 room_id 返回聊天室实例，不存在时返回 None。"""
+    return _rooms_by_id.get(room_id)
+
+
+async def get_room_messages_from_db(
+    room_id: int,
+    before_id: int | None = None,
+    limit: int | None = None,
+) -> tuple[list[GtRoomMessage], bool]:
+    """从数据库加载房间消息，固定走持久层。"""
+    return await gtRoomMessageManager.get_room_messages(room_id, before_id=before_id, limit=limit)
+
+
+def get_all_rooms() -> List[ChatRoom]:
+    """返回所有聊天室实例列表（快照，遍历期间不受并发修改影响）。"""
+    return list(_rooms.values())
+
+
+async def get_control_room_for_agent(team_id: int, agent_id: int) -> ChatRoom | None:
+    """返回 operator 与指定 agent 的私聊控制房间（不触发创建）。"""
+    gt_room = await gtRoomManager.get_operator_control_room(team_id, agent_id)
+    if gt_room is None:
+        return None
+    return _rooms_by_id.get(gt_room.id)
+
+
+async def get_or_create_control_room(team_id: int, agent_id: int) -> tuple[ChatRoom, bool]:
+    """获取或创建操作者与指定 Agent 的私聊控制房间。
+
+    先查找 team 下包含该 agent_id 的 PRIVATE 房间；若不存在则自动创建并激活。
+    返回 (ChatRoom, created)，created=True 表示本次新建。
+    """
+    gt_team = await gtTeamManager.get_team_by_id(team_id)
+    assert gt_team is not None, f"team_id={team_id} not found"
+
+    # 查找现有 PRIVATE 房间
+    gt_room = await gtRoomManager.get_operator_control_room(team_id, agent_id)
+    if gt_room is not None:
+        room = _rooms_by_id.get(gt_room.id)
+        if room is None:
+            # DB 有记录但内存里没有（如重启后），重新装载
+            await _load_room(gt_team=gt_team, gt_room=gt_room)
+            room = _rooms_by_id[gt_room.id]
+        # 若房间仍处于 INIT（如热更新时调度闸门关闭导致未激活），补充激活
+        await room.activate_scheduling()
+        return room, False
+
+    # 不存在则创建新控制房间
+    gt_agent = await gtAgentManager.get_agent_by_id(agent_id)
+    agent_name = gt_agent.name if gt_agent else str(agent_id)
+
+    saved_room = await create_room(
+        team_id=team_id,
+        name=agent_name,
+        agent_ids=[SpecialAgent.OPERATOR.value, agent_id],
+        max_rounds=-1,
+    )
+
+    room = _rooms_by_id[saved_room.id]
+    # create_room 已调用 load_and_activate_room + 发布 ROOM_ADDED，此处仅获取引用
+    logger.info(f"自动创建控制房间: room_id={saved_room.id}, agent_id={agent_id}")
+
+    return room, True
+
+
+def shutdown() -> None:
+    """移除所有聊天室，程序退出前调用。"""
+    _rooms.clear()
+    _rooms_by_id.clear()
+
+
+def _resolve_join_read_index(messages: list[GtRoomMessage]) -> int:
+    next_seq = 0
+    for message in messages:
+        if message.seq is not None:
+            next_seq = max(next_seq, message.seq + 1)
+    return next_seq
+
+
+async def update_room_agents(room_id: int, agent_ids: list[int]) -> None:
+    room = await gtRoomManager.get_room_by_id(room_id)
+    assertUtil.assertNotNull(room, error_message=f"room_id '{room_id}' not found", error_code="room_not_found")
+
+    agent_count = len(agent_ids or [])
+    if agent_count < 2:
+        raise TogoException(
+            f"房间成员不足 2 人（当前 {agent_count} 人）",
+            error_code="ROOM_AGENTS_TOO_FEW",
+        )
+
+    persisted_read_index, speaker_index = await gtRoomManager.get_room_state(room_id)
+    room_messages, _ = await gtRoomMessageManager.get_room_messages(room_id)
+    join_read_index = _resolve_join_read_index(room_messages)
+
+    room.agent_ids = agent_ids
+    await gtRoomManager.save_room(room)
+    await gtRoomManager.update_room_state(
+        room.id,
+        {
+            str(agent_id): (persisted_read_index or {}).get(str(agent_id), join_read_index) # 如果不存在 index，则用最新的替换（新加入成员只能看到加入之后的消息）
+            for agent_id in agent_ids
+        },
+        speaker_index,
+    )
+
+
+async def overwrite_dept_rooms(team_id: int, rooms: Sequence[DeptRoomSpec]) -> None:
+    """按部门房间信息同步 DEPT 房间。
+
+    行为约定：
+    - 以 biz_id 作为幂等键，存在则更新，不存在则创建。
+    - 每个目标房间都会同步 Agent 列表为 spec.agent_ids。
+    - 先删除 team 下不在本次 biz_id 列表中的旧 DEPT 房间，再创建/更新目标房间（避免房间名重复冲突）。
+    """
+    # 去重并固定“目标态”：同一 biz_id 仅保留最后一条 spec。
+    by_biz_id: dict[str, DeptRoomSpec] = {room.biz_id: room for room in rooms}
+
+    # 成员不足 2 人的部门不创建/更新房间（保留在 by_biz_id 之外，后续步骤 1 会清理其旧房间）
+    by_biz_id = {biz_id: spec for biz_id, spec in by_biz_id.items() if len(spec.agent_ids) >= 2}
+
+    # 1) 先清理不在目标态中的历史 DEPT 房间，避免后续创建时触发房间名唯一约束冲突。
+    await gtRoomManager.delete_rooms_by_biz_ids_not_in(team_id, list(by_biz_id.keys()))
+
+    for spec in by_biz_id.values():
+        # 2) 按 biz_id 查找目标房间，不存在则初始化一个待创建对象。
+        existing = await gtRoomManager.get_room_by_biz_id(team_id, spec.biz_id)
+        room = existing or GtRoom(
+            team_id=team_id,
+            name="",
+            type=RoomType.GROUP,
+            initial_topic="",
+            max_rounds=None,
+            agent_ids=[],
+            biz_id=spec.biz_id,
+            tags=["DEPT"],
+        )
+
+        room.team_id = team_id
+        room.name = spec.name
+        room.type = RoomType.GROUP
+        # 从 i18n 解析 initial_topic，若无 i18n 则使用 spec.initial_topic
+        if spec.i18n and "initial_topic" in spec.i18n:
+            lang = configUtil.get_language()
+            room.initial_topic = i18nUtil.extract_i18n_str(
+                spec.i18n.get("initial_topic"),
+                default=spec.initial_topic,
+                lang=lang,
+            ) or spec.initial_topic
+        else:
+            room.initial_topic = spec.initial_topic
+        room.max_rounds = spec.max_rounds
+        room.biz_id = spec.biz_id
+        room.tags = ["DEPT"]
+        room.i18n = spec.i18n or {}
+
+        # 3) 保存房间元信息，再覆盖成员列表。
+        saved_room = await gtRoomManager.save_room(room)
+        await update_room_agents(saved_room.id, spec.agent_ids)
+
+
+async def create_team_rooms(team_id: int, rooms: Sequence[GtRoom]) -> None:
+    """创建 team rooms：要求 team 还没有任何房间。"""
+    existing_rooms = await gtRoomManager.get_rooms_by_team(team_id)
+    assertUtil.assertTrue(
+        len(existing_rooms) == 0,
+        error_message=f"team_id '{team_id}' already has rooms, use overwrite_team_rooms instead",
+        error_code="TEAM_ROOMS_ALREADY_EXIST",
+    )
+    await batch_create_rooms(team_id, rooms)
+
+
+async def batch_create_rooms(team_id: int, rooms: Sequence[GtRoom]) -> None:
+    """批量创建房间（create-only）。若房间已存在则报错。"""
+    room_list = list(rooms)
+    seen_names: set[str] = set()
+    for room in room_list:
+        if room.id is not None:
+            raise TogoException(
+                f"create-only 场景不允许传入 room.id: '{room.id}'",
+                error_code="ROOM_ID_NOT_ALLOWED_ON_CREATE",
+            )
+
+        if room.name in seen_names:
+            raise TogoException(
+                f"房间名称重复: '{room.name}'",
+                error_code="ROOM_NAME_DUPLICATED",
+            )
+        seen_names.add(room.name)
+
+    existing_rooms = await gtRoomManager.get_rooms_by_team_and_names(
+        team_id,
+        [room.name for room in room_list],
+    )
+    if existing_rooms:
+        raise TogoException(
+            f"房间名称已存在: '{existing_rooms[0].name}'",
+            error_code="ROOM_ALREADY_EXISTS",
+        )
+
+    for room in room_list:
+        room.team_id = team_id
+    await gtRoomManager.batch_save_rooms(room_list)
+
+
+async def overwrite_team_rooms(team_id: int, rooms: Sequence[GtRoom]) -> None:
+    """常规更新流程：按目标房间集创建/更新房间，并清理已移除房间。"""
+    current_rooms = await gtRoomManager.get_rooms_by_team(team_id)
+    next_names = {room.name for room in rooms}
+    next_ids = {room.id for room in rooms if room.id is not None}
+
+    obsolete_room_ids = [
+        room.id
+        for room in current_rooms
+        if room.id not in next_ids and room.name not in next_names and not room.biz_id
+    ]
+    for room_id in obsolete_room_ids:
+        await gtRoomManager.delete_room(room_id)
+
+    for room_input in rooms:
+        room = await gtRoomManager.get_room_by_team_and_id_or_name(team_id, room_input.id, room_input.name)
+        if room is None:
+            room = GtRoom(
+                team_id=team_id,
+                name="",
+                type=RoomType.GROUP,
+                initial_topic="",
+                max_rounds=None,
+                agent_ids=[],
+                biz_id=None,
+                tags=[],
+            )
+
+        room.team_id = team_id
+        room.name = room_input.name
+        room.type = room_input.type
+        room.initial_topic = room_input.initial_topic
+        room.max_rounds = room_input.max_rounds
+        room.biz_id = room_input.biz_id
+        room.tags = list(room_input.tags or [])
+        room.agent_ids = list(room_input.agent_ids or [])
+        await gtRoomManager.save_room(room)
+
+
+def get_rooms_for_agent(team_id: int | None, agent_id: int) -> List[int]:
+    """返回指定参与者所在的房间 room_id 列表。可选按 team 过滤。
+
+    Args:
+        team_id: Team ID，为 None 时不过滤
+        agent_id: Agent ID
+    """
+    results = []
+    for room in _rooms.values():
+        if agent_id in room._agent_ids:
+            if team_id is None or room.team_id == team_id:
+                results.append(room.room_id)
+    return results
+
+
+async def load_and_activate_room(room_id: int) -> None:
+    """将指定房间加载到内存并激活调度（用于刚创建的新房间立即生效）。"""
+    gt_room = await gtRoomManager.get_room_by_id(room_id)
+    if gt_room is None:
+        raise RuntimeError(f"room_id={room_id} 不存在，无法加载")
+    gt_team = await gtTeamManager.get_team_by_id(gt_room.team_id)
+    if gt_team is None:
+        raise RuntimeError(f"team_id={gt_room.team_id} 不存在，无法加载房间")
+    async with _rooms_lock:
+        await _load_room(gt_team=gt_team, gt_room=gt_room)
+        room = _rooms_by_id[room_id]
+    await room.activate_scheduling()
+
+
+async def create_room(
+    team_id: int,
+    name: str,
+    agent_ids: list[int],
+    initial_topic: str = "",
+    max_rounds: int | None = None,
+) -> GtRoom:
+    """创建房间：校验合法性、自动推断类型、私聊房间自动生成话题、落库并热更新。
+
+    Raises:
+        TogoException: 参数非法或数据库操作失败。
+    """
+    team = await gtTeamManager.get_team_by_id(team_id)
+    assert team is not None, f"Team ID '{team_id}' not found"
+
+    # 同名检查 + 落库在事务中执行，防止并发创建同名房间（TOCTOU）
+    async with atomic_transaction():
+        existing_rooms = await gtRoomManager.get_rooms_by_team(team_id)
+        if any(r.name == name for r in existing_rooms):
+            raise TogoException(f"Room '{name}' already exists", error_code="room_exists")
+
+        if SpecialAgent.SYSTEM.value in agent_ids:
+            raise TogoException("system agent is not allowed in room agents", error_code="system_agent_not_allowed")
+
+        team_agents = await gtAgentManager.get_team_all_agents(team_id)
+        team_agent_ids = {a.id for a in team_agents}
+        missing = [aid for aid in agent_ids if aid not in team_agent_ids and SpecialAgent.value_of(aid) is None]
+        if missing:
+            raise TogoException(f"agent IDs not found: {missing}", error_code="agent_not_found")
+
+        if len(agent_ids) < 2:
+            raise TogoException("room must have at least 2 agents", error_code="room_agents_too_few")
+
+        room_type = RoomType.PRIVATE if len(agent_ids) == 2 else RoomType.GROUP
+
+        # 私聊房间自动生成话题
+        if room_type == RoomType.PRIVATE:
+            agents = await gtAgentManager.get_agents_by_ids(agent_ids)
+            initial_topic = i18nUtil.t("private_room_topic", name1=agents[0].display_name, name2=agents[1].display_name)
+
+        new_room = GtRoom(
+            team_id=team_id,
+            name=name,
+            type=room_type,
+            initial_topic=initial_topic,
+            max_rounds=max_rounds,
+            agent_ids=list(agent_ids),
+        )
+        saved = await gtRoomManager.save_room(new_room)
+
+    # 将新房间加载到内存并通知前端（不触发全量 team reload）
+    await load_and_activate_room(saved.id)
+    messageBus.publish(MessageBusTopic.ROOM_ADDED, gt_room=saved, team_id=team_id)
+
+    logger.info(f"房间创建: room_id={saved.id}, name={name!r}, type={room_type.name}, agent_ids={agent_ids}")
+    return saved
+
+
+async def upsert_room(
+    team_id: int,
+    name: str,
+    agent_ids: list[int],
+    initial_topic: str = "",
+    max_rounds: int | None = None,
+    room_id: int | None = None,
+) -> GtRoom:
+    """创建或更新房间（按成员数自动判断类型：2人=PRIVATE，≥3人=GROUP）。
+
+    - room_id 传入时按 ID 更新（支持重命名）；否则按 name 新建。
+    - 不操作 DEPT 房间（有 'DEPT' tag 的房间由部门树管理）。
+    """
+    room_type = RoomType.PRIVATE if len(agent_ids) == 2 else RoomType.GROUP
+
+    # 私聊房间自动生成话题
+    if room_type == RoomType.PRIVATE and not initial_topic:
+        agents = await gtAgentManager.get_agents_by_ids(agent_ids)
+        initial_topic = i18nUtil.t("private_room_topic", name1=agents[0].display_name, name2=agents[1].display_name)
+
+    # 不允许创建与已有房间成员集合完全相同的房间（排除当前正在更新的房间本身）
+    member_set = set(agent_ids)
+    existing_rooms = await gtRoomManager.get_rooms_by_team(team_id)
+    for existing_room in existing_rooms:
+        if room_id is not None and existing_room.id == room_id:
+            continue
+        if set(existing_room.agent_ids or []) == member_set:
+            raise TogoException(
+                f"已存在成员相同的房间 '{existing_room.name}'，不能创建重复房间",
+                error_code="ROOM_DUPLICATE",
+            )
+
+    if room_id is not None:
+        existing = await gtRoomManager.get_room_by_id(room_id)
+        if existing is None or existing.team_id != team_id:
+            raise TogoException(f"room_id '{room_id}' 不存在", error_code="ROOM_NOT_FOUND")
+        if "DEPT" in (existing.tags or []):
+            raise TogoException("DEPT 房间不允许直接修改，请通过部门树管理", error_code="ROOM_DEPT_PROTECTED")
+        existing.name = name
+        existing.type = room_type
+        existing.initial_topic = initial_topic
+        existing.max_rounds = max_rounds
+        existing.agent_ids = agent_ids
+        saved = await gtRoomManager.save_room(existing)
+        messageBus.publish(MessageBusTopic.ROOM_ADDED, gt_room=saved, team_id=team_id)
+        return saved
+
+    new_room = GtRoom(
+        team_id=team_id,
+        name=name,
+        type=room_type,
+        initial_topic=initial_topic,
+        max_rounds=max_rounds,
+        agent_ids=agent_ids,
+        biz_id=None,
+        tags=[],
+    )
+    saved = await gtRoomManager.save_room(new_room)
+    messageBus.publish(MessageBusTopic.ROOM_ADDED, gt_room=saved, team_id=team_id)
+    return saved
+
+
+async def delete_managed_room(team_id: int, room_id: int) -> None:
+    """删除房间。
+
+    - DEPT 房间（有 'DEPT' tag）禁止删除。
+    - 处于 SCHEDULING 状态的房间禁止删除。
+    """
+    room_db = await gtRoomManager.get_room_by_id(room_id)
+    if room_db is None or room_db.team_id != team_id:
+        raise TogoException(f"room_id '{room_id}' 不存在", error_code="ROOM_NOT_FOUND")
+    if "DEPT" in (room_db.tags or []):
+        raise TogoException("DEPT 房间不允许直接删除，请通过部门树管理", error_code="ROOM_DEPT_PROTECTED")
+
+    runtime_room = get_room(room_id)
+    if runtime_room is not None and runtime_room.state == RoomState.SCHEDULING:
+        raise TogoException("房间正在运行中，请先停止后再删除", error_code="ROOM_IS_ACTIVE")
+
+    await gtRoomManager.delete_room(room_id)
+
+
+async def activate_rooms(team_name: str | None = None) -> None:
+    """统一激活入口：对目标房间调用 activate_scheduling（可按 team 过滤）。"""
+    for room in _rooms.values():
+        if team_name is not None and room.team_name != team_name:
+            continue
+        if not room._agent_ids:
+            logger.warning(f"跳过激活：房间 {room.key} 没有任何参与者，数据异常")
+            continue
+        await room.activate_scheduling()

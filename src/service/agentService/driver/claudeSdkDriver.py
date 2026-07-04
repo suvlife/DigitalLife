@@ -1,0 +1,344 @@
+import json
+import logging
+import os
+from typing import Any
+
+from claude_agent_sdk import (
+    AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage,
+    SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock,
+    UserMessage, create_sdk_mcp_server, tool,
+)
+
+from service.roomService import ToolCallContext, ChatRoom
+from service.agentService import promptBuilder
+from service.funcToolService.funcToolType import get_function_metadata
+from service.agentService.toolRegistry import build_runtime_allow_specs
+from service import funcToolService, roomService
+from model.dbModel.gtScheculeTask import GtScheculeTask
+from model.dbModel.gtAgentHistory import GtAgentHistory
+from constants import AgentHistoryStatus, OpenaiApiRole, ToolCategory
+from util import llmApiUtil
+
+from .base import AgentDriver, AgentTurnSetup
+
+logger = logging.getLogger(__name__)
+
+
+def _filter_category(allowed_tools: list[str] | None) -> list[str] | None:
+    """从 allowed_tools 中过滤掉类别规格，返回纯工具名列表。"""
+    if allowed_tools is None:
+        return None
+    filtered: list[str] = []
+    for spec in allowed_tools:
+        if ToolCategory.from_spec(spec) is not None:
+            continue
+        filtered.append(spec)
+    return filtered
+
+_HINT_PROMPT = (
+    "你必须通过调用工具来行动。如果你不需要发言，或者已经完成了所有行动，请务必调用 finish_action 结束行动（即跳过）。直接输出的文字不会出现在聊天室里。"
+)
+_REMINDER_PROMPT = (
+    "【提醒】检测到你直接输出了文字。这些文字不会出现在聊天室中！你必须使用 `send_chat_msg` 工具来发言。如果你已经说完，请调用 `finish_action`。"
+)
+_RUN_CHAT_TURN_MAX_RETRIES = 3
+
+
+def _format_sdk_blocks(blocks: Any) -> list[str]:
+    parts: list[str] = []
+    block_list = [] if blocks is None else blocks
+
+    for block in block_list:
+        if isinstance(block, TextBlock):
+            parts.append(f"text={block.text[:80]!r}")
+            continue
+
+        if isinstance(block, ToolUseBlock):
+            parts.append(f"tool_use={block.name}({block.input})")
+            continue
+
+        if isinstance(block, ThinkingBlock):
+            parts.append(f"thinking={block.thinking[:60]!r}")
+            continue
+
+        if isinstance(block, ToolResultBlock):
+            parts.append(f"tool_result(id={block.tool_use_id}, is_error={block.is_error})")
+            continue
+
+        parts.append(f"{type(block).__name__}")
+
+    return parts
+
+
+class ClaudeSdkAgentDriver(AgentDriver):
+    def __init__(self, host: Any, config: Any) -> None:
+        super().__init__(host, config)
+        self._sdk_client: ClaudeSDKClient | None = None
+        self._turn_done: bool = False  # 当前轮次是否已完成发言，由 tool handler 设置，_run_turn_sdk 检查以决定是否中断/退出
+        self._tool_call_counter: int = 0  # tool_call_id 计数器
+
+    def _get_external_allowed_tools(self) -> list[str] | None:
+        tool_allow_specs = self.config.options.get("tool_allow_specs")
+        if tool_allow_specs is None:
+            return None
+        return _filter_category(tool_allow_specs)
+
+    @property
+    def turn_setup(self) -> AgentTurnSetup:
+        return AgentTurnSetup(max_retries=_RUN_CHAT_TURN_MAX_RETRIES)
+
+    async def startup(self) -> None:
+        await super().startup()
+        self.host.tool_registry.clear()
+        for t in funcToolService.get_tools():
+            fn_name = t.function.name
+            self.host.tool_registry.register(
+                t,
+                funcToolService.run_tool_call,
+                marks_turn_finish=fn_name == "finish_action",
+                self_interrupt=fn_name == "reload_team",
+            )
+        configured_names = self.config.options.get("local_tool_names")
+        if configured_names:
+            self.host.tool_registry._set_enabled_tool_names(list(configured_names))
+        else:
+            effective_specs = build_runtime_allow_specs(
+                self.config.options.get("tool_allow_specs"),
+                is_root_leader=bool(self.config.options.get("is_root_leader")),
+            )
+            self.host.tool_registry.apply_tool_allow_specs(effective_specs)
+        local_tool_names = self.host.tool_registry.list_enabled_tool_names()
+
+        server = create_sdk_mcp_server(
+            "chat-tools",
+            tools=[
+                self._build_claude_sdk_tool(name) for name in local_tool_names
+            ],
+        )
+        option_args = {
+            "tools": {"type": "preset", "preset": "claude_code"},
+            "system_prompt": self.host.system_prompt,
+            "mcp_servers": {"chat": server},
+            # 不再使用 bypassPermissions：Agent 输入含 web_fetch/web_search 抓取内容、
+            # 用户上传 Skill 及聊天消息，均为 prompt injection 入口，无确认执行任意
+            # bash/文件读写会导致宿主机 RCE。改用 default 权限模式，由 SDK 在调用
+            # 危险工具前要求确认（生产环境应配合审批回调拒绝危险工具）。
+            "permission_mode": "default",
+            "max_rounds": self.config.options.get("max_rounds", 100),
+            "cwd": self.host.agent_workdir,
+            "add_dirs": [self.host.agent_workdir],
+        }
+        external_allowed_tools = self._get_external_allowed_tools()
+        if external_allowed_tools is not None:
+            option_args["allowed_tools"] = external_allowed_tools
+        options = ClaudeAgentOptions(**option_args)
+
+        os.environ.pop("CLAUDECODE", None)
+
+        client = ClaudeSDKClient(options=options)
+        await client.connect()
+        self._sdk_client = client
+        logger.info(f"SDK 持久会话初始化: agent_id={self.host.gt_agent.id}")
+
+    async def shutdown(self) -> None:
+        if self._sdk_client is None:
+            await super().shutdown()
+            return
+
+        try:
+            await self._sdk_client.disconnect()
+            logger.info(f"SDK 会话已关闭: agent_id={self.host.gt_agent.id}")
+        except Exception as e:
+            logger.error(f"SDK 会话关闭失败: agent_id={self.host.gt_agent.id}, error={e}", exc_info=True)
+        finally:
+            self._sdk_client = None
+        await super().shutdown()
+
+    async def run_task_turn(self, task: GtScheculeTask, synced_count: int) -> None:
+        room_id = task.task_data.get("room_id")
+        if room_id is None:
+            logger.warning(f"run_task_turn 跳过：task 缺少 room_id, agent_id={self.host.gt_agent.id}, task_id={task.id}")
+            return
+
+        room = roomService.get_room(room_id)
+        if room is None:
+            logger.warning(f"run_task_turn 跳过：room_id={room_id} 不存在, agent_id={self.host.gt_agent.id}")
+            return
+
+        self._turn_done = False
+        prompt_prefix = "当前轮到你行动，新消息如下:"
+
+        if synced_count > 0:
+            latest_history = self.host._history.last()
+            assert latest_history is not None, f"synced_count={synced_count} 时 history 不应为空: agent_id={self.host.gt_agent.id}"
+            turn_prompt = latest_history.content
+            assert turn_prompt is not None, f"turn_prompt 不应为 None: agent_id={self.host.gt_agent.id}, room={room.key}"
+
+            if turn_prompt.startswith(prompt_prefix) is False:
+                raise ValueError(
+                    f"ClaudeSdkAgentDriver 只接受完整 turn_prompt: agent_id={self.host.gt_agent.id}, room={room.key}"
+                )
+        else:
+            turn_prompt = promptBuilder.build_turn_begin_prompt(room.name, [])
+
+        await self._run_turn_sdk(room, turn_prompt, synced_count)
+
+    def _next_tool_call_id(self) -> str:
+        """生成下一个 tool_call_id。"""
+        self._tool_call_counter += 1
+        return f"claude_sdk_{self._tool_call_counter}"
+
+    def _build_claude_sdk_tool(self, tool_name: str) -> Any:
+        func_tool = funcToolService.get_func_tool(tool_name)
+        if func_tool is None:
+            raise KeyError(f"unknown func tool: {tool_name}")
+        meta = get_function_metadata(
+            tool_name,
+            func_tool.callable,
+        )
+
+        @tool(tool_name, meta["description"], meta["parameters"])
+        async def _wrapped(args: dict[str, Any]) -> dict[str, Any]:
+            # 写入 tool_use 消息到 history
+            tool_call_id = self._next_tool_call_id()
+            await self.host._history.append_history_message(GtAgentHistory.build(
+                llmApiUtil.OpenAIMessage(
+                    role=OpenaiApiRole.ASSISTANT,
+                    content=None,
+                    reasoning_content=None,
+                    tool_calls=[
+                        llmApiUtil.OpenAIToolCall(
+                            id=tool_call_id,
+                            type="function",
+                            function={"name": tool_name, "arguments": json.dumps(args, ensure_ascii=False)},
+                        )
+                    ],
+                    tool_call_id=None,
+                ),
+                status=AgentHistoryStatus.SUCCESS,
+            ))
+
+            # 执行最后一条 assistant 消息中的 tool_call 并写入 tool_result
+            await self.host.execute_pending_tools()
+
+            # 获取最后一个 tool_result 消息作为返回值
+            result_history = self.host._history.find_tool_result_by_call_id(tool_call_id)
+            result = (result_history.content if result_history else "") or ""
+
+            result_data = json.loads(result)
+            is_error = result_data.get("success", True) is not True
+
+            if is_error is False:
+                if tool_name == "finish_action":
+                    self._turn_done = True
+
+            return {"content": [{"type": "text", "text": result}], "isError": is_error}
+
+        return _wrapped
+
+    async def _run_turn_sdk(self, room: ChatRoom, turn_prompt: str, synced_count: int) -> None:
+        """执行一次 SDK turn：发送 prompt → 多次尝试等待 agent 使用工具完成发言。"""
+        client = self._sdk_client
+
+        if client is None:
+            raise RuntimeError(f"Claude SDK client 尚未初始化: agent_id={self.host.gt_agent.id}")
+
+        turn_setup = self.turn_setup
+        failed_action_count = 0
+        logger.info(f"SDK 注入增量消息: agent_id={self.host.gt_agent.id}, room={room.key}, new_msgs={synced_count}")
+
+        last_error_text: str | None = None
+        try:
+            await client.query(turn_prompt)
+            logger.info(f"SDK prompt 已发送，等待响应: agent_id={self.host.gt_agent.id}")
+            hint = _HINT_PROMPT
+            attempt = 0
+
+            while True:
+                if attempt > 0:
+                    logger.info(f"SDK 注入发言提醒: agent_id={self.host.gt_agent.id}, retry={failed_action_count}/{turn_setup.max_retries}, attempt={attempt}")
+                    await client.query(hint)
+                attempt += 1
+
+                has_direct_text, has_tool_progress, error_text = await self._consume_response_stream(client, room)
+
+                if error_text is not None:
+                    last_error_text = error_text
+                    raise RuntimeError(f"SDK 会话返回错误: agent_id={self.host.gt_agent.id}, error={error_text}")
+
+                if self._turn_done is True:
+                    if has_direct_text and room.current_turn_has_content is False:
+                        logger.warning(f"SDK Agent 输出了文字但未调用 send_chat_msg，强制提醒: agent_id={self.host.gt_agent.id}")
+                        self._turn_done = False
+                        failed_action_count += 1
+                        if failed_action_count > turn_setup.max_retries:
+                            break
+                        hint = _REMINDER_PROMPT
+                        continue
+                    break
+
+                failed_action_count += 1
+                failure_kind = "direct_text" if has_direct_text else "no_action"
+                if has_tool_progress is True:
+                    failed_action_count = 0
+                    continue
+                logger.warning(f"SDK 检测到失败行动: agent_id={self.host.gt_agent.id}, kind={failure_kind}, retry={failed_action_count}/{turn_setup.max_retries}")
+                if failed_action_count > turn_setup.max_retries:
+                    break
+        except Exception as e:
+            logger.error(f"SDK 会话异常: agent_id={self.host.gt_agent.id}, room={room.key}, error={e}", exc_info=True)
+            raise
+
+        if not self._turn_done:
+            raise RuntimeError(
+                f"SDK 达到失败行动重试上限仍未完成行动: agent_id={self.host.gt_agent.id}, "
+                f"failed_actions={failed_action_count}, max_retries={turn_setup.max_retries}, last_error={last_error_text}"
+            )
+
+    async def _consume_response_stream(self, client: ClaudeSDKClient, room: ChatRoom) -> tuple[bool, bool, str | None]:
+        """消费一轮 SDK 响应流，处理各类消息。返回 (是否检测到直接文本输出, 是否有工具推进, 错误文本或None)。"""
+        has_direct_text = False
+        has_tool_progress = False
+        error_text: str | None = None
+        msg_count = 0
+        interrupted = False
+
+        async for msg in client.receive_response():
+            msg_count += 1
+
+            if isinstance(msg, AssistantMessage):
+                parts = _format_sdk_blocks(msg.content)
+                logger.info(f"SDK AssistantMessage: agent_id={self.host.gt_agent.id}, model={msg.model}, content=[{', '.join(parts)}]")
+                for block in msg.content:
+                    if isinstance(block, TextBlock) and len(block.text.strip()) > 0:
+                        logger.warning(f"检测到 SDK Agent 直接输出文字: agent_id={self.host.gt_agent.id}, text={block.text[:50]!r}")
+                        has_direct_text = True
+                    if isinstance(block, ToolUseBlock):
+                        has_tool_progress = True
+
+            elif isinstance(msg, UserMessage):
+                parts = _format_sdk_blocks(msg.content)
+                logger.info(f"SDK UserMessage: agent_id={self.host.gt_agent.id}, content=[{', '.join(parts)}]")
+                for block in msg.content:
+                    if isinstance(block, ToolResultBlock):
+                        has_tool_progress = True
+                if self._turn_done is True and interrupted is False:
+                    logger.info(f"SDK 发言完成，主动中断会话: agent_id={self.host.gt_agent.id}")
+                    await client.interrupt()
+                    interrupted = True
+
+            elif isinstance(msg, SystemMessage):
+                logger.info(f"SDK SystemMessage: agent_id={self.host.gt_agent.id}, subtype={msg.subtype}, data={msg.data}")
+
+            elif isinstance(msg, ResultMessage):
+                if msg.is_error is True:
+                    error_text = str(msg.result) if msg.result else "unknown SDK error"
+                    logger.error(f"SDK 执行失败: agent_id={self.host.gt_agent.id}, room={room.key}, result={msg.result}")
+                else:
+                    logger.info(f"SDK 会话完成: agent_id={self.host.gt_agent.id}, num_turns={msg.num_turns}, duration_ms={msg.duration_ms}, cost_usd={msg.total_cost_usd}")
+
+            else:
+                logger.debug(f"SDK 未知消息: agent_id={self.host.gt_agent.id}, type={type(msg).__name__}, data={msg}")
+
+        logger.info(f"SDK receive_response 结束: agent_id={self.host.gt_agent.id}, total_msgs={msg_count}")
+        return has_direct_text, has_tool_progress, error_text

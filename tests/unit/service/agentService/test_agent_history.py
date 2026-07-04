@@ -1,0 +1,658 @@
+"""AgentHistoryStore 单元测试：测试纯内存操作（不依赖数据库）。"""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from constants import AgentHistoryTag, AgentHistoryStatus, OpenaiApiRole
+from model.dbModel.gtAgentHistory import GtAgentHistory
+from service.agentService.agentHistoryStore import AgentHistoryStore
+from util import llmApiUtil
+
+
+# ─── 测试辅助函数 ──────────────────────────────────────────
+
+
+def _make_item(
+    message: llmApiUtil.OpenAIMessage,
+    *,
+    agent_id: int = 1,
+    seq: int = 0,
+    status: AgentHistoryStatus | None = None,
+    tags: list[AgentHistoryTag] | None = None,
+) -> GtAgentHistory:
+    """测试辅助函数：创建 GtAgentHistory 并填充 agent_id 和 seq。"""
+    item = GtAgentHistory.build(message, status=status, tags=tags)
+    item.agent_id = agent_id
+    item.seq = seq
+    return item
+
+
+def _make_assistant_tool_call_item(
+    *,
+    seq: int,
+    tool_call_ids: list[str],
+    content: str = "",
+    agent_id: int = 1,
+    status: AgentHistoryStatus | None = None,
+    tags: list[AgentHistoryTag] | None = None,
+) -> GtAgentHistory:
+    tool_calls = [
+        llmApiUtil.OpenAIToolCall.model_validate({
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": f"tool_{index}",
+                "arguments": "{}",
+            },
+        })
+        for index, tool_call_id in enumerate(tool_call_ids, start=1)
+    ]
+    message = llmApiUtil.OpenAIMessage(
+        role=OpenaiApiRole.ASSISTANT,
+        content=content,
+        tool_calls=tool_calls,
+    )
+    return _make_item(message, agent_id=agent_id, seq=seq, status=status, tags=tags)
+
+
+_MOCK_UPDATE = "service.agentService.agentHistoryStore.gtAgentHistoryManager.update_agent_history_by_id"
+_MOCK_APPEND = "service.agentService.agentHistoryStore.gtAgentHistoryManager.append_agent_history_message"
+_MOCK_INSERT_AT_SEQ = "service.agentService.agentHistoryStore.gtAgentHistoryManager.insert_agent_history_message_at_seq"
+
+
+# ─── 基础容器操作 ────────────────────────────────────────────
+
+
+class TestHistoryBasicOps:
+    """__len__, __iter__, __getitem__, replace, last, _last_role 等容器操作。"""
+
+    def test_last_role_returns_none_for_empty_history(self):
+        history = AgentHistoryStore(agent_id=1)
+        assert history.last() is None
+        assert history._last_role() is None
+
+    def test_openai_message_round_trips(self):
+        user_msg = llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1")
+        tool_msg = llmApiUtil.OpenAIMessage.tool_result("call_1", '{"success": true}')
+        history = AgentHistoryStore(
+            agent_id=2,
+            items=[
+                _make_item(user_msg, agent_id=2, seq=0),
+                _make_item(tool_msg, agent_id=2, seq=1),
+            ],
+        )
+
+        exported = [item.openai_message for item in history]
+
+        assert [msg.role for msg in exported] == [OpenaiApiRole.USER, OpenaiApiRole.TOOL]
+        assert [msg.content for msg in exported] == ["u1", '{"success": true}']
+
+    def test_len_and_iter(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u2"), seq=2),
+            ],
+        )
+
+        assert len(history) == 3
+        contents = [item.content for item in history]
+        assert contents == ["u1", "a1", "u2"]
+
+    def test_getitem(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), seq=1),
+            ],
+        )
+
+        assert history[0].content == "u1"
+        assert history[1].content == "a1"
+        assert history[-1].content == "a1"
+
+    def test_replace(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0),
+            ],
+        )
+
+        new_items = [
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "new1"), seq=0),
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "new2"), seq=1),
+        ]
+        history.replace(new_items)
+
+        assert len(history) == 2
+        items = list(history)
+        assert items[0].content == "new1"
+        assert items[1].content == "new2"
+
+    def test_placeholder_has_no_message_but_keeps_runtime_metadata(self):
+        item = GtAgentHistory.build_placeholder(
+            role=OpenaiApiRole.TOOL,
+            tool_call_id="call_1",
+        )
+
+        assert item.role == OpenaiApiRole.TOOL
+        assert item.tool_call_id == "call_1"
+        assert item.has_message is False
+        assert item.openai_message_or_none is None
+        assert item.content is None
+        assert item.tool_calls is None
+
+
+# ─── 查询方法 ────────────────────────────────────────────────
+
+
+class TestHistoryQuery:
+    """get_last_assistant_message, find_tool_result_by_call_id, find_tool_call_by_id, turn 追踪。"""
+
+    def test_get_last_assistant_message_respects_start_index(self):
+        history = AgentHistoryStore(
+            agent_id=3,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), agent_id=3, seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), agent_id=3, seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u2"), agent_id=3, seq=2),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a2"), agent_id=3, seq=3),
+            ],
+        )
+
+        last_any = history.get_last_assistant_message()
+        last_from_two = history.get_last_assistant_message(start_idx=2)
+
+        assert last_any is not None
+        assert last_any.content == "a2"
+        assert last_from_two is not None
+        assert last_from_two.content == "a2"
+
+    def test_find_tool_result_by_call_id_returns_matching_history_item(self):
+        history = AgentHistoryStore(
+            agent_id=4,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), agent_id=4, seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.tool_result("call_1", '{"success": true}'), agent_id=4, seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.tool_result("call_2", '{"success": false}'), agent_id=4, seq=2),
+            ],
+        )
+
+        item = history.find_tool_result_by_call_id("call_2")
+
+        assert item is not None
+        assert item.tool_call_id == "call_2"
+        assert item.content == '{"success": false}'
+        assert item.role == OpenaiApiRole.TOOL
+        assert history.find_tool_result_by_call_id("missing") is None
+
+    def test_find_tool_call_by_id(self):
+        tool_call = llmApiUtil.OpenAIToolCall(
+            id="call_123",
+            function={"name": "send_chat_msg", "arguments": '{"msg": "hello"}'},
+        )
+        assistant_msg = llmApiUtil.OpenAIMessage(
+            role=OpenaiApiRole.ASSISTANT,
+            content="",
+            tool_calls=[tool_call],
+        )
+
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_item(assistant_msg, seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.tool_result("call_123", '{"ok": true}'), seq=2),
+            ],
+        )
+
+        found = history.find_tool_call_by_id("call_123")
+        assert found is not None
+        assert found.id == "call_123"
+        assert found.function["name"] == "send_chat_msg"
+
+        assert history.find_tool_call_by_id("nonexistent") is None
+        assert history.find_tool_call_by_id("") is None
+
+    def test_unfinished_turn_with_items(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "done"), seq=2, tags=[AgentHistoryTag.ROOM_TURN_FINISH]),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u2"), seq=3, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+            ],
+        )
+
+        assert history.has_active_turn() is True
+        assert history.get_current_turn_start_index() == 3
+
+
+class TestGetFirstPendingToolCall:
+    """get_first_pending_tool_call 在不同 TOOL 状态下的行为。"""
+
+    def test_returns_none_when_no_active_turn(self):
+        """没有 active turn 时返回 None。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "done"), seq=2, tags=[AgentHistoryTag.ROOM_TURN_FINISH]),
+            ],
+        )
+        assert history.get_first_pending_tool_call() is None
+
+    def test_returns_tool_call_when_no_tool_result(self):
+        """ASSISTANT 有 tool_call 但没有对应的 TOOL 记录时，返回该 tool_call。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1"], status=AgentHistoryStatus.SUCCESS),
+            ],
+        )
+        pending = history.get_first_pending_tool_call()
+        assert pending is not None
+        assert pending.id == "call_1"
+
+    def test_returns_tool_call_when_tool_is_init(self):
+        """TOOL 记录是 INIT 状态时，返回该 tool_call（正在执行中）。"""
+        tool_result_init = _make_item(
+            llmApiUtil.OpenAIMessage.tool_result("call_1", ""),
+            seq=2,
+            status=AgentHistoryStatus.INIT,
+        )
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1"], status=AgentHistoryStatus.SUCCESS),
+                tool_result_init,
+            ],
+        )
+        pending = history.get_first_pending_tool_call()
+        assert pending is not None
+        assert pending.id == "call_1"
+
+    def test_skips_cancelled_tool_result(self):
+        """CANCELLED 状态的 TOOL 不被当作 pending，跳过并检查下一个。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1", "call_2"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", "cancelled"),
+                    seq=2,
+                    status=AgentHistoryStatus.CANCELLED,
+                ),
+            ],
+        )
+        # call_1 已 CANCELLED，应返回 call_2
+        pending = history.get_first_pending_tool_call()
+        assert pending is not None
+        assert pending.id == "call_2"
+
+    def test_skips_failed_tool_result(self):
+        """FAILED 状态的 TOOL 不被当作 pending，跳过并检查下一个。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1", "call_2"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", "failed"),
+                    seq=2,
+                    status=AgentHistoryStatus.FAILED,
+                ),
+            ],
+        )
+        # call_1 已 FAILED，应返回 call_2
+        pending = history.get_first_pending_tool_call()
+        assert pending is not None
+        assert pending.id == "call_2"
+
+    def test_returns_none_when_all_tool_calls_have_completed_results(self):
+        """所有 tool_call 都有 SUCCESS/FAILED/CANCELLED 的 TOOL 结果时返回 None。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0, tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1", "call_2"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", "done"),
+                    seq=2,
+                    status=AgentHistoryStatus.SUCCESS,
+                ),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_2", "cancelled"),
+                    seq=3,
+                    status=AgentHistoryStatus.CANCELLED,
+                ),
+            ],
+        )
+        # 所有 tool_call 都已有结果（不管状态），返回 None
+        pending = history.get_first_pending_tool_call()
+        assert pending is None
+
+    def test_returns_pending_tool_call_after_compact_no_room_turn_begin(self):
+        """compact 后 ROOM_TURN_BEGIN 被压缩掉，get_first_pending_tool_call 仍应返回未完成的 tool_call。
+
+        Bug 复现：compact 保留了 [COMPACT_SUMMARY, ASSISTANT:TC(2个)] 并已执行第一个工具，
+        第二个 tool_call 尚无结果。此时 get_current_turn_start_index() 因找不到
+        ROOM_TURN_BEGIN 而返回 None，导致 get_first_pending_tool_call() 误返回 None，
+        跳过 call_2 直接发起推理，造成 API 400：tool_use without tool_result。
+        """
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(
+                    llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"),
+                    seq=0,
+                    tags=[AgentHistoryTag.COMPACT_SUMMARY],
+                ),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1", "call_2"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", '{"ok": true}'),
+                    seq=2,
+                    status=AgentHistoryStatus.SUCCESS,
+                ),
+            ],
+        )
+        # call_2 尚无结果，应返回 call_2
+        pending = history.get_first_pending_tool_call()
+        assert pending is not None, "compact 后 get_first_pending_tool_call 不应返回 None（bug：ROOM_TURN_BEGIN 被压缩导致误判）"
+        assert pending.id == "call_2"
+
+    def test_get_current_turn_start_index_after_compact(self):
+        """compact 后 ROOM_TURN_BEGIN 被压缩掉，get_current_turn_start_index 应返回 COMPACT_SUMMARY 的 index。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(
+                    llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"),
+                    seq=0,
+                    tags=[AgentHistoryTag.COMPACT_SUMMARY],
+                ),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", '{"ok": true}'),
+                    seq=2,
+                    status=AgentHistoryStatus.SUCCESS,
+                ),
+            ],
+        )
+        idx = history.get_current_turn_start_index()
+        assert idx is not None, "compact 后仍处于 active turn，get_current_turn_start_index 不应返回 None"
+        assert idx == 0
+
+
+# ─── build_infer_messages ───────────────────────────────────
+
+
+class TestBuildInferMessages:
+    """build_infer_messages 在不同场景下的行为。"""
+
+    def test_skips_placeholder_items(self):
+        history = AgentHistoryStore(
+            agent_id=5,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), agent_id=5, seq=0),
+                GtAgentHistory.build_placeholder(role=OpenaiApiRole.ASSISTANT, status=AgentHistoryStatus.INIT),
+            ],
+        )
+        history[1].agent_id = 5
+        history[1].seq = 1
+
+        msgs = history.build_infer_messages()
+
+        assert [msg.content for msg in msgs] == ["u1"]
+
+    def test_without_compact_returns_all(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), seq=1),
+            ],
+        )
+        msgs = history.build_infer_messages()
+        assert [msg.content for msg in msgs] == ["u1", "a1"]
+
+    def test_with_compact_includes_summary_and_after(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"), seq=0, tags=[AgentHistoryTag.COMPACT_SUMMARY]),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "keep last"), seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "next"), seq=2),
+            ],
+        )
+
+        msgs = history.build_infer_messages()
+
+        assert [msg.content for msg in msgs] == ["compact summary", "keep last", "next"]
+
+    def test_without_compact_returns_all_multiple(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "old1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "old2"), seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "keep last"), seq=2),
+            ],
+        )
+
+        msgs = history.build_infer_messages()
+
+        assert [msg.content for msg in msgs] == ["old1", "old2", "keep last"]
+
+    def test_excludes_pending_infer_tail(self):
+        pending_infer = _make_item(
+            llmApiUtil.OpenAIMessage(role=OpenaiApiRole.ASSISTANT),
+            seq=2,
+            status=AgentHistoryStatus.FAILED,
+        )
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "a1"), seq=1),
+                pending_infer,
+            ],
+        )
+
+        msgs = history.build_infer_messages()
+
+        assert [msg.content for msg in msgs] == ["u1", "a1"]
+
+
+# ─── Compact 相关方法 ────────────────────────────────────────
+
+
+class TestCompact:
+    """insert_compact_summary, append_history_message 指定 seq 等 compact 相关操作。"""
+
+    @pytest.mark.asyncio
+    async def test_insert_compact_summary_trims_old_messages(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "old1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "old2"), seq=1),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "keep"), seq=2),
+            ],
+        )
+
+        with patch(_MOCK_INSERT_AT_SEQ, AsyncMock(side_effect=lambda item: item)):
+            await history.insert_compact_summary(
+                llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"),
+                seq=2,
+            )
+
+        assert [item.content for item in history] == ["compact summary", "keep"]
+
+    @pytest.mark.asyncio
+    async def test_repeated_compact_does_not_accumulate_old_messages(self):
+        """连续两次 compact 后，_items 只保留最新的 summary，不累积旧消息。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "turn1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "reply1"), seq=1),
+            ],
+        )
+
+        mock_insert = AsyncMock(side_effect=lambda item: item)
+        with patch(_MOCK_INSERT_AT_SEQ, mock_insert):
+            await history.insert_compact_summary(
+                llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "summary1"),
+                seq=2,
+            )
+
+        assert len(list(history)) == 1
+        assert list(history)[0].content == "summary1"
+
+        history._items.append(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "reply2"), seq=3),
+        )
+
+        with patch(_MOCK_INSERT_AT_SEQ, mock_insert):
+            await history.insert_compact_summary(
+                llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "summary2"),
+                seq=4,
+            )
+
+        contents = [item.content for item in history]
+        assert contents == ["summary2"], f"旧消息未清除: {contents}"
+
+    @pytest.mark.asyncio
+    async def test_append_history_message_with_seq_inserts_at_position(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u1"), seq=0),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u2"), seq=1),
+            ],
+        )
+
+        with patch(_MOCK_INSERT_AT_SEQ, AsyncMock(side_effect=lambda item: item)):
+            inserted = await history.append_history_message(
+                GtAgentHistory.build(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "mid")),
+                seq=1,
+            )
+
+        assert inserted.seq == 1
+        assert [item.seq for item in history] == [0, 1, 2]
+        assert [item.content for item in history] == ["u1", "mid", "u2"]
+
+    @pytest.mark.asyncio
+    async def test_append_history_message_uses_last_seq_after_compact_trim(self):
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"), seq=1, tags=[AgentHistoryTag.COMPACT_SUMMARY]),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "keep1"), seq=2),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "keep2"), seq=3),
+                _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "keep"), seq=4),
+            ],
+        )
+
+        with patch(_MOCK_APPEND, AsyncMock(side_effect=lambda item: item)):
+            appended = await history.append_history_message(
+                GtAgentHistory.build(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "next")),
+            )
+
+        assert appended.seq == 5
+        assert [item.seq for item in history] == [1, 2, 3, 4, 5]
+
+
+# ─── is_safe_for_immediate_insert ─────────────────────────────
+
+
+class TestIsSafeForImmediateInsert:
+    """is_safe_for_immediate_insert 在各种 history 末尾状态下的行为。"""
+
+    def _history(self, *items: GtAgentHistory) -> AgentHistoryStore:
+        return AgentHistoryStore(agent_id=1, items=list(items))
+
+    def test_empty_history_returns_false(self):
+        assert self._history().is_safe_for_immediate_insert() is False
+
+    def test_user_message_returns_true(self):
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "hi"), seq=0),
+        )
+        assert h.is_safe_for_immediate_insert() is True
+
+    def test_system_message_returns_true(self):
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.SYSTEM, "sys"), seq=0),
+        )
+        assert h.is_safe_for_immediate_insert() is True
+
+    def test_assistant_success_no_tool_calls_returns_true(self):
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u"), seq=0),
+            _make_item(
+                llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "reply"),
+                seq=1,
+                status=AgentHistoryStatus.SUCCESS,
+            ),
+        )
+        assert h.is_safe_for_immediate_insert() is True
+
+    def test_assistant_success_with_tool_calls_returns_false(self):
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u"), seq=0),
+            _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1"], status=AgentHistoryStatus.SUCCESS),
+        )
+        assert h.is_safe_for_immediate_insert() is False
+
+    def test_assistant_init_returns_false(self):
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u"), seq=0),
+            _make_item(
+                llmApiUtil.OpenAIMessage.text(OpenaiApiRole.ASSISTANT, "..."),
+                seq=1,
+                status=AgentHistoryStatus.INIT,
+            ),
+        )
+        assert h.is_safe_for_immediate_insert() is False
+
+    def test_tool_success_all_completed_returns_true(self):
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u"), seq=0,
+                       tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+            _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1"], status=AgentHistoryStatus.SUCCESS),
+            _make_item(
+                llmApiUtil.OpenAIMessage.tool_result("call_1", '{"success": true}'),
+                seq=2,
+                status=AgentHistoryStatus.SUCCESS,
+            ),
+        )
+        assert h.is_safe_for_immediate_insert() is True
+
+    def test_tool_with_sibling_still_pending_returns_false(self):
+        """同一批次的另一个 tool_call 尚未完成，不应判为安全边界。"""
+        h = self._history(
+            _make_item(llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "u"), seq=0,
+                       tags=[AgentHistoryTag.ROOM_TURN_BEGIN]),
+            _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1", "call_2"], status=AgentHistoryStatus.SUCCESS),
+            _make_item(
+                llmApiUtil.OpenAIMessage.tool_result("call_1", '{"success": true}'),
+                seq=2,
+                status=AgentHistoryStatus.SUCCESS,
+            ),
+        )
+        assert h.is_safe_for_immediate_insert() is False
+
+

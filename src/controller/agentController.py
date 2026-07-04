@@ -1,0 +1,318 @@
+from typing import Optional
+
+from pydantic import BaseModel
+
+from constants import DriverType, AgentStatus, AgentTaskStatus, SpecialAgent
+from controller.baseController import BaseHandler
+from dal.db import gtTeamManager, gtAgentManager, gtRoleTemplateManager, gtScheculeTaskManager
+from service.agentService.toolRegistry import validate_tool_allow_specs
+from model.dbModel.gtAgent import GtAgent
+from service import teamService, agentService, taskService
+from util import assertUtil
+
+
+class AgentSaveItem(BaseModel):
+    """Agent 保存项：id 可选，有则更新，无则创建。"""
+    id: Optional[int] = None
+    name: str
+    role_template_id: int
+    model: str = ""
+    driver: DriverType = DriverType.NATIVE
+    allow_tools: list[str] | None = None
+    allow_skills: list[str] | None = None
+
+
+class AgentsSaveRequest(BaseModel):
+    """全量覆盖 Agent 列表请求。"""
+    agents: list[AgentSaveItem]
+
+
+
+async def _build_agent_detail_payload(agent: GtAgent) -> dict:
+    runtime_status_map = agentService.get_team_runtime_status_map(agent.team_id)
+    first_task = await gtScheculeTaskManager.get_first_unfinish_task(agent.id)
+    current_error_message = None
+    if first_task is not None and first_task.status == AgentTaskStatus.FAILED:
+        current_error_message = first_task.error_message
+
+    result = agent.to_json()
+    result["driver"] = agent.driver.value
+    result["status"] = runtime_status_map.get(agent.id, AgentStatus.IDLE).name
+    result["error_message"] = current_error_message
+    result["allow_tools"] = agent.allow_tools
+    result["allow_skills"] = agent.allow_skills
+    return result
+
+
+class AgentListHandler(BaseHandler):
+    """GET /agents/list.json?team_id=<id> - 获取 team 的成员配置列表"""
+
+    async def get(self):
+        team_id_raw = self.get_query_argument("team_id", None)
+        include_special_raw = self.get_query_argument("include_special", "false")
+        if not team_id_raw:
+            self.return_json({"agents": []})
+            return
+
+        team_id = int(team_id_raw)
+        team = await gtTeamManager.get_team_by_id(team_id)
+        assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
+
+        include_special = include_special_raw.strip().lower() in {"1", "true", "yes", "on"}
+        agents = await gtAgentManager.get_team_all_agents(team.id, include_cross_team=include_special)
+        runtime_status_map = agentService.get_team_runtime_status_map(team.id)
+
+        items = []
+        for agent in agents:
+            result = agent.to_json()
+            result["driver"] = agent.driver.value
+            result["status"] = runtime_status_map.get(agent.id, AgentStatus.IDLE).name
+            if agent.team_id == -1:
+                special_agent = SpecialAgent.value_of(agent.id)
+                if special_agent is not None:
+                    result["special"] = special_agent.name.lower()
+            items.append(result)
+
+        self.return_json({"agents": items})
+
+
+class TeamAgentsSaveHandler(BaseHandler):
+    """PUT /teams/<id>/agents/save.json - 全量覆盖 Agent 列表"""
+
+    async def put(self, team_id_str: str) -> None:
+        team_id = int(team_id_str)
+        team = await gtTeamManager.get_team_by_id(team_id)
+        assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
+
+        request = self.parse_request(AgentsSaveRequest)
+
+        request_ids = [a.id for a in request.agents if a.id is not None]
+        existing_agents = await gtAgentManager.get_team_all_agents(team_id)
+        existing_ids = {a.id for a in existing_agents}
+
+        invalid_ids = [id_ for id_ in request_ids if id_ not in existing_ids]
+        assertUtil.assertEqual(
+            len(invalid_ids), 0,
+            error_message=f"Agent ID 不存在于当前 team: {invalid_ids}",
+            error_code="agent_not_found",
+        )
+
+        final_names = [m.name for m in request.agents]
+        duplicate_names = [n for n in final_names if final_names.count(n) > 1]
+        assertUtil.assertEqual(
+            len(duplicate_names), 0,
+            error_message=f"agent name 重复: {duplicate_names}",
+            error_code="duplicate_agent_name",
+        )
+
+        for item in request.agents:
+            error_msg = validate_tool_allow_specs(item.allow_tools or [])
+            assertUtil.assertEqual(error_msg, None, error_message=error_msg or "", error_code="invalid_tool_allow_specs")
+
+        _tpl_ids = list({a.role_template_id for a in request.agents})
+        _fetched = await gtRoleTemplateManager.get_role_templates_by_ids(_tpl_ids)
+        assertUtil.assertEqual(len(_fetched), len(_tpl_ids), error_message="部分角色模板不存在", error_code="role_template_not_found")
+        updated_agents = await agentService.overwrite_team_agents(
+            team_id,
+            [
+                GtAgent(
+                    id=item.id,
+                    team_id=team_id,
+                    name=item.name,
+                    role_template_id=item.role_template_id,
+                    model=item.model,
+                    driver=item.driver,
+                    allow_tools=item.allow_tools,
+                    allow_skills=item.allow_skills,
+                )
+                for item in request.agents
+            ],
+        )
+
+        await teamService.hot_reload_team(team.name)
+
+        self.return_json({
+            "status": "ok",
+            "agents": [
+                {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "i18n": agent.i18n or {},
+                    "employee_number": agent.employee_number,
+                    "role_template_id": agent.role_template_id,
+                    "model": agent.model,
+                    "driver": agent.driver.value,
+                    "allow_skills": agent.allow_skills,
+                }
+                for agent in updated_agents
+            ],
+        })
+
+
+class AgentDetailHandler(BaseHandler):
+    """GET /teams/<id>/agents/<name>.json - 获取单个成员配置详情"""
+
+    async def get(self, team_id_str: str, agent_name: str) -> None:
+        team_id = int(team_id_str)
+        team = await gtTeamManager.get_team_by_id(team_id)
+        assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
+
+        agent = await gtAgentManager.get_agent(team_id, agent_name)
+        assertUtil.assertNotNull(
+            agent,
+            error_message=f"Agent '{agent_name}' not found in team '{team.name}'",
+            error_code="agent_not_found",
+        )
+
+        self.return_json(await _build_agent_detail_payload(agent))
+
+
+class AgentDetailByIdHandler(BaseHandler):
+    """GET /agents/<id>.json - 获取单个成员配置详情"""
+
+    async def get(self, agent_id_str: str) -> None:
+        agent_id = int(agent_id_str)
+        agents = await gtAgentManager.get_agents_by_ids([agent_id])
+        agent = agents[0] if agents else None
+        assertUtil.assertNotNull(
+            agent,
+            error_message=f"Agent ID '{agent_id}' not found",
+            error_code="agent_not_found",
+        )
+        self.return_json(await _build_agent_detail_payload(agent))
+
+
+class AgentTasksHandler(BaseHandler):
+    """GET /agents/<id>/tasks.json - 获取指定 Agent 的协作任务列表"""
+
+    async def get(self, agent_id_str: str) -> None:
+        agent_id = int(agent_id_str)
+        limit_raw = self.get_query_argument("limit", "30")
+        include_closed_raw = self.get_query_argument("include_closed", "false")
+        limit = max(1, min(int(limit_raw), 100))
+        include_closed = include_closed_raw.strip().lower() in {"1", "true", "yes", "on"}
+
+        agents = await gtAgentManager.get_agents_by_ids([agent_id])
+        agent = agents[0] if agents else None
+        assertUtil.assertNotNull(
+            agent,
+            error_message=f"Agent ID '{agent_id}' not found",
+            error_code="agent_not_found",
+        )
+
+        self.return_json(
+            await taskService.list_tasks(
+                team_id=agent.team_id,
+                assignee_id=agent.id,
+                open_only=not include_closed,
+                limit=limit,
+            )
+        )
+
+
+class TeamTasksHandler(BaseHandler):
+    """GET /teams/<id>/tasks.json - 获取指定 Team 的协作任务列表"""
+
+    async def get(self, team_id_str: str) -> None:
+        team_id = int(team_id_str)
+        limit_raw = self.get_query_argument("limit", "500")
+        include_closed_raw = self.get_query_argument("include_closed", "false")
+        limit = max(1, min(int(limit_raw), 1000))
+        include_closed = include_closed_raw.strip().lower() in {"1", "true", "yes", "on"}
+
+        team = await gtTeamManager.get_team_by_id(team_id)
+        assertUtil.assertNotNull(
+            team,
+            error_message=f"Team ID '{team_id}' not found",
+            error_code="team_not_found",
+        )
+
+        self.return_json(
+            await taskService.list_tasks(
+                team_id=team.id,
+                open_only=not include_closed,
+                limit=limit,
+            )
+        )
+
+
+class AgentResumeHandler(BaseHandler):
+    """POST /agents/<agent_id>/resume.json - 对 FAILED 状态的 Agent 触发续跑"""
+
+    async def post(self, agent_id_str: str) -> None:
+        agent_id = int(agent_id_str)
+        agent = agentService.get_agent_or_none(agent_id)
+        assertUtil.assertNotNull(agent, None, f"运行时 Agent ID '{agent_id}' 不存在", "agent_not_found")
+        assertUtil.assertTrue(agent.status == AgentStatus.FAILED, None, f"Agent ID={agent.gt_agent.id} 当前状态不是 FAILED（当前: {agent.status.name}）", "agent_not_failed")
+
+        agent.start_consumer_task()
+
+        self.return_json({"status": "resumed", "agent_id": agent.gt_agent.id})
+
+
+class AgentClearDataHandler(BaseHandler):
+    """POST /agents/{id}/clear_data.json - 清除指定 Agent 的历史记录"""
+
+    async def post(self, agent_id_str: str) -> None:
+        agent_id = int(agent_id_str)
+        agent = await gtAgentManager.get_agent_by_id(agent_id)
+        assertUtil.assertNotNull(agent, error_message=f"Agent ID '{agent_id}' not found", error_code="agent_not_found")
+
+        result = await teamService.clear_agent_data(agent_id)
+
+        self.return_json({
+            "status": "cleared",
+            "agent_id": agent_id,
+            "deleted": result,
+        })
+
+
+class AgentStopHandler(BaseHandler):
+    """POST /agents/<agent_id>/stop.json - 人工停止 ACTIVE 状态的 Agent 当前 turn"""
+
+    async def post(self, agent_id_str: str) -> None:
+        agent_id = int(agent_id_str)
+        agent = agentService.get_agent_or_none(agent_id)
+        assertUtil.assertNotNull(agent, None, f"运行时 Agent ID '{agent_id}' 不存在", "agent_not_found")
+        assertUtil.assertTrue(agent.status == AgentStatus.ACTIVE, None, f"Agent ID={agent.gt_agent.id} 当前状态不是 ACTIVE（当前: {agent.status.name}）", "agent_not_active")
+
+        agent.cancel_current_turn()
+
+        self.return_json({"status": "stopped", "agent_id": agent.gt_agent.id})
+
+
+class AgentModifyPropertiesRequest(BaseModel):
+    allow_tools: list[str] | None = None
+    allow_skills: list[str] | None = None
+    model: str | None = None
+
+
+class AgentModifyPropertiesHandler(BaseHandler):
+    """POST /agents/<agent_id>/modify_properties.json - 修改 Agent 的运行时属性 (allow_tools, allow_skills, model)"""
+
+    async def post(self, agent_id_str: str) -> None:
+        agent_id = int(agent_id_str)
+        agent = await gtAgentManager.get_agent_by_id(agent_id)
+        assertUtil.assertNotNull(agent, error_message=f"Agent ID '{agent_id}' not found", error_code="agent_not_found")
+
+        request = self.parse_request(AgentModifyPropertiesRequest)
+
+        if "allow_tools" in request.model_fields_set:
+            if request.allow_tools is not None:
+                error_msg = validate_tool_allow_specs(request.allow_tools)
+                assertUtil.assertEqual(error_msg, None, error_message=error_msg or "", error_code="invalid_tool_allow_specs")
+            agent.allow_tools = request.allow_tools
+
+        if "allow_skills" in request.model_fields_set:
+            agent.allow_skills = request.allow_skills
+
+        if "model" in request.model_fields_set:
+            agent.model = request.model or ""
+
+        await agent.aio_save()
+        gtAgentManager.cache_agents(agent)
+
+        await agentService.hot_reload_agent(agent_id)
+
+        self.return_json(await _build_agent_detail_payload(agent))
+

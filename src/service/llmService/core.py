@@ -1,0 +1,375 @@
+import asyncio
+import random
+from dataclasses import asdict, dataclass
+from collections.abc import Awaitable, Callable
+import json
+import logging
+import uuid
+from typing import Optional
+
+from constants import InferRequestStateType, LlmErrorCategory, LlmServiceType
+from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
+from service.llmService.llmErrorClassifier import classify_llm_error, RETRYABLE_CATEGORIES
+from service.llmService.llmRequestRules import apply_llm_request_rules
+from util import configUtil, llmApiUtil
+
+# LiteLLM custom_llm_provider 映射表
+_TYPE_TO_PROVIDER = {
+    LlmServiceType.OPENAI_COMPATIBLE: "openai",
+    LlmServiceType.ANTHROPIC: "anthropic",
+    LlmServiceType.GOOGLE: "gemini",
+    LlmServiceType.DEEPSEEK: "deepseek",
+}
+
+logger = logging.getLogger(__name__)
+
+_INFER_RETRY_DELAYS_SECONDS = (2, 4, 8, 16, 32, 32, 32)
+
+
+@dataclass
+class InferResult:
+    ok: bool
+    response: Optional[llmApiUtil.OpenAIResponse] = None
+    error_message: str = ""
+    error: Optional[Exception] = None
+    error_category: Optional[LlmErrorCategory] = None
+    request_id: str = ""
+
+    @classmethod
+    def success(cls, response: llmApiUtil.OpenAIResponse, request_id: str = "") -> "InferResult":
+        return cls(ok=True, response=response, request_id=request_id)
+
+    @classmethod
+    def failure(cls, error: Exception, request_id: str = "") -> "InferResult":
+        return cls(
+            ok=False,
+            error_message=str(error),
+            error=error,
+            error_category=classify_llm_error(error),
+            request_id=request_id,
+        )
+
+    @property
+    def usage(self) -> llmApiUtil.OpenAIUsage | None:
+        if self.response is None:
+            return None
+        return self.response.usage
+
+
+@dataclass
+class InferRequestStatusEvent:
+    state: InferRequestStateType
+    request_id: str = ""
+    attempt: int = 0
+    max_attempts: int = 0
+    retry_delay_seconds: int | None = None
+    error_message: str | None = None
+
+
+InferRequestStatusEventHandler = Callable[[InferRequestStatusEvent], Awaitable[None]]
+
+
+async def startup() -> None:
+    setting = configUtil.get_app_config().setting
+    if not setting.is_llm_configured:
+        logger.warning("当前未配置可用的 LLM 服务，Agent 推理功能不可用。请通过 Web Console 或手动编辑 setting.json 完成配置。")
+
+
+def get_default_model_or_none() -> str | None:
+    setting = configUtil.get_app_config().setting
+    llm_config = setting.current_llm_service
+    if llm_config is None:
+        return None
+    return llm_config.model
+
+
+def get_default_model() -> str:
+    model = get_default_model_or_none()
+    if model is None:
+        raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
+    return model
+
+
+def get_llm_service_for_team(team_config: dict | None) -> "LlmServiceConfig | None":
+    """获取团队级 LLM 服务配置。
+
+    优先级：team_config.llm_service_name → 全局 current_llm_service。
+    如果 team_config 指定了 llm_service_name 且在 setting.llm_services 中找到已启用的服务，则返回该服务；
+    否则回退到全局默认服务。
+    """
+    setting = configUtil.get_app_config().setting
+    if team_config and isinstance(team_config, dict):
+        service_name = team_config.get("llm_service_name")
+        if service_name:
+            for svc in setting.llm_services:
+                if svc.enable and svc.name == service_name:
+                    return svc
+    return setting.current_llm_service
+
+
+def _usage_to_log_json(usage: llmApiUtil.OpenAIUsage | None) -> str:
+    if usage is None:
+        return "null"
+    return json.dumps(usage.model_dump(mode="json", exclude_none=False), ensure_ascii=False, default=str)
+
+
+def _build_request(
+    *,
+    model: str,
+    ctx: GtCoreAgentDialogContext,
+    llm_config,
+) -> tuple[llmApiUtil.OpenAIRequest, tuple[str, ...]]:
+    messages: list[llmApiUtil.OpenAIMessage] = [
+        llmApiUtil.OpenAIMessage.text(llmApiUtil.OpenaiApiRole.SYSTEM, ctx.system_prompt),
+        *ctx.messages,
+    ]
+    request = llmApiUtil.OpenAIRequest(
+        model=model,
+        messages=messages,
+        tools=ctx.tools,
+        tool_choice=ctx.tool_choice,
+        prompt_cache=ctx.prompt_cache,
+        max_tokens=llm_config.reserve_output_tokens,
+        temperature=llm_config.temperature,
+        provider_params=llm_config.provider_params,
+    )
+    return apply_llm_request_rules(request)
+
+
+async def _safe_call_handler(
+    on_status_event: InferRequestStatusEventHandler | None,
+    event: InferRequestStatusEvent,
+) -> None:
+    if on_status_event is None:
+        return
+    try:
+        await on_status_event(event)
+    except Exception:
+        logger.exception(f"LLM request status event callback failed: {event.request_id=}, {event.state.name=}")
+
+
+async def _send_with_retry(
+    send_request: Callable[..., Awaitable[llmApiUtil.OpenAIResponse]],
+    args: tuple,
+    kwargs: dict,
+    on_status_event: InferRequestStatusEventHandler | None = None,
+    on_retry_reset: Callable[[], None] | None = None,
+) -> llmApiUtil.OpenAIResponse:
+    last_error: Exception | None = None
+    total_attempts = len(_INFER_RETRY_DELAYS_SECONDS) + 1
+    request_id = kwargs.get("request_id", "")
+    request_name = getattr(send_request, "__name__", repr(send_request))
+
+    for attempt in range(1, total_attempts + 1):
+        try:
+            return await send_request(*args, **kwargs)
+
+        except Exception as e:
+
+            last_error = e
+
+            if classify_llm_error(e) not in RETRYABLE_CATEGORIES:
+                raise
+
+            if attempt >= total_attempts:
+                raise
+
+            delay = _INFER_RETRY_DELAYS_SECONDS[attempt - 1]
+            # 重置流式回调侧的进度状态（如 completion_tokens），避免重试后虚高
+            if on_retry_reset is not None:
+                on_retry_reset()
+            await _safe_call_handler(
+                on_status_event,
+                InferRequestStatusEvent(
+                    state=InferRequestStateType.RETRY_SCHEDULED,
+                    request_id=request_id,
+                    attempt=attempt,
+                    max_attempts=total_attempts,
+                    retry_delay_seconds=delay,
+                    error_message=str(e),
+                ),
+            )
+            logger.warning(f"LLM infer retry scheduled: {request_id=}, {request_name=}, {attempt=}, {total_attempts=}, {delay=}, {e=}")
+            # 加 jitter 防止多 agent 同步重试形成 thundering herd
+            jittered_delay = delay + random.uniform(0, delay * 0.1)
+            await asyncio.sleep(jittered_delay)
+            await _safe_call_handler(
+                on_status_event,
+                InferRequestStatusEvent(
+                    state=InferRequestStateType.RETRYING,
+                    request_id=request_id,
+                    attempt=attempt + 1,
+                    max_attempts=total_attempts,
+                ),
+            )
+
+    assert last_error is not None
+    raise last_error
+
+
+async def infer(
+    model: str | None,
+    ctx: GtCoreAgentDialogContext,
+    on_status_event: InferRequestStatusEventHandler | None = None,
+    team_config: dict | None = None,
+) -> InferResult:
+    """根据 GtCoreAgentDialogContext 组装请求并调用 LLM 推理接口，统一返回成功/失败结果。
+
+    Args:
+        team_config: 团队级配置 dict（含 llm_service_name）。传入时优先使用团队级 LLM 服务。
+    """
+    request_id = uuid.uuid4().hex
+    resolved_model = model
+    resolved_provider: str | None = None
+    try:
+        llm_config = get_llm_service_for_team(team_config) if team_config else configUtil.get_app_config().setting.current_llm_service
+        if llm_config is None:
+            raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
+        resolved_model = model or llm_config.model
+        resolved_provider = _TYPE_TO_PROVIDER.get(llm_config.type)
+        request, applied_rules = _build_request(
+            model=resolved_model,
+            ctx=ctx,
+            llm_config=llm_config,
+        )
+        logger.info(
+            "LLM infer start: request_id=%s, stream=%s, model=%s, provider=%s, message_count=%d, tool_count=%d, tool_choice=%s, prompt_cache=%s, applied_rules=%s",
+            request_id, False, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
+            ctx.prompt_cache, list(applied_rules),
+        )
+        response = await _send_with_retry(
+            send_request=llmApiUtil.send_request_non_stream,
+            args=(),
+            kwargs={
+                "request": request,
+                "url": llm_config.base_url,
+                "api_key": llm_config.api_key,
+                "custom_llm_provider": resolved_provider,
+                "extra_headers": llm_config.extra_headers,
+                "request_id": request_id,
+            },
+            on_status_event=on_status_event,
+        )
+        logger.info(
+            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s",
+            request_id, False, response.request_id, _usage_to_log_json(response.usage),
+        )
+        return InferResult.success(response, request_id=request_id)
+    except Exception as e:
+        logger.exception(
+            "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
+            request_id, False, resolved_model, resolved_provider,
+        )
+        return InferResult.failure(e, request_id=request_id)
+
+
+def shutdown() -> None:
+    pass
+
+
+@dataclass
+class InferStreamProgress:
+    """流式推理进度回调数据。"""
+    delta_text: str
+    current_completion_tokens: int | None = None
+    current_total_tokens: int | None = None
+
+    def to_metadata_patch(self) -> dict:
+        """返回适合 metadata 浅合并的字典（排除 delta_text 和 None 值）。"""
+        return {k: v for k, v in asdict(self).items() if k != "delta_text" and v is not None}
+
+
+async def infer_stream(
+    model: str | None,
+    ctx: GtCoreAgentDialogContext,
+    on_progress: Callable[[InferStreamProgress], Awaitable[None] | None] | None = None,
+    on_status_event: InferRequestStatusEventHandler | None = None,
+    team_config: dict | None = None,
+) -> InferResult:
+    """流式推理：边迭代 chunk 边回调 on_progress，完成后返回与 infer() 一致的 InferResult。
+
+    Args:
+        team_config: 团队级配置 dict（含 llm_service_name）。传入时优先使用团队级 LLM 服务。
+    """
+    request_id = uuid.uuid4().hex
+    resolved_model = model
+    resolved_provider: str | None = None
+    try:
+        llm_config = get_llm_service_for_team(team_config) if team_config else configUtil.get_app_config().setting.current_llm_service
+        if llm_config is None:
+            raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
+        resolved_model = model or llm_config.model
+        resolved_provider = _TYPE_TO_PROVIDER.get(llm_config.type)
+        request, applied_rules = _build_request(
+            model=resolved_model,
+            ctx=ctx,
+            llm_config=llm_config,
+        )
+        logger.info(
+            "LLM infer start: request_id=%s, stream=%s, model=%s, provider=%s, message_count=%d, tool_count=%d, tool_choice=%s, prompt_cache=%s, applied_rules=%s",
+            request_id, True, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
+            ctx.prompt_cache, list(applied_rules),
+        )
+
+        # 用可变容器持有 completion_tokens，以便 _send_with_retry 重试时能重置。
+        # 直接用 nonlocal int 无法被 _send_with_retry 回调重置（它不在本闭包作用域）。
+        stream_state = {"completion_tokens": 0}
+
+        async def _on_chunk(chunk: llmApiUtil.ModelResponseStream) -> None:
+            if on_progress is None:
+                return
+
+            delta_text = ""
+            choices = getattr(chunk, "choices", None)
+            if choices and len(choices) > 0:
+                delta = getattr(choices[0], "delta", None)
+                if delta:
+                    delta_text = getattr(delta, "content", None) or ""
+
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage and getattr(chunk_usage, "completion_tokens", None) is not None:
+                current_ct = chunk_usage.completion_tokens
+                current_total = getattr(chunk_usage, "total_tokens", None)
+            else:
+                if delta_text:
+                    stream_state["completion_tokens"] += 1
+                current_ct = stream_state["completion_tokens"]
+                current_total = None
+
+            progress = InferStreamProgress(
+                delta_text=delta_text,
+                current_completion_tokens=current_ct,
+                current_total_tokens=current_total,
+            )
+            result = on_progress(progress)
+            if result is not None:
+                import inspect
+                if inspect.isawaitable(result):
+                    await result
+
+        response = await _send_with_retry(
+            send_request=llmApiUtil.send_request_stream,
+            args=(),
+            kwargs={
+                "request": request,
+                "url": llm_config.base_url,
+                "api_key": llm_config.api_key,
+                "custom_llm_provider": resolved_provider,
+                "extra_headers": llm_config.extra_headers,
+                "on_chunk": _on_chunk,
+                "request_id": request_id,
+            },
+            on_status_event=on_status_event,
+            on_retry_reset=lambda: stream_state.update(completion_tokens=0),
+        )
+        logger.info(
+            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s",
+            request_id, True, response.request_id, _usage_to_log_json(response.usage),
+        )
+        return InferResult.success(response, request_id=request_id)
+    except Exception as e:
+        logger.exception(
+            "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
+            request_id, True, resolved_model, resolved_provider,
+        )
+        return InferResult.failure(e, request_id=request_id)

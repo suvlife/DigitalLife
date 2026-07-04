@@ -1,0 +1,436 @@
+"""integration tests — 验证多 Agent 完整对话流程（mock LLM，真实 service 层）"""
+import asyncio
+import json
+import os
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+import service.roomService as roomService
+import service.agentService as agentService
+import service.funcToolService as funcToolService
+import service.schedulerService as scheduler
+import service.ormService as ormService
+import service.persistenceService as persistenceService
+import service.presetService as presetService
+from model.dbModel.gtAgentHistory import GtAgentHistory
+from model.dbModel.gtScheculeTask import GtScheculeTask
+from util import configUtil
+from util.llmApiUtil import OpenAIMessage, OpenAIToolCall
+from constants import AgentActivityStatus, AgentHistoryTag, AgentHistoryStatus, AgentStatus, AgentTaskType, OpenaiApiRole, RoomState, ScheduleState
+from service import messageBus
+from ...base import ServiceTestCase
+
+TEAM = "test_team"
+_CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+
+if os.name == "posix" and sys.platform == "darwin":
+    os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
+
+
+class TestIntegrationMultiAgentChat(ServiceTestCase):
+    @classmethod
+    async def async_setup_class(cls):
+        # 按真实启动顺序拉起 service，并加载 integration 专用配置。
+        cfg = configUtil.load(_CONFIG_DIR, preset_dir=_CONFIG_DIR, force_reload=True)
+        team_config = cfg.teams_preset[0]
+        db_path = cls._get_test_db_path()
+        await ormService.startup(db_path)
+        await persistenceService.startup()
+        await agentService.startup()
+        await roomService.startup()
+        await presetService._import_role_templates_from_app_config()
+        await presetService._import_team_from_config(team_config)
+        await roomService.load_all_rooms()
+        await funcToolService.startup()
+        await agentService.load_all_team_agents()
+        await scheduler.startup()
+        scheduler._schedule_state = ScheduleState.RUNNING
+
+    @classmethod
+    async def async_teardown_class(cls):
+        scheduler.shutdown()
+        await agentService.shutdown()
+        funcToolService.shutdown()
+        roomService.shutdown()
+        await persistenceService.shutdown()
+        await ormService.shutdown()
+        await messageBus.shutdown()
+
+    async def test_two_agents_exchange_messages(self):
+        """alice 和 bob 各发一轮消息，general 房间应有消息。"""
+        room_key = f"general@{TEAM}"
+
+        call_seq = {
+            "alice": [{"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "你好，bob！"}}]}, {"tool_calls": [{"name": "finish_action", "arguments": {}}]}],
+            "bob":   [{"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "你好，alice！"}}]}, {"tool_calls": [{"name": "finish_action", "arguments": {}}]}],
+        }
+
+        async def fake_infer(model, ctx):
+            name = next((n for n in call_seq if f"你当前的名字：{n}" in ctx.system_prompt), None)
+            res = call_seq[name].pop(0) if name and call_seq[name] else {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "..."}}]}
+            return self.normalize_to_mock(res)
+
+        with self.patch_infer(handler=fake_infer):
+            # 重新创建 max_rounds=1 的同名房间，快速触发"每人一轮"场景。
+            await self.create_room(TEAM, "general", ["alice", "bob"], max_rounds=1)
+            room = roomService.get_room_by_key(room_key)
+            await room.activate_scheduling()
+            await self.wait_until(
+                lambda: len([m for m in room.messages if m.sender_id != room.SYSTEM_MEMBER_ID]) >= 2,
+                timeout=2.0,
+                message="alice 和 bob 未在限时内完成一轮对话",
+            )
+
+        agent_messages = [m for m in room.messages if m.sender_id != room.SYSTEM_MEMBER_ID]
+        assert len(agent_messages) >= 2
+
+    async def test_tool_call_result_appended_to_history(self):
+        """验证 tool_call 结果被正确追加到 agent history。"""
+        await self.create_room(TEAM, "manual_turn", ["alice", "bob"])
+        room = roomService.get_room_by_key(f"manual_turn@{TEAM}")
+        # 暂停调度器，本测试走手动任务流程，不依赖自动调度
+        scheduler._schedule_state = ScheduleState.STOPPED
+        try:
+            await room.activate_scheduling()
+
+            alice = agentService.get_agent(agentService.get_agent_id_by_stable_name(room.team_id, "alice"))
+            item = GtAgentHistory.build(
+                OpenAIMessage.text(OpenaiApiRole.SYSTEM, "reset test turn state"),
+            )
+            item.sender_id = alice.gt_agent.id
+            item.seq = 0
+            alice.inject_history_messages([item])
+            call_seq = {
+                "alice": [
+                    {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "manual_turn", "msg": "hello"}}]},
+                    {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+                ],
+                "bob": [],
+            }
+
+            async def fake_infer(model, ctx):
+                name = "alice" if "你当前的名字：alice" in ctx.system_prompt else "bob"
+                if call_seq[name]:
+                    return self.normalize_to_mock(call_seq[name].pop(0))
+                # 兜底返回 finish，避免并发调度时 side_effect 耗尽导致 StopIteration。
+                return self.normalize_to_mock({"tool_calls": [{"name": "finish_action", "arguments": {}}]})
+
+            task = GtScheculeTask(
+                id=1,
+                agent_id=alice.gt_agent.id,
+                task_type=AgentTaskType.ROOM_MESSAGE,
+                task_data={"room_id": room.room_id},
+            )
+            with self.patch_infer(handler=fake_infer):
+                await alice.task_consumer._turn_runner.run_task_turn(task)
+
+            tool_results = [m for m in alice.task_consumer._turn_runner._history if m.role == OpenaiApiRole.TOOL]
+            assert len(tool_results) >= 1
+            assert json.loads(tool_results[0].content)["success"]
+            assert tool_results[0].status == AgentHistoryStatus.SUCCESS
+            assert tool_results[0].error_message is None
+            assert any(AgentHistoryTag.ROOM_TURN_FINISH in msg.tags for msg in tool_results)
+        finally:
+            scheduler._schedule_state = ScheduleState.RUNNING
+
+    async def test_turn_checker_forces_send_chat_msg(self):
+        """直接输出文字时 turn_checker 应注入 hint，迫使 agent 改用工具。"""
+        await self.create_room(TEAM, "turn_checker_room", ["alice", "bob"])
+        room = roomService.get_room_by_key(f"turn_checker_room@{TEAM}")
+        # 暂停调度器，本测试走手动任务流程，不依赖自动调度
+        scheduler._schedule_state = ScheduleState.STOPPED
+        try:
+            await room.activate_scheduling()
+
+            alice = agentService.get_agent(agentService.get_agent_id_by_stable_name(room.team_id, "alice"))
+            item = GtAgentHistory.build(
+                OpenAIMessage.text(OpenaiApiRole.SYSTEM, "reset turn checker history"),
+            )
+            item.sender_id = alice.gt_agent.id
+            item.seq = 0
+            alice.inject_history_messages([item])
+            resps = [
+                {"content": "我直接回复"},
+                {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "turn_checker_room", "msg": "最终消息"}}]},
+                {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+            ]
+            task = GtScheculeTask(
+                id=2,
+                agent_id=alice.gt_agent.id,
+                task_type=AgentTaskType.ROOM_MESSAGE,
+                task_data={"room_id": room.room_id},
+            )
+            with self.patch_infer(responses=resps):
+                await alice.task_consumer._turn_runner.run_task_turn(task)
+
+            assert any(m.content == "最终消息" for m in room.messages)
+        finally:
+            scheduler._schedule_state = ScheduleState.RUNNING
+
+    async def test_scheduler_terminates_after_max_rounds(self):
+        """max_rounds 用尽后，通过观察 Room 状态并停止调度器。"""
+        scheduler.shutdown()
+        await scheduler.startup()
+        scheduler._schedule_state = ScheduleState.RUNNING
+        room_key = f"general@{TEAM}"
+        room = roomService.get_room_by_key(room_key)
+        for agent_name in ["alice", "bob"]:
+            agent = agentService.get_agent(agentService.get_agent_id_by_stable_name(room.team_id, agent_name))
+            agent.task_consumer.status = AgentStatus.IDLE
+            agent.task_consumer.current_db_task = None
+            agent.inject_history_messages([])
+
+        # 预定义每个 agent 的调用序列
+        call_seq = {
+            "alice": [
+                {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "a message"}}]},
+                {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+                {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "a message"}}]},
+                {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+            ],
+            "bob": [
+                {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "a message"}}]},
+                {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+                {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "general", "msg": "a message"}}]},
+                {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+            ],
+        }
+
+        async def fake_infer(model, ctx):
+            name = "alice" if "你当前的名字：alice" in ctx.system_prompt else "bob"
+            if call_seq[name]:
+                res = call_seq[name].pop(0)
+            else:
+                res = {"tool_calls": [{"name": "finish_action", "arguments": {}}]}
+            return self.normalize_to_mock(res)
+
+        with self.patch_infer(handler=fake_infer):
+            await self.create_room(TEAM, "general", ["alice", "bob"], max_rounds=2)
+            room = roomService.get_room_by_key(room_key)
+            await room.activate_scheduling()
+            await self.wait_until(
+                lambda: room.state == RoomState.IDLE,
+                timeout=3.0,
+                message="房间未在限时内进入 IDLE 状态",
+            )
+
+        # 1 条公告 + 2轮×2人 = 5 条消息
+        assert len(room.messages) == 5
+
+    async def test_cancelled_tool_result_is_skipped(self):
+        """CANCELLED 状态的 TOOL 记录应被跳过，而不是抛出 RuntimeError。
+
+        场景：agent 执行 tool_call_1 时被用户手动取消，TOOL 记录状态为 CANCELLED。
+        当恢复执行时，应跳过已取消的 tool，继续执行下一个 pending tool_call_2。
+        """
+        await self.create_room(TEAM, "cancelled_tool_room", ["alice", "bob"])
+        room = roomService.get_room_by_key(f"cancelled_tool_room@{TEAM}")
+        # 暂停调度器，本测试走手动任务流程，不依赖自动调度
+        scheduler._schedule_state = ScheduleState.STOPPED
+        try:
+            await room.activate_scheduling()
+
+            alice = agentService.get_agent(agentService.get_agent_id_by_stable_name(room.team_id, "alice"))
+
+            # 构造历史：USER -> ASSISTANT(tool_call_1, tool_call_2) -> TOOL(call_1, CANCELLED)
+            # 模拟：call_1 执行中被取消，call_2 还未执行
+            tool_call_1 = OpenAIToolCall(id="call_cancelled", function={"name": "send_chat_msg", "arguments": '{"room_name": "cancelled_tool_room", "msg": "cancelled msg"}'})
+            tool_call_2 = OpenAIToolCall(id="call_pending", function={"name": "send_chat_msg", "arguments": '{"room_name": "cancelled_tool_room", "msg": "pending msg"}'})
+
+            assistant_msg = OpenAIMessage(
+                role=OpenaiApiRole.ASSISTANT,
+                content="",
+                tool_calls=[tool_call_1, tool_call_2],
+            )
+
+            # USER 消息
+            user_item = GtAgentHistory.build(
+                OpenAIMessage.text(OpenaiApiRole.USER, "请发送两条消息"),
+                tags=[AgentHistoryTag.ROOM_TURN_BEGIN],
+            )
+            user_item.sender_id = alice.gt_agent.id
+            user_item.seq = 0
+
+            # ASSISTANT 消息（两个 tool_calls）
+            assistant_item = GtAgentHistory.build(
+                assistant_msg,
+                status=AgentHistoryStatus.SUCCESS,
+            )
+            assistant_item.sender_id = alice.gt_agent.id
+            assistant_item.seq = 1
+
+            # TOOL 记录（call_1 已取消）
+            tool_cancelled_item = GtAgentHistory.build(
+                OpenAIMessage.tool_result("call_cancelled", "cancelled by user"),
+                status=AgentHistoryStatus.CANCELLED,
+                error_message="cancelled by user",
+            )
+            tool_cancelled_item.sender_id = alice.gt_agent.id
+            tool_cancelled_item.seq = 2
+
+            alice.inject_history_messages([user_item, assistant_item, tool_cancelled_item])
+
+            # 验证：get_first_pending_tool_call 应返回 call_2
+            pending = alice.task_consumer._turn_runner._history.get_first_pending_tool_call()
+            assert pending is not None
+            assert pending.id == "call_pending"
+
+            # 后续推理：返回 finish_action 结束 turn
+            task = GtScheculeTask(
+                id=3,
+                agent_id=alice.gt_agent.id,
+                task_type=AgentTaskType.ROOM_MESSAGE,
+                task_data={"room_id": room.room_id},
+            )
+
+            responses = [
+                {"tool_calls": [{"name": "send_chat_msg", "arguments": {"room_name": "cancelled_tool_room", "msg": "pending msg"}}]},
+                {"tool_calls": [{"name": "finish_action", "arguments": {}}]},
+            ]
+
+            with self.patch_infer(responses=responses):
+                # 旧代码：CANCELLED 状态的 TOOL 会抛出 RuntimeError
+                # 新代码：CANCELLED 状态的 TOOL 会跳过并继续推进
+                await alice.task_consumer._turn_runner.run_task_turn(task)
+
+            # 验证：turn 正常完成，没有抛出异常
+            assert any(AgentHistoryTag.ROOM_TURN_FINISH in msg.tags for msg in alice.task_consumer._turn_runner._history)
+        finally:
+            scheduler._schedule_state = ScheduleState.RUNNING
+
+    async def test_unregistered_tool_fails_gracefully_and_recovers(self):
+        """LLM 幻觉出不存在的工具名时，应优雅失败并允许重试恢复。
+
+        场景：LLM 调用了不存在的工具 finish_chat_turn（应为 finish_action）。
+        预期：
+        1. turn 不会陷入无限循环；
+        2. 对应历史 TOOL 条目状态为 FAILED（不是 INIT，避免重启后重放循环）；
+        3. LLM 能在下一轮被提示后改用正确工具，turn 正常完成。
+        """
+        await self.create_room(TEAM, "unregistered_tool_room", ["alice", "bob"])
+        room = roomService.get_room_by_key(f"unregistered_tool_room@{TEAM}")
+        scheduler._schedule_state = ScheduleState.STOPPED
+        try:
+            await room.activate_scheduling()
+
+            alice = agentService.get_agent(agentService.get_agent_id_by_stable_name(room.team_id, "alice"))
+            reset_item = GtAgentHistory.build(
+                OpenAIMessage.text(OpenaiApiRole.SYSTEM, "reset unregistered tool test"),
+            )
+            reset_item.sender_id = alice.gt_agent.id
+            reset_item.seq = 0
+            alice.inject_history_messages([reset_item])
+
+            # LLM 先幻觉调用不存在的工具，再改用正确工具
+            responses = [
+                {"tool_calls": [{"name": "finish_chat_turn", "arguments": {}}]},                              # 幻觉工具
+                {"tool_calls": [{"name": "finish_action", "arguments": {"confirm_no_need_talk": True}}]},     # 正确工具（本轮无发言）
+            ]
+
+            task = GtScheculeTask(
+                id=10,
+                agent_id=alice.gt_agent.id,
+                task_type=AgentTaskType.ROOM_MESSAGE,
+                task_data={"room_id": room.room_id},
+            )
+            with self.patch_infer(responses=responses):
+                await alice.task_consumer._turn_runner.run_task_turn(task)
+
+            history = list(alice.task_consumer._turn_runner._history)
+
+            # 幻觉工具的 TOOL 历史条目应为 FAILED，不是 INIT（防止重启循环）
+            tool_items = [m for m in history if m.role == OpenaiApiRole.TOOL]
+            failed_items = [m for m in tool_items if m.status == AgentHistoryStatus.FAILED]
+            assert len(failed_items) >= 1, "幻觉工具调用应在历史中留下 FAILED 的 TOOL 条目"
+
+            # turn 应正常完成
+            assert any(AgentHistoryTag.ROOM_TURN_FINISH in msg.tags for msg in history), "turn 未正常完成"
+        finally:
+            scheduler._schedule_state = ScheduleState.RUNNING
+
+    async def test_invalid_tool_call_arguments_sanitized_on_serialize(self):
+        """验证 OpenAIToolCall 的 function_args 属性和 model_dump 行为。
+
+        场景：构造一个 arguments 为非法 JSON 的 tool_call，验证：
+        1. function_args 属性返回原始值（不做降级）；
+        2. model_dump() 输出的 arguments 为原始值（序列化不再自动修复）；
+        3. 有效 JSON 不受影响。
+        """
+        # 无效 JSON 参数
+        tc_invalid = OpenAIToolCall(
+            id="call_invalid_args",
+            function={"name": "send_chat_msg", "arguments": "not valid json {{{"},
+        )
+        assert tc_invalid.function_args == "not valid json {{{", "function_args 应返回原始值"
+        dumped = tc_invalid.model_dump()
+        assert dumped["function"]["arguments"] == "not valid json {{{", "model_dump 应返回原始值"
+
+        # 嵌套在 OpenAIMessage 中
+        msg = OpenAIMessage(role=OpenaiApiRole.ASSISTANT, tool_calls=[tc_invalid])
+        msg_dumped = msg.model_dump()
+        assert msg_dumped["tool_calls"][0]["function"]["arguments"] == "not valid json {{{"
+
+        # 有效 JSON 不受影响
+        tc_valid = OpenAIToolCall(
+            id="call_valid_args",
+            function={"name": "send_chat_msg", "arguments": '{"msg": "hello"}'},
+        )
+        assert tc_valid.function_args == '{"msg": "hello"}'
+        assert tc_valid.model_dump()["function"]["arguments"] == '{"msg": "hello"}'
+
+    async def test_invalid_tool_call_arguments_sanitized_by_rule(self):
+        """验证 RepairToolArgumentsRule 修复无效 JSON arguments。
+
+        场景：构造一个 arguments 为非法 JSON 的 tool_call，验证：
+        1. 规则能检测到无效 JSON；
+        2. 规则修复后 arguments 变为 '{}'；
+        3. 有效 JSON 不受影响。
+        """
+        from service.llmService.llmRequestRules import RepairToolArgumentsRule
+        from util.llmApiUtil import OpenAIRequest
+
+        rule = RepairToolArgumentsRule()
+
+        # 无效 JSON 参数
+        tc_invalid = OpenAIToolCall(
+            id="call_invalid_args",
+            function={"name": "send_chat_msg", "arguments": "not valid json {{{"},
+        )
+        msg_with_invalid = OpenAIMessage(role=OpenaiApiRole.ASSISTANT, tool_calls=[tc_invalid])
+
+        # 有效 JSON 参数
+        tc_valid = OpenAIToolCall(
+            id="call_valid_args",
+            function={"name": "send_chat_msg", "arguments": '{"msg": "hello"}'},
+        )
+        msg_with_valid = OpenAIMessage(role=OpenaiApiRole.ASSISTANT, tool_calls=[tc_valid])
+
+        # 构造包含两种消息的请求
+        request = OpenAIRequest(
+            model="test-model",
+            messages=[
+                OpenAIMessage.text(OpenaiApiRole.USER, "test"),
+                msg_with_invalid,
+                msg_with_valid,
+            ],
+        )
+
+        # 验证规则匹配
+        assert rule.check_match(request) is True, "应检测到无效 JSON"
+
+        # 应用规则
+        fixed_request = rule.apply(request)
+
+        # 验证修复结果
+        fixed_invalid_msg = fixed_request.messages[1]
+        assert fixed_invalid_msg.tool_calls[0].function["arguments"] == "{}", "无效 JSON 应被修复为 '{}'"
+
+        # 验证有效 JSON 不受影响
+        fixed_valid_msg = fixed_request.messages[2]
+        assert fixed_valid_msg.tool_calls[0].function["arguments"] == '{"msg": "hello"}', "有效 JSON 不应被修改"
+
+        # 验证修复后规则不再匹配
+        assert rule.check_match(fixed_request) is False, "修复后不应再匹配"

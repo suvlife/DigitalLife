@@ -1,0 +1,430 @@
+import asyncio
+import logging
+import sys
+
+import aiohttp
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Header, ListView, Input, Static
+
+from api_client import ApiClient, RoomInfo, AgentInfo, WsEvent
+from i18n import t, set_language
+from widgets import MessageView, RoomPanel, StatusBar
+
+log = logging.getLogger("tui.app")
+
+
+def _make_preview(sender: str, content: str) -> str:
+    """生成预览文字（换行替换为空格），截断由 PreviewLabel 动态处理。"""
+    return f"{sender}: {content.replace(chr(10), ' ')}"
+
+
+class WatcherApp(App):
+    TITLE = "Team Agent TUI"
+    SUB_TITLE = ""
+    CSS_PATH = "app.tcss"
+
+    BINDINGS = [
+        ("ctrl+q", "quit", t("keybind_quit")),
+        ("ctrl+c", "hint_quit", ""),
+        ("up", "prev_room", t("keybind_prev_room")),
+        ("down", "next_room", t("keybind_next_room")),
+        ("enter", "select_room", t("keybind_select_room")),
+        ("i", "focus_input", t("keybind_focus_input")),
+    ]
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self._api = ApiClient(base_url)
+        self._agent_order: list[str] = []
+        self._unread: dict[str, int] = {}
+        self._rooms: list[RoomInfo] = []
+        self._agents: list[AgentInfo] = []  # 本地 Agent 状态缓存
+        self._team_ids_by_name: dict[str, int] = {}
+        self._room_members_by_key: dict[str, list[str]] = {}
+        self._room_cursor: int = 0
+        self._current_room_key: str | None = None
+        self._current_msg_count: int = 0
+        self._agent_refresh_pending: bool = False
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="main-horizontal"):
+            yield RoomPanel()
+            with Vertical(id="right-panel"):
+                yield MessageView()
+                with Vertical(id="chat-input-container"):
+                    yield Input(placeholder=t("input_placeholder"), id="chat-input")
+                yield Static(t("observer_mode"), id="chat-input-hint")
+                yield StatusBar()
+
+    async def on_ready(self) -> None:
+        log.info("on_ready 触发, 设置竖线光标")
+        # 设置光标为闪烁竖线 (5: Blinking Bar)
+        sys.stdout.write("\x1b[5 q")
+        sys.stdout.flush()
+
+    async def _on_mount(self) -> None:
+        log.info("on_mount 触发")
+        await self._load_language()
+        await self._check_system_status()
+        await self._refresh_full_ui(is_initial=True)
+        log.info("on_mount 完成，启动 ws loop")
+        self._start_ws_loop()
+
+    async def _load_language(self) -> None:
+        """从后端 /system/status.json 读取语言设置并应用到 TUI。"""
+        try:
+            status = await self._api.get_system_status()
+            lang = status.get("language")
+            if lang:
+                set_language(lang)
+        except Exception:
+            log.debug("语言设置加载失败，使用默认语言")
+
+    async def _check_system_status(self) -> None:
+        """检查系统初始化状态，未初始化时在消息区显示提示。"""
+        message_view = self.query_one(MessageView)
+        try:
+            status = await self._api.get_system_status()
+            if not status.get("initialized", True):
+                await message_view.append_message(
+                    "system",
+                    t("backend_not_ready", url=self._api._base_url),
+                    [],
+                )
+        except Exception:
+            log.debug("系统状态检查失败，跳过初始化提示")
+
+    async def _fetch_all_previews(self, rooms: list[RoomInfo]) -> dict[str, str]:
+        """并发拉取各房间最后一条消息作为预览。"""
+        previews: dict[str, str] = {}
+
+        async def _fetch(room: RoomInfo) -> None:
+            try:
+                msgs = await self._api.get_room_messages(room.room_id)
+                if msgs:
+                    last = msgs[-1]
+                    previews[room.room_key] = _make_preview(last.sender, last.content)
+            except Exception:
+                pass
+
+        await asyncio.gather(*[_fetch(r) for r in rooms])
+        return previews
+
+    async def _fetch_agents_for_rooms(self, rooms: list[RoomInfo]) -> list[AgentInfo]:
+        """按房间所属 team 拉取运行态 Agent 列表，确保 team_name/status 可用。"""
+        if not rooms:
+            return await self._api.get_agents()
+
+        team_entries = sorted(
+            {
+                (team_name, self._team_ids_by_name.get(team_name))
+                for team_name in {r.team_name for r in rooms if r.team_name}
+            },
+            key=lambda item: item[0],
+        )
+        team_entries = [(team_name, team_id) for team_name, team_id in team_entries if isinstance(team_id, int)]
+        if not team_entries:
+            return await self._api.get_agents()
+
+        fetched = await asyncio.gather(
+            *[
+                self._api.get_agents(team_id=team_id)
+                for team_name, team_id in team_entries
+            ]
+        )
+        merged: list[AgentInfo] = []
+        seen: set[tuple[str, str]] = set()
+        for (team_name, _team_id), team_agents in zip(team_entries, fetched):
+            for agent in team_agents:
+                if not agent.team_name:
+                    agent.team_name = team_name
+                key = (agent.team_name, agent.name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(agent)
+        return merged
+
+    def _resolve_member_names(self, members: list) -> list[str]:
+        """将成员列表中的 agent ID 解析为名称，已是名称的保持不变。"""
+        id_to_name = {a.agent_id: a.name for a in self._agents if a.agent_id}
+        result: list[str] = []
+        for m in members:
+            if isinstance(m, int):
+                result.append(id_to_name.get(m, str(m)))
+            else:
+                s = str(m)
+                if s.isdigit():
+                    result.append(id_to_name.get(int(s), s))
+                else:
+                    result.append(s)
+        return result
+
+    async def _refresh_full_ui(self, is_initial: bool = False) -> None:
+        """刷新房间列表、团队成员列表及 UI 状态。"""
+        status_bar = self.query_one(StatusBar)
+        message_view = self.query_one(MessageView)
+        room_panel = self.query_one(RoomPanel)
+
+        try:
+            teams, rooms = await asyncio.gather(
+                self._api.get_teams(),
+                self._api.get_rooms(),
+            )
+            self._team_ids_by_name = {t.name: t.id for t in teams}
+            agents = await self._fetch_agents_for_rooms(rooms)
+            self._agents = agents  # 更新本地缓存
+            self._agent_order = [a.name for a in agents]
+            self._rooms = rooms
+            self._room_members_by_key = {
+                r.room_key: self._resolve_member_names(r.members) for r in rooms
+            }
+
+            previews = await self._fetch_all_previews(rooms)
+            await room_panel.load(rooms, agents, previews)
+
+            # 初始加载或重连后恢复选中的房间
+            target_room_key = self._current_room_key or (rooms[0].room_key if rooms else None)
+            if target_room_key:
+                await self._select_room(target_room_key, force_reload=True)
+            else:
+                await room_panel.update_team_members(None, self._agents)
+
+            if not is_initial:
+                status_bar.set_connected()
+        except aiohttp.ClientError:
+            status_bar.set_disconnected()
+            if is_initial:
+                await message_view.append_message(
+                    "system", t("backend_unreachable"), []
+                )
+
+    async def _select_room(self, room_key: str, force_reload: bool = False) -> None:
+        if not force_reload and room_key == self._current_room_key:
+            return
+
+        message_view = self.query_one(MessageView)
+        status_bar = self.query_one(StatusBar)
+        room_panel = self.query_one(RoomPanel)
+        input_container = self.query_one("#chat-input-container")
+        hint_label = self.query_one("#chat-input-hint")
+
+        try:
+            # 根据 room_key 找到房间，再用 room_id 拉取消息
+            current_room = next((r for r in self._rooms if r.room_key == room_key), None)
+            if not current_room:
+                raise ValueError(f"房间不存在: {room_key}")
+
+            messages = await self._api.get_room_messages(current_room.room_id)
+            await message_view.load_messages(messages, self._agent_order)
+            room_panel.mark_selected(room_key)
+            room_panel.update_unread_count(room_key, 0)
+            self._unread[room_key] = 0
+            self._current_room_key = room_key
+            self._current_msg_count = len(messages)
+            status_bar.update_count(self._current_msg_count)
+            team_id = self._team_ids_by_name.get(current_room.team_name)
+            room_members = list(current_room.members)
+            if team_id is not None:
+                try:
+                    room_members = await self._api.get_room_members(team_id, current_room.room_id)
+                except Exception as e:
+                    log.warning(
+                        "获取房间成员失败，回退到 rooms/list 的 members: room_key=%s error=%s",
+                        room_key,
+                        e,
+                    )
+            room_members = self._resolve_member_names(room_members)
+            self._room_members_by_key[room_key] = list(room_members)
+            await room_panel.update_team_members(room_key, self._agents, room_members)
+
+            # 查找房间信息以确定类型
+            if (current_room.room_type or "").lower() == "private":
+                input_container.add_class("active")
+                hint_label.remove_class("active")
+            else:
+                input_container.remove_class("active")
+                hint_label.add_class("active")
+                self.query_one("#chat-input", Input).value = ""
+
+            for i, r in enumerate(self._rooms):
+                if r.room_key == room_key:
+                    self._room_cursor = i
+                    break
+        except ValueError:
+            await message_view.append_message("system", f"{t('room_not_found')}: {room_key}", [])
+        except aiohttp.ClientError:
+            await message_view.append_message("system", t("load_messages_failed"), [])
+
+    @work(exclusive=True, group="ws")
+    async def _start_ws_loop(self) -> None:
+        status_bar = self.query_one(StatusBar)
+        while True:
+            log.info("ws: 开始连接")
+
+            def _on_connected() -> None:
+                log.info("ws: 连接成功，刷新房间/Agent/消息数据")
+                self.call_later(self._refresh_full_ui)
+
+            try:
+                async for event in self._api.ws_events(on_connected=_on_connected):
+                    log.debug("ws: 收到事件 room_id=%s sender=%s", event.room_id, event.sender)
+                    self._on_ws_event(event)
+                log.info("ws: 连接正常关闭（async for 退出）")
+            except asyncio.CancelledError:
+                log.info("ws: worker 被取消，退出循环")
+                raise
+            except Exception as e:
+                log.warning("ws: 连接异常断开: %s: %s", type(e).__name__, e)
+
+            log.info("ws: 切换为已断开，3 秒后重连")
+            for remaining in range(3, 0, -1):
+                status_bar.set_disconnected(remaining)
+                await asyncio.sleep(1)
+            status_bar.set_reconnecting()
+
+    def _on_ws_event(self, event: WsEvent) -> None:
+        message_view = self.query_one(MessageView)
+        status_bar = self.query_one(StatusBar)
+        room_panel = self.query_one(RoomPanel)
+
+        if event.event == "agent_status":
+            log.debug("ws: 收到成员状态变更 agent=%s status=%s", event.agent_name, event.status)
+            # 更新本地缓存中的 Agent 状态（匹配 name + team）
+            for agent in self._agents:
+                if agent.name != event.agent_name:
+                    continue
+                if self._team_ids_by_name.get(agent.team_name) != event.team_id:
+                    continue
+                agent.status = event.status or "idle"
+                break
+            # 直接使用缓存刷新当前团队成员状态，无需发起 HTTP 请求
+            current_members = self._room_members_by_key.get(self._current_room_key or "", [])
+            self.run_worker(
+                room_panel.update_team_members(self._current_room_key, list(self._agents), current_members),
+                exclusive=True,
+                group="member-panel",
+            )
+            # agent_status 变更也可能影响工作状态指示器
+            self._update_working_status(message_view)
+            return
+
+        if event.event == "room_status":
+            log.debug("ws: 收到房间状态变更 room_id=%s state=%s need_scheduling=%s turn_agent=%s",
+                       event.room_id, event.state, event.need_scheduling, event.current_turn_agent_name)
+            room = next((r for r in self._rooms if r.room_id == event.room_id), None)
+            if room is not None:
+                if event.state:
+                    room.state = event.state
+                room.need_scheduling = event.need_scheduling
+                room.current_turn_agent_name = event.current_turn_agent_name
+                if room.room_key == self._current_room_key:
+                    self._update_working_status(message_view)
+            return
+
+        preview = _make_preview(event.sender, event.content)
+        room = next((r for r in self._rooms if r.room_id == event.room_id), None)
+        if room is None:
+            log.debug("ws: 收到未知房间的消息事件 room_id=%s", event.room_id)
+            return
+
+        self.call_later(room_panel.update_preview, room.room_key, preview)
+
+        if room.room_key == self._current_room_key:
+            self._current_msg_count += 1
+            time_str = event.time.strftime("%H:%M:%S") if event.time else ""
+            self.call_later(
+                message_view.append_message, event.sender, event.content, self._agent_order, time_str
+            )
+            self.call_later(status_bar.update_count, self._current_msg_count)
+        else:
+            self._unread[room.room_key] = self._unread.get(room.room_key, 0) + 1
+            self.call_later(room_panel.update_unread_count, room.room_key, self._unread[room.room_key])
+
+    def _update_working_status(self, message_view: MessageView) -> None:
+        """根据当前房间的 4 个条件判断是否展示工作状态指示器。"""
+        room = next((r for r in self._rooms if r.room_key == self._current_room_key), None)
+        if room is None:
+            self.run_worker(message_view.clear_working_status(), exclusive=True, group="working-status")
+            return
+
+        is_scheduling = room.state.upper() == "SCHEDULING"
+        agent_name = room.current_turn_agent_name
+        agent_active = False
+        if agent_name:
+            agent = next((a for a in self._agents if a.name == agent_name), None)
+            agent_active = agent is not None and (agent.status or "").lower() == "active"
+
+        if room.need_scheduling and is_scheduling and agent_name and agent_active:
+            self.run_worker(message_view.set_working_status(agent_name), exclusive=True, group="working-status")
+        else:
+            self.run_worker(message_view.clear_working_status(), exclusive=True, group="working-status")
+
+    @on(ListView.Selected, "#room-list")
+    async def on_room_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        if item.id and item.id.startswith("room-"):
+            safe_id = item.id[len("room-"):]
+            room_panel = self.query_one(RoomPanel)
+            room_key = room_panel.room_key_from_safe(safe_id)
+            if room_key:
+                await self._select_room(room_key)
+
+    @on(Input.Submitted, "#chat-input")
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        content = event.value.strip()
+        if not content or not self._current_room_key:
+            return
+
+        current_room = next((r for r in self._rooms if r.room_key == self._current_room_key), None)
+        if not current_room:
+            return
+
+        success = await self._api.post_room_message(current_room.room_id, content)
+        if success:
+            self.query_one("#chat-input", Input).value = ""
+        else:
+            self.notify(t("send_failed"), severity="error")
+
+    def action_focus_input(self) -> None:
+        current_room = next((r for r in self._rooms if r.room_key == self._current_room_key), None)
+        if current_room and (current_room.room_type or "").lower() == "private":
+            self.query_one("#chat-input").focus()
+
+    async def action_prev_room(self) -> None:
+        if not self._rooms:
+            return
+        self._room_cursor = (self._room_cursor - 1) % len(self._rooms)
+        await self._select_room(self._rooms[self._room_cursor].room_key)
+
+    async def action_next_room(self) -> None:
+        if not self._rooms:
+            return
+        self._room_cursor = (self._room_cursor + 1) % len(self._rooms)
+        await self._select_room(self._rooms[self._room_cursor].room_key)
+
+    async def action_select_room(self) -> None:
+        if not self._rooms:
+            return
+        await self._select_room(self._rooms[self._room_cursor].room_key)
+
+    def action_hint_quit(self) -> None:
+        self.notify(
+            t("quit_confirm_body"),
+            title=t("quit_confirm_title"),
+            severity="information",
+            timeout=3,
+        )
+
+    def on_exception(self, error: Exception) -> None:
+        log.exception("未捕获异常导致 app 退出: %s", error)
+
+    async def _on_unmount(self) -> None:
+        log.info("app unmount")
+        # 恢复光标为方块 (0: 恢复默认)
+        sys.stdout.write("\x1b[0 q")
+        sys.stdout.flush()
+        await self._api.close()
