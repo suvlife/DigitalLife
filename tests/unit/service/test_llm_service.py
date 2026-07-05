@@ -406,11 +406,11 @@ async def test_infer_retries_with_exponential_backoff_until_success(monkeypatch)
         assert expected_base <= actual_delay <= expected_base * 1.1, \
             f"retry {i+1}: delay {actual_delay} not in [{expected_base}, {expected_base*1.1}]"
     assert [(event.state, event.attempt, event.retry_delay_seconds) for event in status_events] == [
-        (InferRequestStateType.RETRY_SCHEDULED, 1, 2),
+        (InferRequestStateType.RETRY_SCHEDULED, 1, 5),
         (InferRequestStateType.RETRYING, 2, None),
-        (InferRequestStateType.RETRY_SCHEDULED, 2, 4),
+        (InferRequestStateType.RETRY_SCHEDULED, 2, 10),
         (InferRequestStateType.RETRYING, 3, None),
-        (InferRequestStateType.RETRY_SCHEDULED, 3, 8),
+        (InferRequestStateType.RETRY_SCHEDULED, 3, 20),
         (InferRequestStateType.RETRYING, 4, None),
     ]
 
