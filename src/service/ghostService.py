@@ -206,46 +206,47 @@ def _build_blog_content_from_task(task: Any) -> str:
 
 
 async def _build_blog_content_from_room(task: Any) -> str:
-    """从任务关联的房间收集所有大师的分析消息，构建完整博客内容。
+    """从任务关联的房间收集分析消息，构建博客内容。
 
-    收集流程：
-    1. 从 task 获取 room_id
-    2. 查询房间所有消息
-    3. 按 Agent 分组整理每位大师的分析
-    4. 汇总为完整的 Markdown 博客文章
+    支持两种模式：
+    - 全量模式：收集所有 Agent 的消息（task 无 _filter_agent_id 时）
+    - 单 Agent 模式：只收集指定 Agent 的消息（task 有 _filter_agent_id 时）
     """
     from model.dbModel.gtRoomMessage import GtRoomMessage
     from model.dbModel.gtAgent import GtAgent
-    from service import agentService
 
     title = task.title or "未命名任务"
     description = task.description or ""
+    result = task.result or ""
 
     # 获取房间 ID
     room_id = None
     if hasattr(task, 'room_id') and task.room_id:
         room_id = task.room_id
     else:
-        # 从 task 关联信息获取
         room_id = getattr(task, 'task_data', {}).get('room_id') if hasattr(task, 'task_data') else None
+
+    # 单 Agent 过滤模式
+    filter_agent_id = getattr(task, '_filter_agent_id', None)
 
     sections = [f"# {title}\n"]
     if description:
-        sections.append(f"## 任务描述\n\n{description}\n")
+        sections.append(f"## 任务背景\n\n{description}\n")
 
     if room_id:
         try:
-            # 查询房间所有消息（按 seq 排序）
             messages = list(await GtRoomMessage.select()
                 .where(GtRoomMessage.room_id == room_id)
                 .order_by(GtRoomMessage.seq.asc())
                 .aio_execute())
 
             if messages:
-                # 按 Agent 分组
                 agent_messages: dict[int, list[str]] = {}
                 for msg in messages:
-                    if msg.sender_id <= 0:  # 跳过 OPERATOR 和 SYSTEM
+                    if msg.sender_id <= 0:
+                        continue
+                    # 单 Agent 模式：只收集该 Agent 的消息
+                    if filter_agent_id is not None and msg.sender_id != filter_agent_id:
                         continue
                     if msg.sender_id not in agent_messages:
                         agent_messages[msg.sender_id] = []
@@ -253,38 +254,46 @@ async def _build_blog_content_from_room(task: Any) -> str:
                     if content.strip():
                         agent_messages[msg.sender_id].append(content)
 
-                # 按Agent输出每位大师的分析
-                sections.append("## 各专家分析\n")
-                for agent_id, msgs in agent_messages.items():
-                    # 获取 Agent 名称
-                    agent_name = f"专家{agent_id}"
-                    try:
-                        agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
-                        if agent:
-                            agent_name = agent.display_name or agent.name
-                    except Exception:
-                        pass
+                if filter_agent_id is not None:
+                    # 单 Agent 模式：直接输出该专家的分析
+                    for agent_id, msgs in agent_messages.items():
+                        agent_name = f"专家{agent_id}"
+                        try:
+                            agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
+                            if agent:
+                                agent_name = agent.display_name or agent.name
+                        except Exception:
+                            pass
+                        combined = "\n\n".join(msgs)
+                        sections.append(f"{combined}\n")
+                else:
+                    # 全量模式：按 Agent 分组输出
+                    sections.append("## 各专家分析\n")
+                    for agent_id, msgs in agent_messages.items():
+                        agent_name = f"专家{agent_id}"
+                        try:
+                            agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
+                            if agent:
+                                agent_name = agent.display_name or agent.name
+                        except Exception:
+                            pass
+                        sections.append(f"### {agent_name}\n")
+                        combined = "\n\n".join(msgs)
+                        sections.append(f"{combined}\n")
 
-                    sections.append(f"### {agent_name}\n")
-                    combined = "\n\n".join(msgs)
-                    sections.append(f"{combined}\n")
-
-                # 任务结果作为综合结论
-                if task.result:
-                    sections.append("## 综合结论\n")
-                    sections.append(f"{task.result}\n")
+                    if result:
+                        sections.append("## 综合结论\n")
+                        sections.append(f"{result}\n")
             else:
-                # 无房间消息，仅用 task result
-                if task.result:
-                    sections.append(f"## 分析结果\n\n{task.result}\n")
+                if result:
+                    sections.append(f"## 分析结果\n\n{result}\n")
         except Exception as e:
             logger.warning("收集房间消息失败: %s, 回退到任务结果", e)
-            if task.result:
-                sections.append(f"## 分析结果\n\n{task.result}\n")
+            if result:
+                sections.append(f"## 分析结果\n\n{result}\n")
     else:
-        # 无 room_id，仅用 task result
-        if task.result:
-            sections.append(f"## 分析结果\n\n{task.result}\n")
+        if result:
+            sections.append(f"## 分析结果\n\n{result}\n")
 
     sections.append("---\n*本文由数字人生多智能体协作平台自动生成*\n")
     return "\n".join(sections)

@@ -244,31 +244,7 @@ class RoomScheduler:
         self._state = RoomState.IDLE
         logger.info("房间 %s 停止调度", self._key)
         self.publish_status(current_turn_agent_id=None)
-
-        # 房间辩论结束时触发 Ghost 博客发布（如果有消息且未通过 submit_conclusion 发布过）
-        if not self._conclusion_submitted and self._round_count > 0:
-            self._trigger_ghost_publish()
-
         return True
-
-    def _trigger_ghost_publish(self) -> None:
-        """房间辩论自然结束时触发 Ghost 博客发布。"""
-        try:
-            import asyncio
-            from service import ghostService
-
-            class _RoomTaskProxy:
-                def __init__(self, scheduler):
-                    self.title = f"{scheduler._gt_room.name} 分析报告"
-                    self.description = scheduler._gt_room.initial_topic or ""
-                    self.result = ""
-                    self.room_id = scheduler._gt_room.id
-
-            proxy = _RoomTaskProxy(self)
-            asyncio.create_task(ghostService.publish_task_if_enabled(proxy))
-            logger.info("房间辩论结束，触发 Ghost 博客发布: room=%s", self._key)
-        except Exception as e:
-            logger.warning("Ghost 博客发布触发失败: %s", e)
 
     # ─── 外部动作 ───────────────────────────────────────────
 
