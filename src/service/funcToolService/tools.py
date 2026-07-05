@@ -986,6 +986,23 @@ async def submit_conclusion(
 
     logger.info(f"综合结论已提交: agent_id={_context.agent_id}, room={room.name}, confidence={confidence}")
 
+    # 触发 Ghost 博客自动发布（收集房间内所有大师的分析 + 综合结论）
+    try:
+        import asyncio
+        from service import ghostService
+        # 构建一个模拟 task 对象供 ghostService 使用
+        class _RoomTaskProxy:
+            def __init__(self, room, conclusion, agent_id):
+                self.title = f"{room.name} 分析报告"
+                self.description = room.initial_topic or ""
+                self.result = conclusion
+                self.room_id = room.room_id
+
+        proxy = _RoomTaskProxy(room, conclusion, _context.agent_id)
+        asyncio.create_task(ghostService.publish_task_if_enabled(proxy))
+    except Exception as e:
+        logger.warning("Ghost 博客发布触发失败（不影响结论）: %s", e)
+
     return {
         "success": True,
         "message": "综合结论已提交并广播到房间。当前辩论轮次将在你结束行动后终止。请调用 finish_action 结束本轮行动。",

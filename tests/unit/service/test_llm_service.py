@@ -401,7 +401,7 @@ async def test_infer_retries_with_exponential_backoff_until_success(monkeypatch)
     assert attempts["count"] == 4
     # jitter 后 delay 在 [base, base*1.1] 范围内，验证调用次数和近似值
     assert len(sleep_mock.await_args_list) == 3
-    for i, expected_base in enumerate([2, 4, 8]):
+    for i, expected_base in enumerate([5, 10, 20]):
         actual_delay = sleep_mock.await_args_list[i][0][0]
         assert expected_base <= actual_delay <= expected_base * 1.1, \
             f"retry {i+1}: delay {actual_delay} not in [{expected_base}, {expected_base*1.1}]"
@@ -452,7 +452,7 @@ async def test_infer_stream_retries_up_to_limit_then_returns_failure(monkeypatch
     assert "stream temporary failure" in str(result.error)
     assert fake_send_request_stream.await_count == 8
     # jitter 后 delay 在 [base, base*1.1] 范围内，验证调用次数和近似值
-    expected_bases = [2, 4, 8, 16, 32, 32, 32]
+    expected_bases = [5, 10, 20, 30, 60, 60, 60]
     assert len(sleep_mock.await_args_list) == len(expected_bases)
     for i, expected_base in enumerate(expected_bases):
         actual_delay = sleep_mock.await_args_list[i][0][0]
