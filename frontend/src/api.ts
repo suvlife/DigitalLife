@@ -1305,7 +1305,12 @@ export async function logout(): Promise<void> {
 
 export async function getCurrentUser(): Promise<UserInfo | null> {
   try {
-    return await requestJson<UserInfo>('/auth/me.json');
+    const response = await fetch(makeUrl('/auth/me.json'), {
+      credentials: 'include',
+      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+    });
+    if (!response.ok) return null;
+    return await response.json() as UserInfo;
   } catch {
     return null;
   }
