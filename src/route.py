@@ -52,12 +52,6 @@ tornado_settings = {
     'websocket_ping_timeout': 30,
     # Cookie 安全
     'cookie_secret': __import__('secrets').token_hex(32),
-    # 安全头（Nginx 也会加，这里兜底）
-    'default_headers': {
-        'X-Content-Type-Options': 'nosniff',
-        'X-Frame-Options': 'DENY',
-        'Referrer-Policy': 'strict-origin-when-cross-origin',
-    },
 }
 
 application = tornado.web.Application([

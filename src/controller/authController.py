@@ -133,11 +133,13 @@ class RegisterHandler(BaseHandler):
             return
 
         # 判断是否首个用户（自动成为 admin）
-        user_count = await GtUser.aio_count()
-        role = UserRole.ADMIN if user_count == 0 else UserRole.USER
+        # 用 aio_get_or_none 查任意用户判断是否已有用户（兼容 peewee-async 无 aio_count）
+        any_user = await GtUser.aio_get_or_none()
+        is_first_user = any_user is None
+        role = UserRole.ADMIN if is_first_user else UserRole.USER
 
         # 如果已有用户，需要 admin 权限才能注册新用户
-        if user_count > 0:
+        if not is_first_user:
             current = self.get_current_user()
             if current is None or current.role != UserRole.ADMIN:
                 self.set_status(403)

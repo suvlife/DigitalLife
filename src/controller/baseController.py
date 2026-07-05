@@ -55,6 +55,12 @@ _GLOBAL_RATE_LIMIT = 120
 class BaseHandler(tornado.web.RequestHandler):
     """所有 HTTP controller 的基类，提供统一的 JSON 响应方法。"""
 
+    # 安全头（所有响应自动携带）
+    def set_default_headers(self) -> None:
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "DENY")
+        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+
     _READONLY_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
     _AUTH_EXEMPT_PATHS = {
         "/system/status.json",
