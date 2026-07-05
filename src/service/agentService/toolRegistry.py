@@ -71,9 +71,15 @@ def build_runtime_allow_specs(
     *,
     is_root_leader: bool,
 ) -> list[str]:
-    """根据 allowed_tools 和角色构建实际生效的运行时工具规格列表。"""
+    """根据 allowed_tools 和角色构建实际生效的运行时工具规格列表。
+
+    安全策略：当 allowed_tools 为 None（新 Agent 默认）时，默认仅授予
+    Basic + Read + Write 类别，**不包含 Execute**（execute_bash 等危险工具）。
+    如需开启 Execute，必须在 Agent 配置中显式声明 "Category:Execute"。
+    """
     if allowed_tools is None:
-        effective_specs = ["Category:Basic", "Category:Read", "Category:Write", "Category:Execute"]
+        # 默认不包含 Execute，防止公网场景下 Agent 被注入后执行任意命令
+        effective_specs = ["Category:Basic", "Category:Read", "Category:Write"]
     else:
         effective_specs = list(allowed_tools)
 
@@ -84,7 +90,7 @@ def build_runtime_allow_specs(
     if is_root_leader:
         if "Category:Admin" not in effective_specs:
             effective_specs.append("Category:Admin")
-    
+
     return effective_specs
 
 

@@ -37,6 +37,30 @@ from dal.db import gtAgentTaskManager, gtAgentHistoryManager
 logger = logging.getLogger(__name__)
 
 
+# 高危命令模式：公网部署时拦截可能危害服务器的命令
+_DANGEROUS_COMMAND_PATTERNS = [
+    "rm -rf", "rmdir", "mkfs", "dd if=", "shutdown", "reboot", "halt",
+    "curl ", "wget ", "nc ", "netcat", "ssh ", "scp ", "rsync ",
+    "pip install", "npm install", "apt ", "yum ", "brew ",
+    "chmod 777", "chown ", ">/dev/", "mkfifo",
+    "python -c", "python3 -c", "eval ", "exec ",
+    "`rm", "$(", "base64 -d", "curl|", "wget|",
+    "crontab", "systemctl", "service ",
+    "kill -9", "pkill", "killall",
+    "iptables", "ufw", "firewall",
+    "/etc/", "/root/", "/var/", "/tmp/.",
+]
+
+
+def _is_dangerous_command(command: str) -> bool:
+    """检查命令是否含高危操作。公网部署时拦截可能危害服务器的命令。"""
+    cmd_lower = command.lower()
+    for pattern in _DANGEROUS_COMMAND_PATTERNS:
+        if pattern in cmd_lower:
+            return True
+    return False
+
+
 def _detect_json_tool_call_in_content(content: str | None) -> bool:
     """检测 LLM 是否将工具调用以 JSON 对象形式写入了 content 字段（而非 tool_calls）。"""
     if not content:
@@ -766,6 +790,26 @@ class AgentTurnRunner:
             chat_room=room,
             schedule_task=self._current_task,
         )
+
+        # 命令审批网关：拦截 execute_bash 中的高危命令
+        if tool_name == "execute_bash":
+            command = self._extract_tool_command(tool_call)
+            if command and _is_dangerous_command(command):
+                error_msg = f"命令被安全网关拦截（含高危操作）: {command[:100]}"
+                logger.warning("命令审批拦截: agent_id=%d, command=%s", self.gt_agent.id, command[:100])
+                final_message = llmApiUtil.OpenAIMessage.tool_result(
+                    output_item.tool_call_id,
+                    json.dumps({"success": False, "message": error_msg}, ensure_ascii=False),
+                )
+                await self._history.finalize_history_item(
+                    history_id=output_item.id, message=final_message,
+                    status=AgentHistoryStatus.FAILED, error_message=error_msg,
+                )
+                await self._finish_activity(
+                    tool_activity.id, status=AgentActivityStatus.FAILED, error_message=error_msg,
+                )
+                return TurnStepResult.TOOL_EXECUTE_FAILED_FINISH
+
         exec_result:ToolExecutionResult = await self.tool_registry.execute_tool_call(tool_call, context)
 
         # 工具结果截断：过长的原始内容会显著增加后续 prompt token，按策略截断后存入 history

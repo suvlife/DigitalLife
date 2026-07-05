@@ -32,9 +32,9 @@ def test_validate_tool_allow_specs() -> None:
     assert "不允许分配管理员工具权限" in validate_tool_allow_specs(["save_role_template"])
 
 def test_build_runtime_allow_specs() -> None:
-    # 默认权限
+    # 默认权限（安全策略：不包含 Execute）
     specs = build_runtime_allow_specs(None, is_root_leader=False)
-    assert set(specs) == {"Category:Basic", "Category:Read", "Category:Write", "Category:Execute"}
+    assert set(specs) == {"Category:Basic", "Category:Read", "Category:Write"}
     
     # 指定权限，应自动补齐 Basic
     # list_dir 是 READ

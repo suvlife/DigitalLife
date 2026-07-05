@@ -3,7 +3,7 @@ import os
 
 import tornado.web
 
-from controller import roleTemplateController, agentController, roomController, wsController, teamController, deptController, configController, activityController, settingController, systemController, initController, superviseController, usageController, fileController
+from controller import roleTemplateController, agentController, roomController, wsController, teamController, deptController, configController, activityController, settingController, systemController, initController, superviseController, usageController, fileController, authController
 
 import sys as _sys
 if getattr(_sys, "frozen", False):
@@ -48,11 +48,25 @@ tornado_settings = {
     'debug': False,
     'compress_response': True,
     # WebSocket 心跳配置（Tornado 内置）
-    'websocket_ping_interval': 30,   # 每 30 秒发送一次 ping
-    'websocket_ping_timeout': 30,     # 30 秒未收到 pong 则关闭连接（不能超过 ping_interval）
+    'websocket_ping_interval': 30,
+    'websocket_ping_timeout': 30,
+    # Cookie 安全
+    'cookie_secret': __import__('secrets').token_hex(32),
+    # 安全头（Nginx 也会加，这里兜底）
+    'default_headers': {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+    },
 }
 
 application = tornado.web.Application([
+    # Auth (用户认证)
+    (r"/auth/login.json",                           authController.LoginHandler),
+    (r"/auth/logout.json",                          authController.LogoutHandler),
+    (r"/auth/me.json",                              authController.CurrentUserHandler),
+    (r"/auth/register.json",                        authController.RegisterHandler),
+
     # Global config
     (r"/config/frontend.json",                       configController.ConfigHandler),
     (r"/config/directories.json",                    configController.DirectoriesHandler),

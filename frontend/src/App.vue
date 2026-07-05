@@ -24,8 +24,9 @@ import {
   totalMessageCount,
   updateScheduleState,
 } from './appUiState';
-import { checkUpdate, getSystemStatus, resumeSchedule, setTeamEnabled } from './api';
+import { checkUpdate, getSystemStatus, resumeSchedule, setTeamEnabled, getCurrentUser, type UserInfo } from './api';
 import { getToken } from './authStore';
+import LoginPage from './components/auth/LoginPage.vue';
 import QuickInitModal from './components/layout/QuickInitModal.vue';
 import TokenDialog from './components/ui/TokenDialog.vue';
 import TokenStatusBar from './components/ui/TokenStatusBar.vue';
@@ -46,6 +47,8 @@ const router = useRouter();
 const { t } = useI18n();
 
 const systemPrefersDark = ref<boolean>(readSystemPrefersDark());
+const currentUser = ref<UserInfo | null>(null);
+const authChecked = ref(false);
 
 let systemThemeMediaQuery: MediaQueryList | null = null;
 
@@ -324,6 +327,16 @@ onMounted(async () => {
     systemThemeMediaQuery.addEventListener('change', handleSystemThemeChange);
   }
 
+  // 先检查用户登录状态
+  currentUser.value = await getCurrentUser();
+  authChecked.value = true;
+
+  // 如果未登录且有旧 Token，尝试兼容旧模式
+  if (!currentUser.value && !getToken()) {
+    // 未登录，显示登录页（由模板控制）
+    return;
+  }
+
   startRealtimeClient();
   await Promise.all([loadTeams(), checkSystemStatus()]);
 
@@ -353,7 +366,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="shell" :class="{ 'shell-console': isConsoleRoute }">
+  <!-- 未登录时显示登录页 -->
+  <LoginPage v-if="authChecked && !currentUser" @logged-in="(u) => { currentUser = u; startRealtimeClient(); loadTeams(); checkSystemStatus(); }" />
+
+  <!-- 已登录显示主界面 -->
+  <div v-else-if="authChecked && currentUser" class="shell" :class="{ 'shell-console': isConsoleRoute }">
     <div class="ambient ambient-left"></div>
     <div class="ambient ambient-right"></div>
 

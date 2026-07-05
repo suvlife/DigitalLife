@@ -31,6 +31,10 @@ def _resolve_team_workdir(gt_team: Any, workspace_root: str | None) -> str:
         configured_workdir = str(team_config.get("working_directory") or "").strip()
 
     if configured_workdir:
+        # 安全校验：working_directory 必须在 workspace_root 沙箱内
+        if workspace_root:
+            from util import fileUtil
+            fileUtil.assert_path_within_sandbox(configured_workdir, workspace_root)
         return configured_workdir
 
     assert workspace_root is not None, "workspace_root 未配置"

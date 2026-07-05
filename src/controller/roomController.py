@@ -482,7 +482,17 @@ class RoomMessageUploadHandler(BaseHandler):
 
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         safe_filename = "".join(c for c in filename if c.isalnum() or c in ("._-"))
+        # 防御：拒绝空文件名或纯点号文件名
+        if not safe_filename or safe_filename.strip(".") == "":
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_filename", "error_desc": "文件名不合法"})
+            return
         saved_filename = f"{timestamp}_{safe_filename}"
+        saved_path = os.path.join(upload_dir, saved_filename)
+
+        # 沙箱校验：确保最终路径在 upload_dir 内
+        from util import fileUtil
+        fileUtil.assert_path_within_sandbox(saved_path, upload_dir)
         saved_path = os.path.join(upload_dir, saved_filename)
 
         try:

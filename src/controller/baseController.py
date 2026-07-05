@@ -43,7 +43,13 @@ _RATE_LIMITED_PATHS: dict[str, int] = {
     "/system/check_update.json": 5,
     "/config/skills/import.json": 10,
     "/config/quick_init.json": 5,
+    "/auth/login.json": 10,        # 登录限流
+    "/auth/register.json": 3,      # 注册限流
+    "/rooms/(\d+)/messages/upload.json": 20,  # 文件上传限流
 }
+
+# 全局默认限流（非敏感接口）：每 IP 每 60 秒最大请求数
+_GLOBAL_RATE_LIMIT = 120
 
 
 class BaseHandler(tornado.web.RequestHandler):
@@ -51,7 +57,9 @@ class BaseHandler(tornado.web.RequestHandler):
 
     _READONLY_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
     _AUTH_EXEMPT_PATHS = {
-        "/system/status.json",  # 系统状态接口需豁免，用于前端判断是否需要输入 token
+        "/system/status.json",
+        "/auth/login.json",
+        "/auth/register.json",
     }
 
     def __init__(self, *args, **kwargs):
@@ -67,11 +75,18 @@ class BaseHandler(tornado.web.RequestHandler):
         # 1. 鉴权检查
         self._check_auth()
 
-        # 1.5 速率限制检查（针对敏感重接口）
+        # 1.5 速率限制检查
+        client_ip = self.request.remote_ip or "unknown"
+        # 敏感接口特殊限流
         max_req = _RATE_LIMITED_PATHS.get(self.request.path)
         if max_req is not None:
-            client_ip = self.request.remote_ip or "unknown"
             if not _check_rate_limit(client_ip, self.request.path, max_req):
+                self.set_status(429)
+                self.return_json({"error_code": "rate_limited", "error_desc": "请求过于频繁，请稍后再试"})
+                raise tornado.web.Finish()
+        # 全局默认限流（排除静态文件和 WebSocket）
+        elif not self.request.path.startswith("/assets/") and self.request.path != "/ws/events.json":
+            if not _check_rate_limit(client_ip, "_global", _GLOBAL_RATE_LIMIT):
                 self.set_status(429)
                 self.return_json({"error_code": "rate_limited", "error_desc": "请求过于频繁，请稍后再试"})
                 raise tornado.web.Finish()
@@ -90,31 +105,52 @@ class BaseHandler(tornado.web.RequestHandler):
                 raise tornado.web.Finish()
 
     def _check_auth(self) -> None:
-        """检查请求是否携带正确 token。"""
-        auth_config = configUtil.get_app_config().setting.auth
-
-        # 鉴权未启用，跳过检查
-        if not auth_config.enabled:
-            return
-
-        # 豁免路径，跳过检查
+        """检查请求是否已认证。支持 Cookie session 和 Bearer Token 两种方式。"""
+        # 豁免路径
         if self.request.path in self._AUTH_EXEMPT_PATHS:
             return
 
-        # 获取 token（仅支持 Authorization header）
-        auth_header = self.request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            self.set_status(401)
-            self.return_json({"error_code": "auth_required", "error_desc": "请输入访问 Token"})
-            raise tornado.web.Finish()
+        # 优先尝试 Cookie session 鉴权
+        if self.get_current_user() is not None:
+            return
 
-        token = auth_header[7:]
+        # 回退到 Bearer Token 鉴权
+        auth_config = configUtil.get_app_config().setting.auth
+        if auth_config.enabled:
+            auth_header = self.request.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Bearer "):
+                self.set_status(401)
+                self.return_json({"error_code": "auth_required", "error_desc": "请登录或输入访问 Token"})
+                raise tornado.web.Finish()
 
-        # 验证 token（常量时间比较，防时序攻击）
-        if not hmac.compare_digest(token, auth_config.token):
-            self.set_status(401)
-            self.return_json({"error_code": "auth_invalid", "error_desc": "Token 无效"})
-            raise tornado.web.Finish()
+            token = auth_header[7:]
+            if not hmac.compare_digest(token, auth_config.token):
+                self.set_status(401)
+                self.return_json({"error_code": "auth_invalid", "error_desc": "Token 无效"})
+                raise tornado.web.Finish()
+
+    def get_current_user(self):
+        """获取当前登录用户（通过 Cookie session）。返回 GtUser 或 None。"""
+        token = self.get_cookie("dl_session")
+        if not token:
+            return None
+        try:
+            from model.dbModel.gtUser import GtUser, GtSession
+            from model.dbModel.base import _database_proxy
+            from datetime import datetime
+            db = _database_proxy.obj
+            if db is None:
+                return None
+            with db.allow_sync():
+                session = GtSession.get_or_none(GtSession.token == token)
+                if session is None or session.expires_at < datetime.now():
+                    return None
+                user = GtUser.get_or_none(GtUser.id == session.user_id)
+                if user is None or not user.enabled:
+                    return None
+                return user
+        except Exception:
+            return None
 
     def _is_authed(self) -> bool:
         """检查当前请求是否已通过鉴权（用于豁免路径按需返回敏感信息）。"""
@@ -135,6 +171,20 @@ class BaseHandler(tornado.web.RequestHandler):
             self.return_json({"error_code": "invalid_json", "error_desc": f"请求体必须是合法 JSON: {e}"})
             raise tornado.web.Finish()
         return model_class(**body)
+
+    def parse_request_dict(self) -> dict:
+        """解析请求体为 dict（用于不需要 Pydantic 模型的简单接口）。"""
+        try:
+            body = json.loads(self.request.body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_json", "error_desc": f"请求体必须是合法 JSON: {e}"})
+            raise tornado.web.Finish()
+        if not isinstance(body, dict):
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_json", "error_desc": "请求体必须是 JSON 对象"})
+            raise tornado.web.Finish()
+        return body
 
     def get_int_argument(self, name: str, default: int | None = None, min_val: int | None = None, max_val: int | None = None) -> int | None:
         """安全解析整数查询参数。非法值返回 400 并 raise Finish。"""

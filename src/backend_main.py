@@ -183,7 +183,14 @@ async def main(config_dir: str = None, port: int | None = None):
     else:
         await schedulerService.start_schedule()
 
-    web_server = tornado.httpserver.HTTPServer(route.application)
+    # xheaders=True: 信任 Nginx 的 X-Forwarded-For，使 remote_ip 正确（限流/审计生效）
+    # max_buffer_size: 限制请求体大小，防止大文件 DoS
+    web_server = tornado.httpserver.HTTPServer(
+        route.application,
+        xheaders=True,
+        max_buffer_size=10 * 1024 * 1024,   # 10MB
+        max_body_size=20 * 1024 * 1024,      # 20MB
+    )
     try:
         web_server.listen(bind_port, bind_host)
         await _shutdown_event.wait()

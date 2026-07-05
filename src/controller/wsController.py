@@ -32,6 +32,21 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
         # 并在连接关闭时统一取消未完成的发送任务。
         self._pending_send_tasks: set[asyncio.Task] = set()
 
+    def check_origin(self, origin: str) -> bool:
+        """WebSocket Origin 校验：仅允许同源连接（公网部署安全防护）。"""
+        # 开发模式（无 Host 头或 localhost）允许所有来源
+        host = self.request.headers.get("Host", "")
+        if not host or "localhost" in host or "127.0.0.1" in host:
+            return True
+        # 生产模式：校验 Origin 与 Host 一致
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(origin)
+            origin_host = parsed.netloc or parsed.path
+            return origin_host == host
+        except Exception:
+            return False
+
     def open(self):
         auth_config = configUtil.get_app_config().setting.auth
         if auth_config.enabled:

@@ -235,6 +235,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     const response = await fetch(requestUrl, {
       headers,
+      credentials: 'include',  // 自动携带 Cookie（session 鉴权）
       ...init,
     });
     const responseContentType = response.headers.get('content-type') || '';
@@ -1280,5 +1281,40 @@ export function downloadFileUrl(path: string): string {
 
 export async function previewFile(path: string): Promise<FilePreviewInfo> {
   return requestJson<FilePreviewInfo>(withSearch('/files/preview.json', { path }));
+}
+
+// ─── Auth API ─────────────────────────────────────────────
+
+export interface UserInfo {
+  id: number;
+  username: string;
+  display_name: string;
+  role: string;
+}
+
+export async function login(username: string, password: string): Promise<{ status: string; user: UserInfo }> {
+  return requestJson('/auth/login.json', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await requestJson('/auth/logout.json', { method: 'POST' });
+}
+
+export async function getCurrentUser(): Promise<UserInfo | null> {
+  try {
+    return await requestJson<UserInfo>('/auth/me.json');
+  } catch {
+    return null;
+  }
+}
+
+export async function register(username: string, password: string, display_name?: string): Promise<{ status: string; user: UserInfo }> {
+  return requestJson('/auth/register.json', {
+    method: 'POST',
+    body: JSON.stringify({ username, password, display_name }),
+  });
 }
 

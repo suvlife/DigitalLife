@@ -47,11 +47,12 @@ async def test_load_team_agents_delegates_to_internal_loader(monkeypatch: Any) -
 
 
 def test_resolve_team_workdir_prefers_explicit_working_directory() -> None:
-    team = SimpleNamespace(name="default", config={"working_directory": "/tmp/custom-team-dir"})
+    # 沙箱校验：working_directory 必须在 workspace_root 内
+    team = SimpleNamespace(name="default", config={"working_directory": "/tmp/workspaces/custom-team-dir"})
 
     resolved = core._resolve_team_workdir(team, "/tmp/workspaces")
 
-    assert resolved == "/tmp/custom-team-dir"
+    assert resolved == "/tmp/workspaces/custom-team-dir"
 
 
 def test_resolve_team_workdir_falls_back_to_workspace_root() -> None:
