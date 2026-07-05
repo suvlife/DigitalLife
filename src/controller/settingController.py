@@ -109,13 +109,45 @@ def _validate_index(index_str: str) -> int:
 
 
 class LlmServiceListHandler(BaseHandler):
-    """GET /config/llm_services/list.json"""
+    """GET /config/llm_services/list.json
+
+    安全策略：
+    - 用户自定义的 Key 始终不返回明文（仅 has_api_key 布尔）
+    - 内置默认 Key 对用户完全不可见（标记为 builtin，Key 为空）
+    - 用户可添加自己的 Key 覆盖内置服务
+    """
 
     async def get(self) -> None:
         setting = _get_setting()
-        services = [_serialize_llm_service(service) for service in setting.llm_services]
+        user_services = [_serialize_llm_service(service) for service in setting.llm_services]
+
+        # 检查用户配置中是否有已启用的服务
+        has_enabled_user_service = any(s.enable for s in setting.llm_services)
+
+        # 如果用户无可用服务（未配置或全部禁用），附加内置服务
+        if not has_enabled_user_service:
+            builtin_services = configUtil.get_builtin_llm_services()
+            for svc in builtin_services:
+                item = dict(svc)
+                item["has_api_key"] = True
+                item["api_key"] = ""  # 内置 Key 不返回明文
+                item["is_builtin"] = True
+                item.setdefault("provider_params", {})
+                user_services.append(item)
+
+            builtin_default = configUtil.get_builtin_default_llm_server()
+            self.return_json({
+                "llm_services": user_services,
+                "default_llm_server": builtin_default or setting.default_llm_server or "",
+            })
+            return
+
+        # 标记用户自定义服务
+        for svc in user_services:
+            svc["is_builtin"] = False
+
         self.return_json({
-            "llm_services": services,
+            "llm_services": user_services,
             "default_llm_server": setting.default_llm_server,
         })
 

@@ -1,0 +1,54 @@
+{
+  "_comment": "内置默认 API Key — 用户不可见，无法通过 API 获取明文。用户可自行添加自己的 Key 覆盖。",
+  "llm_services": [
+    {
+      "name": "volcengine-glm",
+      "enable": true,
+      "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "api_key": "ark-5d33e941-6120-4035-bd23-12429a10bf6c-798dd",
+      "type": "openai-compatible",
+      "model": "ark-code-latest",
+      "context_window_tokens": 131072,
+      "reserve_output_tokens": 16384,
+      "compact_trigger_ratio": 0.85
+    },
+    {
+      "name": "volcengine-glm-2",
+      "enable": false,
+      "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "api_key": "ark-d32204b8-4e8d-45e1-af93-e7dcd0b93a97-10cf9",
+      "type": "openai-compatible",
+      "model": "ark-code-latest",
+      "context_window_tokens": 131072,
+      "reserve_output_tokens": 16384,
+      "compact_trigger_ratio": 0.85
+    },
+    {
+      "name": "kimi-code",
+      "enable": false,
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key": "sk-kimi-d89EOZEna5uhG0q4qtffyDodwoOom4gR6BJqeWaSrghkH5shZvXwJJ8ndiTsXrpg",
+      "type": "openai-compatible",
+      "model": "kimi-latest",
+      "context_window_tokens": 131072,
+      "reserve_output_tokens": 16384,
+      "compact_trigger_ratio": 0.85
+    },
+    {
+      "name": "deepseek",
+      "enable": false,
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-9279a1d36bdd4bf2adba59627bc6f0f6",
+      "type": "openai-compatible",
+      "model": "deepseek-chat",
+      "context_window_tokens": 131072,
+      "reserve_output_tokens": 16384,
+      "compact_trigger_ratio": 0.85
+    }
+  ],
+  "default_llm_server": "volcengine-glm",
+  "search_keys": {
+    "tavily_api_key": "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",
+    "brave_api_key": "BSAH281FnqsbZAzhS8gF4fMnBrJMo6e"
+  }
+}

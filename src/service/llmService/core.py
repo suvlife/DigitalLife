@@ -79,6 +79,9 @@ def get_default_model_or_none() -> str | None:
     setting = configUtil.get_app_config().setting
     llm_config = setting.current_llm_service
     if llm_config is None:
+        # 回退到内置默认服务
+        llm_config = _get_builtin_llm_service()
+    if llm_config is None:
         return None
     return llm_config.model
 
@@ -93,9 +96,7 @@ def get_default_model() -> str:
 def get_llm_service_for_team(team_config: dict | None) -> "LlmServiceConfig | None":
     """获取团队级 LLM 服务配置。
 
-    优先级：team_config.llm_service_name → 全局 current_llm_service。
-    如果 team_config 指定了 llm_service_name 且在 setting.llm_services 中找到已启用的服务，则返回该服务；
-    否则回退到全局默认服务。
+    优先级：team_config.llm_service_name → 用户配置的 current_llm_service → 内置默认服务。
     """
     setting = configUtil.get_app_config().setting
     if team_config and isinstance(team_config, dict):
@@ -104,7 +105,47 @@ def get_llm_service_for_team(team_config: dict | None) -> "LlmServiceConfig | No
             for svc in setting.llm_services:
                 if svc.enable and svc.name == service_name:
                     return svc
-    return setting.current_llm_service
+    # 用户配置的服务
+    user_service = setting.current_llm_service
+    if user_service is not None:
+        return user_service
+    # 回退到内置默认服务
+    return _get_builtin_llm_service()
+
+
+def _get_builtin_llm_service() -> "LlmServiceConfig | None":
+    """获取内置默认 LLM 服务（用户未配置时使用）。"""
+    from util.configTypes import LlmServiceConfig, LlmServiceType
+    builtin_services = configUtil.get_builtin_llm_services()
+    builtin_default = configUtil.get_builtin_default_llm_server()
+    for svc in builtin_services:
+        if svc.get("enable") and (builtin_default is None or svc.get("name") == builtin_default):
+            return LlmServiceConfig(
+                name=svc.get("name", "builtin"),
+                enable=True,
+                base_url=svc.get("base_url", ""),
+                api_key=svc.get("api_key", ""),
+                type=LlmServiceType(svc.get("type", "openai-compatible")),
+                model=svc.get("model", ""),
+                context_window_tokens=svc.get("context_window_tokens", 131072),
+                reserve_output_tokens=svc.get("reserve_output_tokens", 16384),
+                compact_trigger_ratio=svc.get("compact_trigger_ratio", 0.85),
+            )
+    # 如果默认服务未启用，取第一个启用的
+    for svc in builtin_services:
+        if svc.get("enable"):
+            return LlmServiceConfig(
+                name=svc.get("name", "builtin"),
+                enable=True,
+                base_url=svc.get("base_url", ""),
+                api_key=svc.get("api_key", ""),
+                type=LlmServiceType(svc.get("type", "openai-compatible")),
+                model=svc.get("model", ""),
+                context_window_tokens=svc.get("context_window_tokens", 131072),
+                reserve_output_tokens=svc.get("reserve_output_tokens", 16384),
+                compact_trigger_ratio=svc.get("compact_trigger_ratio", 0.85),
+            )
+    return None
 
 
 def _usage_to_log_json(usage: llmApiUtil.OpenAIUsage | None) -> str:
@@ -222,7 +263,7 @@ async def infer(
     resolved_model = model
     resolved_provider: str | None = None
     try:
-        llm_config = get_llm_service_for_team(team_config) if team_config else configUtil.get_app_config().setting.current_llm_service
+        llm_config = get_llm_service_for_team(team_config) if team_config else (configUtil.get_app_config().setting.current_llm_service or _get_builtin_llm_service())
         if llm_config is None:
             raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
         resolved_model = model or llm_config.model
@@ -295,7 +336,7 @@ async def infer_stream(
     resolved_model = model
     resolved_provider: str | None = None
     try:
-        llm_config = get_llm_service_for_team(team_config) if team_config else configUtil.get_app_config().setting.current_llm_service
+        llm_config = get_llm_service_for_team(team_config) if team_config else (configUtil.get_app_config().setting.current_llm_service or _get_builtin_llm_service())
         if llm_config is None:
             raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
         resolved_model = model or llm_config.model

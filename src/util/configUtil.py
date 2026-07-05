@@ -19,6 +19,51 @@ _cached_preset_dir: str | None = None
 # 保护 update_setting / _save_setting_to_file 的读改写竞态，
 # 防止并发请求交错导致配置丢失。
 _setting_lock = threading.Lock()
+# 内置默认 Key（用户不可见，不通过 API 返回明文）
+_builtin_keys: dict | None = None
+
+
+def _load_builtin_keys() -> dict:
+    """加载内置默认 API Key。从 assets/builtin_keys.json 读取。
+
+    内置 Key 对用户不可见：
+    - 不通过 /config/llm_services/list.json 返回明文
+    - 用户可自行添加自己的 Key 覆盖内置 Key
+    - 内置 LLM 服务在用户未配置任何服务时自动启用
+    """
+    global _builtin_keys
+    if _builtin_keys is not None:
+        return _builtin_keys
+
+    builtin_path = os.path.join(appPaths.ASSETS_DIR, "builtin_keys.json")
+    if not os.path.isfile(builtin_path):
+        _builtin_keys = {}
+        return _builtin_keys
+
+    try:
+        with open(builtin_path, "r", encoding="utf-8") as f:
+            _builtin_keys = json.load(f)
+    except Exception:
+        _builtin_keys = {}
+    return _builtin_keys
+
+
+def get_builtin_search_keys() -> dict[str, str]:
+    """获取内置搜索 API Key（Tavily + Brave）。"""
+    builtin = _load_builtin_keys()
+    return builtin.get("search_keys", {})
+
+
+def get_builtin_llm_services() -> list:
+    """获取内置 LLM 服务列表。"""
+    builtin = _load_builtin_keys()
+    return builtin.get("llm_services", [])
+
+
+def get_builtin_default_llm_server() -> str | None:
+    """获取内置默认 LLM 服务名。"""
+    builtin = _load_builtin_keys()
+    return builtin.get("default_llm_server")
 
 
 def _is_running_tests() -> bool:
@@ -188,15 +233,17 @@ def is_loaded() -> bool:
 def is_initialized() -> bool:
     """判断系统是否已完成 LLM 服务初始化配置。
 
-    至少有一个已启用的服务时返回 True，否则返回 False。
-    若 AppConfig 未加载，返回 False。
+    至少有一个已启用的服务时返回 True。
+    如果用户未配置任何服务但有内置默认 Key，也返回 True。
     """
     if _cached_app_config is None:
         return False
     setting = _cached_app_config.setting
-    if not setting.llm_services:
-        return False
-    return any(service.enable for service in setting.llm_services)
+    if setting.llm_services and any(s.enable for s in setting.llm_services):
+        return True
+    # 用户未配置但有内置 Key → 已就绪
+    builtin = _load_builtin_keys()
+    return bool(builtin.get("llm_services"))
 
 
 def is_demo_mode() -> bool:

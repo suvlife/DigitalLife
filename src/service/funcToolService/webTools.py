@@ -52,7 +52,17 @@ def _get_all_search_keys() -> dict[str, str]:
     if brave_env:
         keys["brave"] = brave_env
 
-    # setting.json provider_params
+    # 内置默认 Key（用户不可见，优先级低于环境变量和用户配置）
+    try:
+        from util import configUtil
+        builtin_search_keys = configUtil.get_builtin_search_keys()
+        for engine, key in builtin_search_keys.items():
+            if engine not in keys and key:
+                keys[engine] = key
+    except Exception:
+        pass
+
+    # setting.json provider_params（用户自定义，优先级最高）
     try:
         from util import configUtil
         setting = configUtil.get_app_config().setting
