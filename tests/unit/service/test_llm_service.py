@@ -460,7 +460,7 @@ async def test_infer_stream_retries_up_to_limit_then_returns_failure(monkeypatch
             f"retry {i+1}: delay {actual_delay} not in [{expected_base}, {expected_base*1.1}]"
     assert status_events[0].state == InferRequestStateType.RETRY_SCHEDULED
     assert status_events[0].attempt == 1
-    assert status_events[0].retry_delay_seconds == 2
+    assert status_events[0].retry_delay_seconds == 5
     assert status_events[-1].state == InferRequestStateType.RETRYING
     assert status_events[-1].attempt == 8
 
