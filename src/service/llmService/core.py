@@ -8,6 +8,11 @@ import uuid
 from typing import Optional
 
 from constants import InferRequestStateType, LlmErrorCategory, LlmServiceType
+
+logger = logging.getLogger(__name__)
+
+# LLM 并发限制：防止多 Agent 同时请求导致 API 连接错误/限流
+_LLM_SEMAPHORE = asyncio.Semaphore(3)  # 最多 3 个并发 LLM 请求
 from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
 from service.llmService.llmErrorClassifier import classify_llm_error, RETRYABLE_CATEGORIES
 from service.llmService.llmRequestRules import apply_llm_request_rules
@@ -203,7 +208,9 @@ async def _send_with_retry(
 
     for attempt in range(1, total_attempts + 1):
         try:
-            return await send_request(*args, **kwargs)
+            # 信号量限制并发，防止多 Agent 同时请求导致 API 连接错误
+            async with _LLM_SEMAPHORE:
+                return await send_request(*args, **kwargs)
 
         except Exception as e:
 
