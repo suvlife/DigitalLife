@@ -67,46 +67,226 @@ def _generate_ghost_jwt(admin_api_key: str) -> str:
     return f"{header_b64}.{payload_b64}.{signature_b64}"
 
 
+def _markdown_to_lexical(markdown_text: str) -> str:
+    """将 Markdown 文本转换为 Ghost Lexical 格式（JSON 字符串）。
+
+    Ghost v5+ 使用 Lexical 编辑器格式，支持标题、段落、列表、代码块等。
+    """
+    import json as _json
+    import re as _re
+
+    def _text_node(text: str, fmt: int = 0) -> dict:
+        return {'type': 'text', 'version': 1, 'text': text, 'format': fmt}
+
+    def _heading(tag: str, text: str) -> dict:
+        return {'type': 'heading', 'version': 1, 'tag': tag, 'direction': 'ltr', 'format': '', 'indent': 0,
+                'children': [_text_node(text)]}
+
+    def _paragraph(text: str) -> dict:
+        children = []
+        parts = _re.split(r'(\*\*.+?\*\*)', text)
+        for part in parts:
+            if part.startswith('**') and part.endswith('**'):
+                children.append(_text_node(part[2:-2], 1))
+            elif part:
+                children.append(_text_node(part))
+        if not children:
+            children = [_text_node('')]
+        return {'type': 'paragraph', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
+                'children': children}
+
+    def _list(ordered: bool, items: list[str]) -> dict:
+        list_type = 'ordered' if ordered else 'unordered'
+        children = []
+        for item in items:
+            children.append({
+                'type': 'listitem', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
+                'value': item, 'children': [_text_node(item)]
+            })
+        return {'type': list_type, 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
+                'start': 1 if ordered else None, 'children': children}
+
+    nodes = []
+    lines = markdown_text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+
+        h_match = _re.match(r'^(#{1,3})\s+(.+)$', line)
+        if h_match:
+            tag = f'h{len(h_match.group(1))}'
+            nodes.append(_heading(tag, h_match.group(2).strip()))
+            i += 1
+            continue
+
+        if line.strip().startswith("```"):
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1
+            nodes.append({'type': 'code', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
+                          'language': '', 'code': '\n'.join(code_lines)})
+            continue
+
+        if _re.match(r'^[-*]\s+', line):
+            items = []
+            while i < len(lines) and _re.match(r'^[-*]\s+', lines[i]):
+                items.append(_re.sub(r'^[-*]\s+', '', lines[i]).strip())
+                i += 1
+            nodes.append(_list(False, items))
+            continue
+
+        if _re.match(r'^\d+\.\s+', line):
+            items = []
+            while i < len(lines) and _re.match(r'^\d+\.\s+', lines[i]):
+                items.append(_re.sub(r'^\d+\.\s+', '', lines[i]).strip())
+                i += 1
+            nodes.append(_list(True, items))
+            continue
+
+        if line.strip() in ("---", "***", "___"):
+            nodes.append(_paragraph('———'))
+            i += 1
+            continue
+
+        para_lines = [line.strip()]
+        i += 1
+        while i < len(lines) and lines[i].strip() and not _re.match(r'^#{1,3}\s', lines[i]) \
+                and not _re.match(r'^[-*]\s', lines[i]) and not _re.match(r'^\d+\.\s', lines[i]) \
+                and not lines[i].strip().startswith("```") and lines[i].strip() not in ("---", "***", "___"):
+            para_lines.append(lines[i].strip())
+            i += 1
+        para_text = " ".join(para_lines)
+        para_text = _re.sub(r'`(.+?)`', r'\1', para_text)
+        nodes.append(_paragraph(para_text))
+
+    return _json.dumps({
+        'root': {'type': 'root', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0, 'children': nodes}
+    }, ensure_ascii=False)
+
+
 def _extract_tags_from_content(title: str, content: str) -> list[str]:
     """从标题和内容中提取关键词作为标签。"""
     tags: list[str] = []
-
-    # 从标题提取
     title_words = [w.strip() for w in title.replace(",", " ").replace("，", " ").split() if len(w.strip()) >= 2]
     tags.extend(title_words[:3])
-
-    # 从内容中提取常见关键词
     keyword_map = {
         "股票": "股票分析", "A股": "A股", "投资": "投资策略",
         "八字": "八字命理", "紫微": "紫微斗数", "梅花": "梅花易数",
         "命理": "命理", "运势": "运势预测", "风水": "风水",
         "价值投资": "价值投资", "技术分析": "技术分析",
         "威科夫": "威科夫", "江恩": "江恩", "巴菲特": "巴菲特",
-        "代码": "编程", "开发": "软件开发", "测试": "质量保证",
+        "代码": "编程", "开发": "软件开发",
     }
     content_lower = content.lower()
     for keyword, tag in keyword_map.items():
         if keyword in content_lower and tag not in tags:
             tags.append(tag)
-
-    # 限制标签数量
     return tags[:5]
 
 
-def _build_blog_content(task_title: str, task_description: str, task_result: str) -> str:
-    """将任务信息整理为 Markdown 博客内容。"""
-    sections = []
+def _build_blog_content_from_task(task: Any) -> str:
+    """从单个任务构建博客内容（Markdown 格式）。"""
+    title = task.title or "未命名任务"
+    description = task.description or ""
+    result = task.result or ""
 
-    sections.append(f"# {task_title}\n")
+    sections = [f"# {title}\n"]
+    if description:
+        sections.append(f"## 任务描述\n\n{description}\n")
+    if result:
+        sections.append(f"## 分析结果\n\n{result}\n")
+    sections.append("---\n*本文由数字人生多智能体协作平台自动生成*\n")
+    return "\n".join(sections)
 
-    if task_description:
-        sections.append(f"## 任务描述\n\n{task_description}\n")
 
-    if task_result:
-        sections.append(f"## 分析结果\n\n{task_result}\n")
+async def _build_blog_content_from_room(task: Any) -> str:
+    """从任务关联的房间收集所有大师的分析消息，构建完整博客内容。
+
+    收集流程：
+    1. 从 task 获取 room_id
+    2. 查询房间所有消息
+    3. 按 Agent 分组整理每位大师的分析
+    4. 汇总为完整的 Markdown 博客文章
+    """
+    from model.dbModel.gtRoomMessage import GtRoomMessage
+    from model.dbModel.gtAgent import GtAgent
+    from service import agentService
+
+    title = task.title or "未命名任务"
+    description = task.description or ""
+
+    # 获取房间 ID
+    room_id = None
+    if hasattr(task, 'room_id') and task.room_id:
+        room_id = task.room_id
+    else:
+        # 从 task 关联信息获取
+        room_id = getattr(task, 'task_data', {}).get('room_id') if hasattr(task, 'task_data') else None
+
+    sections = [f"# {title}\n"]
+    if description:
+        sections.append(f"## 任务描述\n\n{description}\n")
+
+    if room_id:
+        try:
+            # 查询房间所有消息（按 seq 排序）
+            messages = list(await GtRoomMessage.select()
+                .where(GtRoomMessage.room_id == room_id)
+                .order_by(GtRoomMessage.seq.asc())
+                .aio_execute())
+
+            if messages:
+                # 按 Agent 分组
+                agent_messages: dict[int, list[str]] = {}
+                for msg in messages:
+                    if msg.sender_id <= 0:  # 跳过 OPERATOR 和 SYSTEM
+                        continue
+                    if msg.sender_id not in agent_messages:
+                        agent_messages[msg.sender_id] = []
+                    content = msg.content or ""
+                    if content.strip():
+                        agent_messages[msg.sender_id].append(content)
+
+                # 按Agent输出每位大师的分析
+                sections.append("## 各专家分析\n")
+                for agent_id, msgs in agent_messages.items():
+                    # 获取 Agent 名称
+                    agent_name = f"专家{agent_id}"
+                    try:
+                        agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
+                        if agent:
+                            agent_name = agent.display_name or agent.name
+                    except Exception:
+                        pass
+
+                    sections.append(f"### {agent_name}\n")
+                    combined = "\n\n".join(msgs)
+                    sections.append(f"{combined}\n")
+
+                # 任务结果作为综合结论
+                if task.result:
+                    sections.append("## 综合结论\n")
+                    sections.append(f"{task.result}\n")
+            else:
+                # 无房间消息，仅用 task result
+                if task.result:
+                    sections.append(f"## 分析结果\n\n{task.result}\n")
+        except Exception as e:
+            logger.warning("收集房间消息失败: %s, 回退到任务结果", e)
+            if task.result:
+                sections.append(f"## 分析结果\n\n{task.result}\n")
+    else:
+        # 无 room_id，仅用 task result
+        if task.result:
+            sections.append(f"## 分析结果\n\n{task.result}\n")
 
     sections.append("---\n*本文由数字人生多智能体协作平台自动生成*\n")
-
     return "\n".join(sections)
 
 
@@ -145,12 +325,13 @@ async def publish_post(
     if tags is None:
         tags = _extract_tags_from_content(title, content)
 
-    # 构建 Ghost API 请求体
+    # 构建 Ghost API 请求体（使用 Lexical 格式，Ghost v5+ 原生内容格式）
+    lexical = _markdown_to_lexical(content)
     body = {
         "posts": [
             {
                 "title": title,
-                "html": content,
+                "lexical": lexical,
                 "tags": [{"name": tag} for tag in tags],
                 "status": "published",
                 "feature_image": None,
@@ -211,13 +392,10 @@ async def publish_task_if_enabled(task: Any) -> None:
         logger.debug("Ghost 发布跳过：API URL 或 Admin Key 未配置")
         return
 
-    # 构建博客内容
+    # 构建博客内容（收集房间内所有大师的分析消息）
     title = task.title or "未命名任务"
-    description = task.description or ""
-    result = task.result or ""
-
-    content = _build_blog_content(title, description, result)
-    tags = _extract_tags_from_content(title, f"{description} {result}")
+    content = await _build_blog_content_from_room(task)
+    tags = _extract_tags_from_content(title, content)
 
     # 异步发布（不阻塞任务流程）
     try:
