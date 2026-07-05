@@ -12,7 +12,7 @@ from constants import InferRequestStateType, LlmErrorCategory, LlmServiceType
 logger = logging.getLogger(__name__)
 
 # LLM 并发限制：防止多 Agent 同时请求导致 API 连接错误/限流
-_LLM_SEMAPHORE = asyncio.Semaphore(3)  # 最多 3 个并发 LLM 请求
+_LLM_SEMAPHORE = asyncio.Semaphore(1)  # 串行请求，避免火山引擎 Agent Plan 限流
 from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
 from service.llmService.llmErrorClassifier import classify_llm_error, RETRYABLE_CATEGORIES
 from service.llmService.llmRequestRules import apply_llm_request_rules
@@ -28,7 +28,7 @@ _TYPE_TO_PROVIDER = {
 
 logger = logging.getLogger(__name__)
 
-_INFER_RETRY_DELAYS_SECONDS = (2, 4, 8, 16, 32, 32, 32)
+_INFER_RETRY_DELAYS_SECONDS = (5, 10, 20, 30, 60, 60, 60)  # RateLimitError 退避：更长的等待时间
 
 
 @dataclass
