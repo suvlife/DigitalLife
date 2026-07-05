@@ -186,6 +186,7 @@ async def update_task(
         }
 
     # 执行更新（乐观锁 CAS，防止并发丢失更新）
+    # CAS 条件：传入旧状态（old_status），在 DB 中 status 仍为旧值时才更新
     fields: list[Any] = [GtAgentTask.status]
     task.status = new_status
     if result:
@@ -196,7 +197,7 @@ async def update_task(
         fields.append(GtAgentTask.block_reason)
 
     try:
-        updated = await gtAgentTaskManager.update_task(task, fields)
+        updated = await gtAgentTaskManager.update_task(task, fields, expected_status=old_status)
     except ValueError as conflict:
         return {
             "success": False,
@@ -233,8 +234,9 @@ async def _unblock_pending_dependents(completed_task: GtAgentTask) -> None:
             # 检查所有依赖是否都已 DONE
             dep_tasks = await gtAgentTaskManager.get_tasks_by_ids(t.depends_on)
             if all(d.status == TaskStatus.DONE for d in dep_tasks):
+                old_pending_status = t.status  # PENDING
                 t.status = TaskStatus.TODO
-                await gtAgentTaskManager.update_task(t, [GtAgentTask.status])
+                await gtAgentTaskManager.update_task(t, [GtAgentTask.status], expected_status=old_pending_status)
                 logger.info("依赖任务完成，自动唤醒 PENDING→TODO: task_id=%d, completed=%d", t.id, completed_task.id)
                 from service import messageBus as _mb
                 from constants import MessageBusTopic as _MBT

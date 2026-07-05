@@ -84,29 +84,42 @@ async def delete_tasks_by_team(team_id: int) -> int:
     )
 
 
-async def update_task(task: GtAgentTask, fields: list) -> GtAgentTask:
+async def update_task(task: GtAgentTask, fields: list, expected_status=None) -> GtAgentTask:
     """更新指定字段，同时刷新 updated_at。
 
     使用乐观锁（CAS）：UPDATE ... WHERE id=? AND status=旧status，
     若并发更新导致 status 已变，影响行数为 0，抛出 ValueError 表示冲突。
+
+    Args:
+        expected_status: 期望的旧状态（CAS 条件）。若为 None 则不校验状态（无 CAS）。
+        调用方应在修改 task.status 之前传入旧状态值。
     """
     task.updated_at = datetime.datetime.now()
     if GtAgentTask.updated_at not in fields:
         fields = list(fields) + [GtAgentTask.updated_at]
-    # 乐观锁：仅在 status 仍为 task 当前内存值时更新
-    expected_status = task.status
-    rows = await (
-        GtAgentTask
-        .update(**{f.name: getattr(task, f.name) for f in fields})
-        .where(
-            GtAgentTask.id == task.id,
-            GtAgentTask.status == expected_status,
+
+    if expected_status is not None:
+        # 乐观锁：仅在 status 仍为旧值时更新
+        rows = await (
+            GtAgentTask
+            .update(**{f.name: getattr(task, f.name) for f in fields})
+            .where(
+                GtAgentTask.id == task.id,
+                GtAgentTask.status == expected_status,
+            )
+            .aio_execute()
         )
-        .aio_execute()
-    )
-    if rows == 0:
-        raise ValueError(
-            f"task update conflict: task_id={task.id}, expected_status={expected_status}, "
-            "任务状态已被并发修改，请重试"
+        if rows == 0:
+            raise ValueError(
+                f"task update conflict: task_id={task.id}, expected_status={expected_status}, "
+                "任务状态已被并发修改，请重试"
+            )
+    else:
+        # 无 CAS：直接更新（用于非状态字段的更新）
+        await (
+            GtAgentTask
+            .update(**{f.name: getattr(task, f.name) for f in fields})
+            .where(GtAgentTask.id == task.id)
+            .aio_execute()
         )
     return task
