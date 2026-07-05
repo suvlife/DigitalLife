@@ -86,53 +86,118 @@ def _strip_html(html: str) -> str:
     return text
 
 
-async def _brave_search(query: str, count: int, api_key: str) -> dict:
-    """使用 Brave Search API 搜索。"""
+async def _brave_search(query: str, count: int, api_key: str, freshness: str = "") -> dict:
+    """使用 Brave Search API 搜索。失败时回退到 Bing。"""
     headers = {
         "X-Subscription-Token": api_key,
         "Accept": "application/json",
         "Accept-Encoding": "gzip",
     }
+    # 自动在查询词中加入当前年份，确保搜索到最新数据
+    from datetime import datetime
+    current_year = str(datetime.now().year)
+    enhanced_query = query
+    if current_year not in query and not freshness:
+        freshness = "py"
+
     params = {
-        "q": query,
+        "q": enhanced_query,
         "count": min(count, 20),
+    }
+    if freshness:
+        params["freshness"] = freshness
+
+    try:
+        session = _get_session()
+        async with session.get(_BRAVE_SEARCH_URL, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                web_results = data.get("web", {}).get("results", [])
+                simplified = [
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "content": r.get("description", "") or (r.get("extra_snippets", [""])[0] if isinstance(r.get("extra_snippets"), list) else ""),
+                        "score": 0,
+                    }
+                    for r in web_results
+                ]
+                answer = simplified[0]["content"] if simplified else ""
+                return {
+                    "success": True,
+                    "message": f"搜索到 {len(simplified)} 条结果（Brave Search）",
+                    "query": query,
+                    "answer": answer,
+                    "results": simplified,
+                }
+            logger.warning("Brave 搜索返回 HTTP %d，回退到 Bing", resp.status)
+    except Exception as e:
+        logger.warning("Brave 搜索异常，回退到 Bing: %s", e)
+
+    # 回退到 Bing 搜索
+    return await _bing_search(query, count)
+
+
+async def _bing_search(query: str, count: int) -> dict:
+    """使用 Bing 搜索（直接抓取 HTML 解析结果，无需 API Key）。"""
+    from datetime import datetime
+    # 在查询词中加入当前年份
+    current_year = str(datetime.now().year)
+    if current_year not in query:
+        enhanced_query = f"{query} {current_year}"
+    else:
+        enhanced_query = query
+
+    url = "https://www.bing.com/search"
+    params = {"q": enhanced_query, "count": str(min(count, 10))}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
 
     try:
         session = _get_session()
-        async with session.get(_BRAVE_SEARCH_URL, headers=headers, params=params) as resp:
+        async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status != 200:
-                text = await resp.text()
-                return {
-                    "success": False,
-                    "message": f"Brave 搜索失败 (HTTP {resp.status}): {text[:200]}",
-                }
-            data = await resp.json()
+                return {"success": False, "message": f"Bing 搜索失败 (HTTP {resp.status})"}
+            html = await resp.text(errors="replace")
     except Exception as e:
-        logger.warning("Brave 搜索异常: %s", e)
-        return {"success": False, "message": f"Brave 搜索请求异常: {e}"}
+        logger.warning("Bing 搜索异常: %s", e)
+        return {"success": False, "message": f"Bing 搜索请求异常: {e}"}
 
-    # 解析 Brave Search 响应
-    web_results = data.get("web", {}).get("results", [])
-    simplified = [
-        {
-            "title": r.get("title", ""),
-            "url": r.get("url", ""),
-            "content": r.get("description", "") or r.get("extra_snippets", [""])[0] if isinstance(r.get("extra_snippets"), list) else r.get("description", ""),
+    # 解析 Bing 搜索结果 HTML
+    results = []
+    # 匹配搜索结果块
+    import re
+    # Bing 搜索结果在 <li class="b_algo"> 中
+    blocks = re.findall(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL)
+    for block in blocks[:count]:
+        # 提取标题和链接
+        title_match = re.search(r'<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', block, re.DOTALL)
+        if not title_match:
+            continue
+        link = title_match.group(1)
+        title_html = title_match.group(2)
+        title = _strip_html(title_html)
+        # 提取摘要
+        snippet_match = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
+        snippet = _strip_html(snippet_match.group(1)) if snippet_match else ""
+        results.append({
+            "title": title,
+            "url": link,
+            "content": snippet,
             "score": 0,
-        }
-        for r in web_results
-    ]
+        })
 
-    # Brave 不提供综合答案，用第一条结果的描述作为参考
-    answer = simplified[0]["content"] if simplified else ""
-
+    answer = results[0]["content"] if results else ""
+    engine_name = "Bing" if results else "Bing（无结果）"
     return {
         "success": True,
-        "message": f"搜索到 {len(simplified)} 条结果",
+        "message": f"搜索到 {len(results)} 条结果（{engine_name}）",
         "query": query,
         "answer": answer,
-        "results": simplified,
+        "results": results,
     }
 
 
@@ -187,6 +252,7 @@ async def web_search(
     count: int = 5,
     search_depth: str = "basic",
     include_answer: bool = True,
+    freshness: str = "",
     _context: Optional[ToolCallContext] = None,
 ) -> dict:
     """搜索网络信息。自动选择 Brave Search 或 Tavily 引擎。
@@ -196,6 +262,9 @@ async def web_search(
         count: 返回结果数量，默认 5，最大 20
         search_depth: 搜索深度（Tavily 专用，basic 或 advanced）
         include_answer: 是否返回综合答案
+        freshness: 时间过滤（Brave 专用）。pd=过去24小时, pw=过去一周, pm=过去一个月,
+                   py=过去一年, 空字符串=默认过去一年。
+                   建议搜索财务数据时用 pm 或 py 确保数据时效性。
     """
     api_key, engine = _get_search_api_key()
     if not api_key:
@@ -207,7 +276,7 @@ async def web_search(
     count = max(1, min(int(count), 20))
 
     if engine == "brave":
-        return await _brave_search(query, count, api_key)
+        return await _brave_search(query, count, api_key, freshness)
     else:
         return await _tavily_search(query, count, api_key)
 

@@ -8,6 +8,7 @@ from service.agentService.prompts import (
     TURN_CONTEXT_SUFFIX,
     TEAM_AWARENESS_TOOLS_GUIDE,
     TASK_COLLABORATION_GUIDE,
+    DATA_SEARCH_GUIDE,
     ROOT_LEADER_GUIDE,
     DEBATE_GUIDE,
     COMPACT_PROMPT_TEMPLATE,
@@ -208,6 +209,7 @@ async def build_agent_system_prompt(
     )
     if team_id > 0:
         full_prompt += "\n\n" + TEAM_AWARENESS_TOOLS_GUIDE
+        full_prompt += "\n\n" + DATA_SEARCH_GUIDE
         full_prompt += "\n\n" + TASK_COLLABORATION_GUIDE
         full_prompt += "\n\n" + DEBATE_GUIDE
         if is_root_leader:
