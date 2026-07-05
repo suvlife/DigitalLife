@@ -36,43 +36,38 @@ def _get_session() -> aiohttp.ClientSession:
     return _shared_session
 
 
-def _get_search_api_key() -> tuple[str | None, str]:
-    """获取搜索 API Key 和引擎类型。
+def _get_all_search_keys() -> dict[str, str]:
+    """获取所有已配置的搜索 API Key。
 
-    优先级：Brave（环境变量 BRAVE_API_KEY）> Brave（setting.json provider_params.brave_api_key）
-    > Tavily（环境变量 TAVILY_API_KEY）> Tavily（setting.json provider_params.tavily_api_key）
-
-    Returns:
-        (api_key, engine) — engine 为 "brave" 或 "tavily"
+    返回 {engine: api_key} 字典，engine 为 "tavily" 或 "brave"。
+    同时从环境变量和 setting.json provider_params 收集。
     """
-    # 1. Brave Search（环境变量）
-    brave_key = os.environ.get("BRAVE_API_KEY")
-    if brave_key:
-        return brave_key, "brave"
+    keys: dict[str, str] = {}
 
+    # 环境变量
+    tavily_env = os.environ.get("TAVILY_API_KEY")
+    if tavily_env:
+        keys["tavily"] = tavily_env
+    brave_env = os.environ.get("BRAVE_API_KEY")
+    if brave_env:
+        keys["brave"] = brave_env
+
+    # setting.json provider_params
     try:
         from util import configUtil
-
         setting = configUtil.get_app_config().setting
         for svc in setting.llm_services:
             params = svc.provider_params or {}
-            # Brave（provider_params）
-            brave = params.get("brave_api_key")
-            if brave:
-                return str(brave), "brave"
-            # Tavily（provider_params，兼容旧配置）
             tavily = params.get("tavily_api_key")
-            if tavily:
-                return str(tavily), "tavily"
+            if tavily and "tavily" not in keys:
+                keys["tavily"] = str(tavily)
+            brave = params.get("brave_api_key")
+            if brave and "brave" not in keys:
+                keys["brave"] = str(brave)
     except Exception:
         pass
 
-    # 2. Tavily（环境变量，兼容旧配置）
-    tavily_key = os.environ.get("TAVILY_API_KEY")
-    if tavily_key:
-        return tavily_key, "tavily"
-
-    return None, ""
+    return keys
 
 
 def _strip_html(html: str) -> str:
@@ -202,7 +197,7 @@ async def _bing_search(query: str, count: int) -> dict:
 
 
 async def _tavily_search(query: str, count: int, api_key: str) -> dict:
-    """使用 Tavily API 搜索（兼容旧配置）。"""
+    """使用 Tavily API 搜索。失败时抛出异常供上层回退。"""
     payload = {
         "api_key": api_key,
         "query": query,
@@ -214,17 +209,14 @@ async def _tavily_search(query: str, count: int, api_key: str) -> dict:
 
     try:
         session = _get_session()
-        async with session.post(_TAVILY_SEARCH_URL, json=payload) as resp:
+        async with session.post(_TAVILY_SEARCH_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                return {
-                    "success": False,
-                    "message": f"Tavily 搜索失败 (HTTP {resp.status}): {text[:200]}",
-                }
+                raise Exception(f"Tavily HTTP {resp.status}: {text[:200]}")
             data = await resp.json()
     except Exception as e:
         logger.warning("Tavily 搜索异常: %s", e)
-        return {"success": False, "message": f"Tavily 搜索请求异常: {e}"}
+        raise
 
     answer = data.get("answer", "")
     results = data.get("results", [])
@@ -255,7 +247,7 @@ async def web_search(
     freshness: str = "",
     _context: Optional[ToolCallContext] = None,
 ) -> dict:
-    """搜索网络信息。自动选择 Brave Search 或 Tavily 引擎。
+    """搜索网络信息。三级引擎自动回退：Tavily > Brave > Bing。
 
     Args:
         query: 搜索关键词
@@ -264,21 +256,44 @@ async def web_search(
         include_answer: 是否返回综合答案
         freshness: 时间过滤（Brave 专用）。pd=过去24小时, pw=过去一周, pm=过去一个月,
                    py=过去一年, 空字符串=默认过去一年。
-                   建议搜索财务数据时用 pm 或 py 确保数据时效性。
     """
-    api_key, engine = _get_search_api_key()
-    if not api_key:
-        return {
-            "success": False,
-            "message": "未配置搜索 API Key。请在环境变量 BRAVE_API_KEY 或 setting.json 的 llm_services[].provider_params.brave_api_key 中配置 Brave Search API Key。",
-        }
-
     count = max(1, min(int(count), 20))
+    all_keys = _get_all_search_keys()
 
-    if engine == "brave":
-        return await _brave_search(query, count, api_key, freshness)
-    else:
-        return await _tavily_search(query, count, api_key)
+    # 引擎优先级：Tavily（有综合答案，质量最好）> Brave > Bing（无需 Key）
+    engines_to_try: list[tuple[str, str]] = []
+    if "tavily" in all_keys:
+        engines_to_try.append(("tavily", all_keys["tavily"]))
+    if "brave" in all_keys:
+        engines_to_try.append(("brave", all_keys["brave"]))
+
+    # 依次尝试每个引擎
+    errors: list[str] = []
+    for engine_name, api_key in engines_to_try:
+        try:
+            if engine_name == "tavily":
+                result = await _tavily_search(query, count, api_key)
+            else:
+                result = await _brave_search(query, count, api_key, freshness)
+            if result.get("success"):
+                logger.info("web_search 成功（引擎=%s）: query=%s", engine_name, query[:50])
+                return result
+            errors.append(f"{engine_name}: {result.get('message', 'unknown')}")
+        except Exception as e:
+            errors.append(f"{engine_name}: {e}")
+            logger.warning("web_search 引擎 %s 失败: %s", engine_name, e)
+            continue
+
+    # 所有 API 引擎都失败，回退到 Bing（无需 Key）
+    logger.info("web_search 所有 API 引擎失败，回退到 Bing: query=%s", query[:50])
+    result = await _bing_search(query, count)
+    if result.get("success"):
+        return result
+
+    return {
+        "success": False,
+        "message": f"所有搜索引擎均失败。错误详情: {'; '.join(errors)}",
+    }
 
 
 async def web_fetch(
@@ -298,12 +313,13 @@ async def web_fetch(
         return {"success": False, "message": "URL 格式不正确，必须以 http:// 或 https:// 开头"}
 
     # 检查是否有 Tavily Key（用于 Extract API）
-    api_key, engine = _get_search_api_key()
+    all_keys = _get_all_search_keys()
+    tavily_key = all_keys.get("tavily")
 
     # 如果有 Tavily Key，优先用 Tavily Extract
-    if api_key and engine == "tavily":
+    if tavily_key:
         payload = {
-            "api_key": api_key,
+            "api_key": tavily_key,
             "urls": [url],
             "extract_depth": extract_depth,
         }
