@@ -100,6 +100,7 @@ async def create_team(
     dept_tree: GtDept | None = None,
     preset_rooms: list[GtRoom] | None = None,
     auto_start: bool = True,
+    owner_user_id: int | None = None,
 ) -> int:
     """创建新 Team，并恢复其运行时。
 
@@ -110,6 +111,7 @@ async def create_team(
         dept_tree: 部门树
         preset_rooms: 预置房间
         auto_start: 是否自动启动（默认 True）
+        owner_user_id: 所属用户 ID（多租户，None=公共团队）
     """
     if await gtTeamManager.team_exists(name):
         raise TogoException(f"Team '{name}' already exists", error_code="TEAM_EXISTS")
@@ -129,6 +131,7 @@ async def create_team(
         config=config or {},
         enabled=False,
         deleted=0,
+        owner_user_id=owner_user_id,
     ))
     team_id = team.id
 

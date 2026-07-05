@@ -12,6 +12,7 @@ class DeptTreeDetailHandler(BaseHandler):
 
     async def get(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -24,6 +25,7 @@ class DeptTreeUpdateHandler(BaseHandler):
 
     async def put(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 

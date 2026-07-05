@@ -22,6 +22,7 @@ class AgentSuperviseHandler(BaseHandler):
 
     async def post(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         request = self.parse_request(SuperviseRequest)
 
         gt_agent = await gtAgentManager.get_agent_by_id(agent_id)

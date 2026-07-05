@@ -12,6 +12,7 @@ class GtRoleTemplate(DbModelBase):
     soul: str = peewee.TextField(default="")
     type: RoleTemplateType = EnumField(RoleTemplateType, default=RoleTemplateType.SYSTEM)
     i18n: dict = JsonField(default=dict)  # 多语言数据，含 display_name
+    owner_user_id: int | None = peewee.IntegerField(null=True, index=True)  # 多租户：NULL=SYSTEM公共，非NULL=用户自定义
 
     @property
     def display_name(self) -> str:

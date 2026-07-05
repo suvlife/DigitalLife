@@ -81,6 +81,7 @@ class TeamAgentsSaveHandler(BaseHandler):
 
     async def put(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -154,6 +155,7 @@ class AgentDetailHandler(BaseHandler):
 
     async def get(self, team_id_str: str, agent_name: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -172,6 +174,7 @@ class AgentDetailByIdHandler(BaseHandler):
 
     async def get(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         agents = await gtAgentManager.get_agents_by_ids([agent_id])
         agent = agents[0] if agents else None
         assertUtil.assertNotNull(
@@ -187,6 +190,7 @@ class AgentTasksHandler(BaseHandler):
 
     async def get(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         limit_raw = self.get_query_argument("limit", "30")
         include_closed_raw = self.get_query_argument("include_closed", "false")
         limit = max(1, min(int(limit_raw), 100))
@@ -215,6 +219,7 @@ class TeamTasksHandler(BaseHandler):
 
     async def get(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         limit_raw = self.get_query_argument("limit", "500")
         include_closed_raw = self.get_query_argument("include_closed", "false")
         limit = max(1, min(int(limit_raw), 1000))
@@ -241,6 +246,7 @@ class AgentResumeHandler(BaseHandler):
 
     async def post(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         agent = agentService.get_agent_or_none(agent_id)
         assertUtil.assertNotNull(agent, None, f"运行时 Agent ID '{agent_id}' 不存在", "agent_not_found")
         assertUtil.assertTrue(agent.status == AgentStatus.FAILED, None, f"Agent ID={agent.gt_agent.id} 当前状态不是 FAILED（当前: {agent.status.name}）", "agent_not_failed")
@@ -255,6 +261,7 @@ class AgentClearDataHandler(BaseHandler):
 
     async def post(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         agent = await gtAgentManager.get_agent_by_id(agent_id)
         assertUtil.assertNotNull(agent, error_message=f"Agent ID '{agent_id}' not found", error_code="agent_not_found")
 
@@ -272,6 +279,7 @@ class AgentStopHandler(BaseHandler):
 
     async def post(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         agent = agentService.get_agent_or_none(agent_id)
         assertUtil.assertNotNull(agent, None, f"运行时 Agent ID '{agent_id}' 不存在", "agent_not_found")
         assertUtil.assertTrue(agent.status == AgentStatus.ACTIVE, None, f"Agent ID={agent.gt_agent.id} 当前状态不是 ACTIVE（当前: {agent.status.name}）", "agent_not_active")
@@ -292,6 +300,7 @@ class AgentModifyPropertiesHandler(BaseHandler):
 
     async def post(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
+        await self._assert_agent_owned(agent_id)
         agent = await gtAgentManager.get_agent_by_id(agent_id)
         assertUtil.assertNotNull(agent, error_message=f"Agent ID '{agent_id}' not found", error_code="agent_not_found")
 

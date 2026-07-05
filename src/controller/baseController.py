@@ -168,6 +168,52 @@ class BaseHandler(tornado.web.RequestHandler):
             return False
         return hmac.compare_digest(auth_header[7:], auth_config.token)
 
+    def _current_user_id(self) -> int | None:
+        """获取当前登录用户 ID，未登录返回 None。"""
+        user = self.get_current_user()
+        return user.id if user else None
+
+    async def _assert_team_owned(self, team_id: int) -> None:
+        """校验团队归属：owner_user_id 匹配当前用户，或当前用户是 admin，或团队是公共(NULL)。
+        不满足则返回 403。"""
+        from model.dbModel.gtTeam import GtTeam
+        from model.dbModel.gtUser import UserRole
+        team = await GtTeam.aio_get_or_none(GtTeam.id == team_id, GtTeam.deleted == 0)
+        if team is None:
+            self.set_status(404)
+            self.return_json({"error_code": "team_not_found", "error_desc": "团队不存在"})
+            raise tornado.web.Finish()
+        user = self.get_current_user()
+        if user is not None and user.role == UserRole.ADMIN:
+            return  # admin 跨租户
+        if team.owner_user_id is None:
+            return  # 公共团队
+        if user is not None and team.owner_user_id == user.id:
+            return  # 自己的团队
+        self.set_status(403)
+        self.return_json({"error_code": "forbidden", "error_desc": "无权访问该团队"})
+        raise tornado.web.Finish()
+
+    async def _assert_room_owned(self, room_id: int) -> None:
+        """校验房间归属：通过 room.team_id 链式校验。"""
+        from model.dbModel.gtRoom import GtRoom
+        room = await GtRoom.aio_get_or_none(GtRoom.id == room_id)
+        if room is None:
+            self.set_status(404)
+            self.return_json({"error_code": "room_not_found", "error_desc": "房间不存在"})
+            raise tornado.web.Finish()
+        await self._assert_team_owned(room.team_id)
+
+    async def _assert_agent_owned(self, agent_id: int) -> None:
+        """校验 Agent 归属：通过 agent.team_id 链式校验。"""
+        from model.dbModel.gtAgent import GtAgent
+        agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
+        if agent is None:
+            self.set_status(404)
+            self.return_json({"error_code": "agent_not_found", "error_desc": "Agent 不存在"})
+            raise tornado.web.Finish()
+        await self._assert_team_owned(agent.team_id)
+
     def parse_request(self, model_class: type[T]) -> T:
         """解析请求体为指定的 Pydantic 模型。"""
         try:

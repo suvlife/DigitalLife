@@ -133,7 +133,9 @@ class TeamListHandler(BaseHandler):
         if enabled_param is not None:
             enabled = enabled_param.lower() in ("true", "1", "yes")
 
-        teams = await gtTeamManager.get_all_teams(enabled)
+        # 多租户：只返回当前用户的团队 + 公共团队
+        user_id = self._current_user_id()
+        teams = await gtTeamManager.get_all_teams(enabled, owner_user_id=user_id)
         self.return_json({"teams": [_team_to_dict(team) for team in teams]})
 
 
@@ -147,10 +149,11 @@ class TeamCreateHandler(BaseHandler):
         if working_directory:
             config["working_directory"] = working_directory
 
-        # 调用 service 创建 team
+        # 调用 service 创建 team（写入 owner_user_id）
         team_id = await teamService.create_team(
             name=request.name,
             config=config,
+            owner_user_id=self._current_user_id(),
         )
 
         self.return_json({"status": "created", "id": team_id, "name": request.name})
@@ -161,6 +164,7 @@ class TeamDetailHandler(BaseHandler):
 
     async def get(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -236,6 +240,7 @@ class TeamModifyHandler(BaseHandler):
 
         # 通过 ID 获取 Team
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -286,6 +291,7 @@ class TeamDeleteHandler(BaseHandler):
     async def post(self, team_id_str: str) -> None:
         # 通过 ID 获取 Team
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -312,6 +318,7 @@ class TeamClearDataHandler(BaseHandler):
 
     async def post(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
+        await self._assert_team_owned(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 

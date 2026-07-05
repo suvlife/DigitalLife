@@ -30,14 +30,21 @@ async def get_team_by_uuid(uuid: str, include_deleted: bool = False) -> GtTeam |
     return await GtTeam.aio_get_or_none(*conditions)
 
 
-async def get_all_teams(enabled: bool | None = None) -> list[GtTeam]:
+async def get_all_teams(enabled: bool | None = None, owner_user_id: int | None = None) -> list[GtTeam]:
     """获取所有未删除的 Team。可通过 enabled 参数过滤。
 
-    按 id 升序排序：最先导入的团队排在前面（is_default 团队优先展示）。
+    Args:
+        owner_user_id: 传入时只返回该用户拥有的团队 + 公共团队(owner=NULL)。
+                       None 时返回全部（用于后台调度恢复）。
     """
     query = GtTeam.select().where(GtTeam.deleted == 0).order_by(GtTeam.id)
     if enabled is not None:
         query = query.where(GtTeam.enabled == enabled)
+    if owner_user_id is not None:
+        # 返回自己的团队 + 公共团队（owner_user_id IS NULL）
+        query = query.where(
+            (GtTeam.owner_user_id == owner_user_id) | (GtTeam.owner_user_id.is_null())
+        )
     return list(await query.aio_execute())
 
 
@@ -54,6 +61,7 @@ async def save_team(team: GtTeam) -> GtTeam:
             i18n=i18n,
             enabled=team.enabled,
             deleted=team.deleted,
+            owner_user_id=team.owner_user_id,
         ).aio_execute()
         saved = await get_team_by_id(team_id)
         assert saved is not None, f"team insert failed: name={team.name}"
@@ -67,6 +75,7 @@ async def save_team(team: GtTeam) -> GtTeam:
             i18n=i18n,
             enabled=team.enabled,
             deleted=team.deleted,
+            owner_user_id=team.owner_user_id,
         )
         .where(GtTeam.id == team.id)
         .aio_execute()
