@@ -66,6 +66,12 @@ def get_builtin_default_llm_server() -> str | None:
     return builtin.get("default_llm_server")
 
 
+def get_builtin_ghost_config() -> dict:
+    """获取内置 Ghost CMS 配置。"""
+    builtin = _load_builtin_keys()
+    return builtin.get("ghost", {})
+
+
 def _is_running_tests() -> bool:
     """检测当前是否在 pytest 测试环境中运行。"""
     return "PYTEST_CURRENT_TEST" in os.environ
@@ -318,6 +324,7 @@ def _save_setting_to_file() -> None:
     raw["language"] = setting.language
     raw["development_mode"] = setting.development_mode
     raw["auth"] = setting.auth.model_dump(exclude_unset=True, mode="json")
+    raw["ghost"] = setting.ghost.model_dump(exclude_unset=True, mode="json")
 
     # 原子写入：先写临时文件再 os.replace。失败时清理残留 .tmp 文件。
     # 设置 0o600 权限保护含 api_key/token 的配置文件，防止 world-readable。

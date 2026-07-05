@@ -21,9 +21,9 @@ export function readStoredThemePreference(): ThemePreference {
       return stored;
     }
   } catch {
-    // localStorage may be unavailable (private mode, etc.) — fall back to dark.
+    // localStorage may be unavailable (private mode, etc.) — fall back to light.
   }
-  return 'dark';
+  return 'light';
 }
 
 export const themePreference: Ref<ThemePreference> = ref<ThemePreference>(readStoredThemePreference());

@@ -79,6 +79,8 @@ application = tornado.web.Application([
     (r"/config/skills/import.json",                 settingController.SkillImportHandler),
     (r"/config/skills/([^/]+)/delete.json",          settingController.SkillDeleteHandler),
     (r"/config/tools/list.json",                    settingController.ToolListHandler),
+    (r"/config/ghost.json",                         settingController.GhostConfigHandler),
+    (r"/config/ghost/test.json",                    settingController.GhostTestHandler),
 
     # System Status & Quick Init (V13)
     (r"/system/status.json",                         systemController.SystemStatusHandler),

@@ -2,6 +2,27 @@
   box-sizing: border-box;
 }
 
+/* 移动端触控目标最小尺寸（Apple HIG 标准 44px） */
+html.bp-console-mobile button,
+html.bp-console-mobile a,
+html.bp-compact button,
+html.bp-compact a {
+  min-height: 44px;
+}
+
+/* 移动端禁止文字选中（除输入框外） */
+html.bp-console-mobile body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.bp-console-mobile input,
+html.bp-console-mobile textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html,
 body,
 #app {

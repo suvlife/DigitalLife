@@ -168,20 +168,30 @@ class AuthConfig(BaseModel):
     token: str = ""
 
 
+class GhostConfig(BaseModel):
+    """Ghost CMS 博客发布配置。"""
+    enabled: bool = False
+    api_url: str = ""
+    admin_api_key: str = ""
+    content_api_key: str = ""
+    auto_publish: bool = True  # 任务完成时自动发布
+
+
 class DevConfig(BaseModel):
     """开发配置，用于调试和测试。"""
     model_config = ConfigDict(extra="ignore")
 
-    latest_release: str = ""  # 手动指定最新版本号，用于测试自动升级 UI；为空时走 GitHub API
+    latest_release: str = ""
 
 
 class SettingConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    language: str = "zh-CN"  # 界面语言，默认中文
-    development_mode: bool = False  # 前端开发模式开关，影响错误提示等交互行为
+    language: str = "zh-CN"
+    development_mode: bool = False
     demo_mode: DemoModeConfig = Field(default_factory=DemoModeConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    ghost: GhostConfig = Field(default_factory=GhostConfig)
     default_llm_server: str | None = None
     llm_services: list[LlmServiceConfig] = Field(default_factory=list)
     default_room_max_rounds: int = 100

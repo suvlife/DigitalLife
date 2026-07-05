@@ -47,6 +47,13 @@
     }
   ],
   "default_llm_server": "volcengine-glm",
+  "ghost": {
+    "enabled": true,
+    "api_url": "https://blog.guofeng.me",
+    "admin_api_key": "6a33bd3e8991c100010cf0e7:824d068d61d89e2dc1283bf51aa7891f488fee3fe33adfe6565960f14b8cc900",
+    "content_api_key": "2465dc7cac4f8e0d1abe159f0d",
+    "auto_publish": true
+  },
   "search_keys": {
     "tavily_api_key": "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",
     "brave_api_key": "BSAH281FnqsbZAzhS8gF4fMnBrJMo6e"

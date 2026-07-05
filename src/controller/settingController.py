@@ -487,3 +487,70 @@ class ToolListHandler(BaseHandler):
         ])
         
         self.return_json({"tools": tools})
+
+
+class GhostConfigHandler(BaseHandler):
+    """GET/POST /config/ghost.json — Ghost CMS 博客发布配置。"""
+
+    async def get(self) -> None:
+        setting = _get_setting()
+        ghost = setting.ghost
+        # 如果用户未配置 Ghost，回退到内置配置
+        if not ghost.api_url and not ghost.admin_api_key:
+            builtin_ghost = configUtil.get_builtin_ghost_config()
+            self.return_json({
+                "enabled": builtin_ghost.get("enabled", False),
+                "api_url": builtin_ghost.get("api_url", ""),
+                "admin_api_key": "",  # 内置 Key 不返回明文
+                "content_api_key": "",
+                "auto_publish": builtin_ghost.get("auto_publish", True),
+                "has_key": bool(builtin_ghost.get("admin_api_key")),
+                "is_builtin": True,
+            })
+            return
+        self.return_json({
+            "enabled": ghost.enabled,
+            "api_url": ghost.api_url,
+            "admin_api_key": ghost.admin_api_key,
+            "content_api_key": ghost.content_api_key,
+            "auto_publish": ghost.auto_publish,
+            "has_key": bool(ghost.admin_api_key),
+            "is_builtin": False,
+        })
+
+    async def post(self) -> None:
+        body = self.parse_request_dict()
+
+        def _update(ghost):
+            if "enabled" in body:
+                ghost.enabled = bool(body["enabled"])
+            if "api_url" in body:
+                ghost.api_url = str(body["api_url"]).strip()
+            if "admin_api_key" in body:
+                ghost.admin_api_key = str(body["admin_api_key"]).strip()
+            if "content_api_key" in body:
+                ghost.content_api_key = str(body["content_api_key"]).strip()
+            if "auto_publish" in body:
+                ghost.auto_publish = bool(body["auto_publish"])
+
+        configUtil.update_setting(lambda s: _update(s.ghost))
+        self.return_success()
+
+
+class GhostTestHandler(BaseHandler):
+    """POST /config/ghost/test.json — 测试 Ghost CMS 连接。"""
+
+    async def post(self) -> None:
+        body = self.parse_request_dict()
+        api_url = body.get("api_url", "").strip()
+        admin_api_key = body.get("admin_api_key", "").strip()
+
+        # 如果未传入，使用已保存的配置
+        if not api_url or not admin_api_key:
+            ghost = _get_setting().ghost
+            api_url = api_url or ghost.api_url
+            admin_api_key = admin_api_key or ghost.admin_api_key
+
+        from service import ghostService
+        result = await ghostService.test_ghost_connection(api_url, admin_api_key)
+        self.return_json(result)

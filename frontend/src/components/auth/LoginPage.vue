@@ -252,4 +252,47 @@ async function handleSubmit() {
 .login-switch a:hover {
   text-decoration: underline;
 }
+
+/* 移动端适配 */
+@media (max-width: 640px) {
+  .login-page {
+    padding: 12px;
+    align-items: flex-start;
+    padding-top: 15vh;
+  }
+
+  .login-card {
+    padding: 28px 20px;
+    border-radius: 10px;
+  }
+
+  .login-title {
+    font-size: 24px;
+  }
+
+  .login-subtitle {
+    font-size: 13px;
+  }
+
+  .form-input {
+    padding: 12px 14px;
+    font-size: 16px; /* iOS 防止缩放 */
+  }
+
+  .login-button {
+    padding: 14px;
+    font-size: 16px;
+    min-height: 48px;
+  }
+
+  .login-switch {
+    font-size: 14px;
+  }
+
+  .login-switch a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
 </style>

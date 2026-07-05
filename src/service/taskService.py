@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 from typing import Any
@@ -214,6 +215,12 @@ async def update_task(
     # 依赖任务完成后，自动唤醒下游 PENDING 任务（PENDING → TODO）
     if new_status == TaskStatus.DONE:
         await _unblock_pending_dependents(updated)
+        # 自动发布到 Ghost 博客（异步，不阻塞任务流程）
+        try:
+            from service import ghostService
+            asyncio.create_task(ghostService.publish_task_if_enabled(updated))
+        except Exception:
+            pass  # Ghost 发布失败不影响任务流程
 
     from playhouse.shortcuts import model_to_dict
     return {"success": True, "task": model_to_dict(updated, recurse=False), "message": f"任务状态已更新：{old_status.value} → {new_status.value}"}
