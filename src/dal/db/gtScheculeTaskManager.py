@@ -46,7 +46,7 @@ async def has_pending_room_task(
             GtScheculeTask.status.in_(statuses),  # type: ignore[attr-defined]
             fn.json_extract(GtScheculeTask.task_data, "$.room_id") == room_id,
         )
-        .exists()
+        .aio_exists()
     )
 
 
@@ -96,7 +96,7 @@ async def has_pending_collaboration_task(agent_id: int, agent_task_id: int) -> b
             GtScheculeTask.status == AgentTaskStatus.PENDING,
             fn.json_extract(GtScheculeTask.task_data, "$.agent_task_id") == agent_task_id,
         )
-        .exists()
+        .aio_exists()
     )
 
 
