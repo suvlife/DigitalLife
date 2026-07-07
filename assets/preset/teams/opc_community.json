@@ -1,0 +1,84 @@
+{
+  "name": "OPC产业平台社区",
+  "uuid": "preset-opc-community-v1",
+  "auto_start": false,
+  "i18n": {
+    "display_name": {"zh-CN": "OPC产业平台社区", "en": "OPC Industry Platform Community"}
+  },
+  "agents": [
+    {"name": "commander", "role_template": "opc_commander", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "OPC总指挥", "en": "OPC Commander"}}},
+    {"name": "strategist", "role_template": "strategy_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "战略规划总监", "en": "Strategy Director"}}},
+    {"name": "govt_partner", "role_template": "govt_partner", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "政企合作专家", "en": "Govt Partnership Expert"}}},
+    {"name": "policy_designer", "role_template": "policy_designer", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "政策设计师", "en": "Policy Designer"}}},
+    {"name": "fund_mgr", "role_template": "fund_manager", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "产业基金专家", "en": "Fund Manager"}}},
+    {"name": "park_planner", "role_template": "park_planner", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "园区规划专家", "en": "Park Planner"}}},
+    {"name": "tech_empower", "role_template": "tech_empowerment", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "技术赋能总监", "en": "Tech Empowerment Director"}}},
+    {"name": "digital_arch", "role_template": "digital_architect", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "数字化架构师", "en": "Digital Architect"}}},
+    {"name": "inv_director", "role_template": "investment_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "招商总监", "en": "Investment Director"}}},
+    {"name": "eco_partner", "role_template": "ecosystem_partner", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "生态合作经理", "en": "Ecosystem Partner"}}},
+    {"name": "ent_service", "role_template": "enterprise_service", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "企业服务专家", "en": "Enterprise Service"}}},
+    {"name": "incubation", "role_template": "incubation_lead", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "孵化运营专家", "en": "Incubation Lead"}}},
+    {"name": "post_inv", "role_template": "post_investment", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "投后管理专家", "en": "Post-Investment"}}},
+    {"name": "brand", "role_template": "brand_marketer", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "品牌营销专家", "en": "Brand Marketer"}}},
+    {"name": "data_analyst", "role_template": "data_analyst_opc", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "数据分析专家", "en": "Data Analyst"}}},
+    {"name": "event_ops", "role_template": "event_operator", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "活动运营专家", "en": "Event Operator"}}},
+    {"name": "commercial", "role_template": "commercialization", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "商业化运营专家", "en": "Commercialization"}}},
+    {"name": "compliance", "role_template": "compliance_risk", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "合规风控专家", "en": "Compliance & Risk"}}}
+  ],
+  "preset_rooms": [
+    {
+      "name": "OPC作战室",
+      "agents": ["OPERATOR", "commander", "strategist", "govt_partner", "policy_designer", "fund_mgr", "park_planner", "tech_empower", "digital_arch", "inv_director", "eco_partner", "ent_service", "incubation", "post_inv", "brand", "data_analyst", "event_ops", "commercial", "compliance"],
+      "initial_topic": "OPC产业平台社区全链路讨论：从政策规划、园区建设、招商运营到生态体系搭建，各专家从火山引擎方视角协作，最终由总指挥调用 submit_conclusion 提交综合方案。",
+      "max_rounds": 50,
+      "i18n": {"display_name": {"zh-CN": "OPC作战室", "en": "OPC War Room"}, "initial_topic": {"zh-CN": "OPC产业平台社区全链路讨论：从政策规划、园区建设、招商运营到生态体系搭建，各专家从火山引擎方视角协作，最终由总指挥调用 submit_conclusion 提交综合方案。", "en": "Full-chain OPC discussion from planning to ecosystem building."}}
+    },
+    {
+      "name": "政企合作室",
+      "agents": ["OPERATOR", "commander", "govt_partner", "policy_designer", "fund_mgr"],
+      "initial_topic": "政企合作专项：设计火山引擎-政府合作框架、OPC专项政策体系、产业引导基金方案。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "政企合作室", "en": "Govt Partnership Room"}, "initial_topic": {"zh-CN": "政企合作专项：设计合作框架、政策体系、产业基金方案。", "en": "Govt partnership: framework, policy, fund design."}}
+    },
+    {
+      "name": "招商指挥部",
+      "agents": ["OPERATOR", "commander", "inv_director", "eco_partner", "ent_service", "incubation", "brand"],
+      "initial_topic": "招商策略与执行：目标企业画像、招商渠道、产业链整合、企业入驻服务、品牌推广。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "招商指挥部", "en": "Investment Command"}, "initial_topic": {"zh-CN": "招商策略与执行：目标企业画像、招商渠道、产业链整合、企业入驻服务、品牌推广。", "en": "Investment strategy and execution."}}
+    },
+    {
+      "name": "园区规划室",
+      "agents": ["OPERATOR", "commander", "park_planner", "tech_empower", "digital_arch"],
+      "initial_topic": "园区与技术规划：物理空间设计、智算中心配套、火山引擎技术栈输出、数字化平台架构。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "园区规划室", "en": "Park Planning Room"}, "initial_topic": {"zh-CN": "园区与技术规划：物理空间设计、智算中心配套、火山引擎技术栈输出、数字化平台架构。", "en": "Park and tech planning: space, AIC, tech stack, digital platform."}}
+    },
+    {
+      "name": "生态运营室",
+      "agents": ["OPERATOR", "commander", "eco_partner", "ent_service", "data_analyst", "event_ops", "commercial", "compliance"],
+      "initial_topic": "生态运营策略：社区健康度指标、活动运营体系、商业化变现模式、合规风控体系。政策组vs招商组辩论：优惠力度vs招商吸引力vs财务可持续性。",
+      "max_rounds": 40,
+      "i18n": {"display_name": {"zh-CN": "生态运营室", "en": "Ecosystem Operations"}, "initial_topic": {"zh-CN": "生态运营策略：社区健康度、活动运营、商业化变现、合规风控。辩论：优惠力度vs可持续性。", "en": "Ecosystem ops: health, events, monetization, compliance."}}
+    },
+    {
+      "name": "方案输出室",
+      "agents": ["OPERATOR", "commander", "strategist", "brand"],
+      "initial_topic": "方案文档输出：将各专家组讨论成果整合为完整的OPC规划方案、政府汇报材料、招商手册。",
+      "max_rounds": 100,
+      "i18n": {"display_name": {"zh-CN": "方案输出室", "en": "Document Output Room"}, "initial_topic": {"zh-CN": "方案文档输出：将各专家组讨论成果整合为完整的OPC规划方案、政府汇报材料、招商手册。", "en": "Generate OPC plans, govt reports, investment brochures."}}
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "OPC总指挥部", "responsibility": "统筹OPC产业平台社区全局规划与运营", "manager": "commander",
+    "agents": ["commander", "strategist", "govt_partner", "park_planner", "inv_director", "incubation", "data_analyst"],
+    "children": [
+      {"dept_name": "政策规划组", "responsibility": "政企合作框架与政策体系设计", "manager": "govt_partner", "agents": ["govt_partner", "policy_designer", "fund_mgr"], "children": [], "i18n": {"dept_name": {"zh-CN": "政策规划组", "en": "Policy Planning"}, "responsibility": {"zh-CN": "政企合作框架与政策体系设计", "en": "Govt partnership and policy design"}}},
+      {"dept_name": "园区规划组", "responsibility": "物理空间与技术平台规划", "manager": "park_planner", "agents": ["park_planner", "tech_empower", "digital_arch"], "children": [], "i18n": {"dept_name": {"zh-CN": "园区规划组", "en": "Park Planning"}, "responsibility": {"zh-CN": "物理空间与技术平台规划", "en": "Physical space and tech platform"}}},
+      {"dept_name": "招商运营组", "responsibility": "招商引资与企业服务", "manager": "inv_director", "agents": ["inv_director", "eco_partner", "ent_service"], "children": [], "i18n": {"dept_name": {"zh-CN": "招商运营组", "en": "Investment & Operations"}, "responsibility": {"zh-CN": "招商引资与企业服务", "en": "Investment and enterprise services"}}},
+      {"dept_name": "产业孵化组", "responsibility": "孵化体系与投后管理", "manager": "incubation", "agents": ["incubation", "post_inv", "brand"], "children": [], "i18n": {"dept_name": {"zh-CN": "产业孵化组", "en": "Incubation"}, "responsibility": {"zh-CN": "孵化体系与投后管理", "en": "Incubation and post-investment"}}},
+      {"dept_name": "数据运营组", "responsibility": "数据驱动与商业化运营", "manager": "data_analyst", "agents": ["data_analyst", "event_ops", "commercial", "compliance"], "children": [], "i18n": {"dept_name": {"zh-CN": "数据运营组", "en": "Data Operations"}, "responsibility": {"zh-CN": "数据驱动与商业化运营", "en": "Data-driven and commercial operations"}}}
+    ],
+    "i18n": {"dept_name": {"zh-CN": "OPC总指挥部", "en": "OPC Command"}, "responsibility": {"zh-CN": "统筹OPC产业平台社区全局规划与运营", "en": "Overall OPC planning and operations"}}
+  }
+}
