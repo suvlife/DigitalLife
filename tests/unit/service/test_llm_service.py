@@ -401,16 +401,16 @@ async def test_infer_retries_with_exponential_backoff_until_success(monkeypatch)
     assert attempts["count"] == 4
     # jitter 后 delay 在 [base, base*1.1] 范围内，验证调用次数和近似值
     assert len(sleep_mock.await_args_list) == 3
-    for i, expected_base in enumerate([5, 10, 20]):
+    for i, expected_base in enumerate([3, 5, 10]):
         actual_delay = sleep_mock.await_args_list[i][0][0]
         assert expected_base <= actual_delay <= expected_base * 1.1, \
             f"retry {i+1}: delay {actual_delay} not in [{expected_base}, {expected_base*1.1}]"
     assert [(event.state, event.attempt, event.retry_delay_seconds) for event in status_events] == [
-        (InferRequestStateType.RETRY_SCHEDULED, 1, 5),
+        (InferRequestStateType.RETRY_SCHEDULED, 1, 3),
         (InferRequestStateType.RETRYING, 2, None),
-        (InferRequestStateType.RETRY_SCHEDULED, 2, 10),
+        (InferRequestStateType.RETRY_SCHEDULED, 2, 5),
         (InferRequestStateType.RETRYING, 3, None),
-        (InferRequestStateType.RETRY_SCHEDULED, 3, 20),
+        (InferRequestStateType.RETRY_SCHEDULED, 3, 10),
         (InferRequestStateType.RETRYING, 4, None),
     ]
 
@@ -450,9 +450,9 @@ async def test_infer_stream_retries_up_to_limit_then_returns_failure(monkeypatch
     assert result.response is None
     assert isinstance(result.error, InternalServerError)
     assert "stream temporary failure" in str(result.error)
-    assert fake_send_request_stream.await_count == 8
+    assert fake_send_request_stream.await_count == 9
     # jitter 后 delay 在 [base, base*1.1] 范围内，验证调用次数和近似值
-    expected_bases = [5, 10, 20, 30, 60, 60, 60]
+    expected_bases = [3, 5, 10, 15, 30, 30, 60, 60]
     assert len(sleep_mock.await_args_list) == len(expected_bases)
     for i, expected_base in enumerate(expected_bases):
         actual_delay = sleep_mock.await_args_list[i][0][0]
@@ -460,9 +460,9 @@ async def test_infer_stream_retries_up_to_limit_then_returns_failure(monkeypatch
             f"retry {i+1}: delay {actual_delay} not in [{expected_base}, {expected_base*1.1}]"
     assert status_events[0].state == InferRequestStateType.RETRY_SCHEDULED
     assert status_events[0].attempt == 1
-    assert status_events[0].retry_delay_seconds == 5
+    assert status_events[0].retry_delay_seconds == 3
     assert status_events[-1].state == InferRequestStateType.RETRYING
-    assert status_events[-1].attempt == 8
+    assert status_events[-1].attempt == 9
 
 
 # ─── classify_llm_error ──────────────────────────────────

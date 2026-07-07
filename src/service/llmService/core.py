@@ -11,8 +11,9 @@ from constants import InferRequestStateType, LlmErrorCategory, LlmServiceType
 
 logger = logging.getLogger(__name__)
 
-# LLM 并发限制：防止多 Agent 同时请求导致 API 连接错误/限流
-_LLM_SEMAPHORE = asyncio.Semaphore(1)  # 串行请求，避免火山引擎 Agent Plan 限流
+# LLM 并发限制：允许多个 Agent 同时请求 LLM，提高响应速度。
+# RateLimitError 时通过重试自动退避，而非预先串行限制。
+_LLM_SEMAPHORE = asyncio.Semaphore(5)  # 最多 5 个并发 LLM 请求
 from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
 from service.llmService.llmErrorClassifier import classify_llm_error, RETRYABLE_CATEGORIES
 from service.llmService.llmRequestRules import apply_llm_request_rules
@@ -28,7 +29,8 @@ _TYPE_TO_PROVIDER = {
 
 logger = logging.getLogger(__name__)
 
-_INFER_RETRY_DELAYS_SECONDS = (5, 10, 20, 30, 60, 60, 60)  # RateLimitError 退避：更长的等待时间
+_INFER_RETRY_DELAYS_SECONDS = (3, 5, 10, 15, 30, 30, 60, 60)  # 默认退避
+_RATE_LIMIT_RETRY_DELAYS = (10, 20, 30, 60, 60, 60, 90, 90)  # RateLimitError 专用退避（更长）
 
 
 @dataclass
@@ -216,14 +218,21 @@ async def _send_with_retry(
 
             last_error = e
 
-            if classify_llm_error(e) not in RETRYABLE_CATEGORIES:
+            error_category = classify_llm_error(e)
+            if error_category not in RETRYABLE_CATEGORIES:
                 raise
 
             if attempt >= total_attempts:
                 raise
 
-            delay = _INFER_RETRY_DELAYS_SECONDS[attempt - 1]
-            # 重置流式回调侧的进度状态（如 completion_tokens），避免重试后虚高
+            # 智能退避：RateLimitError 用更长延迟，其他错误用短延迟
+            if error_category == LlmErrorCategory.RATE_LIMITED:
+                delay = _RATE_LIMIT_RETRY_DELAYS[min(attempt - 1, len(_RATE_LIMIT_RETRY_DELAYS) - 1)]
+                logger.warning(f"LLM RateLimit 退避: {request_id=}, attempt={attempt}, delay={delay}s")
+            else:
+                delay = _INFER_RETRY_DELAYS_SECONDS[attempt - 1]
+
+            # 重置流式回调侧的进度状态
             if on_retry_reset is not None:
                 on_retry_reset()
             await _safe_call_handler(

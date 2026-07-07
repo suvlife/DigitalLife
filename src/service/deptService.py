@@ -373,26 +373,30 @@ async def get_sub_agent_ids(team_id: int, agent_id: int) -> set[int]:
     """返回 agent_id 在其所在部门的所有直接/间接下属 Agent ID 集合（不含自身）。
 
     仅当 agent_id 是该部门 manager 时才有下属；否则返回空集合。
+    修复：多部门场景下 agent 可能在多个子部门担任 manager，需收集全部下属。
     """
     tree: GtDept | None = await get_dept_tree(team_id)
     if tree is None:
         return set()
 
-    def _find_agent_manager_dept(node: GtDept) -> GtDept | None:
-        """DFS 查找 agent 作为 manager 的部门。"""
+    def _find_all_manager_depts(node: GtDept, result: list[GtDept]) -> None:
+        """DFS 查找 agent 作为 manager 的所有部门（支持多部门场景）。"""
         if node.manager_id == agent_id and agent_id in (node.agent_ids or []):
-            return node
+            result.append(node)
         for child in node.children or []:
-            found = _find_agent_manager_dept(child)
-            if found is not None:
-                return found
-        return None
+            _find_all_manager_depts(child, result)
 
-    # 优先查找 agent 担任 manager 的部门
-    dept = _find_agent_manager_dept(tree)
-    if dept is None:
+    # 查找 agent 担任 manager 的所有部门
+    manager_depts: list[GtDept] = []
+    _find_all_manager_depts(tree, manager_depts)
+    if not manager_depts:
         return set()
 
-    all_ids, _ = dept.collect_dept_and_agent_ids()
+    # 收集所有下属部门的 agent_ids
+    all_ids: set[int] = set()
+    for dept in manager_depts:
+        dept_ids, _ = dept.collect_dept_and_agent_ids()
+        all_ids.update(dept_ids)
+
     all_ids.discard(agent_id)
     return all_ids

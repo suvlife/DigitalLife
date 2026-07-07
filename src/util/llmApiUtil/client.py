@@ -348,6 +348,13 @@ _ALLOWED_PROVIDER_PARAM_KEYS = frozenset({
     "logit_bias",
     "n",
     "stream_options",
+    # GPT-5 / o1 系列参数
+    "reasoning_effort",      # GPT-5: "minimal" | "low" | "medium" | "high"
+    "verbosity",             # GPT-5: "low" | "medium" | "high"
+    # Claude 参数
+    "thinking_budget",       # Claude thinking budget tokens
+    # DeepSeek 参数
+    "reasoning",             # DeepSeek R1 reasoning mode
 })
 
 

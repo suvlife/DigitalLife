@@ -43,6 +43,15 @@ def _check_single_instance() -> None:
     if os.environ.get("TEAMAGENT_ENV") == "test":
         return
     os.makedirs(_RUN_DIR, exist_ok=True)
+    # Docker 环境下清理可能残留的 stale PID 文件（容器重启时旧 PID 文件可能导致误判）
+    if os.environ.get("TOGOSPACE_RUN_ENV") == "docker":
+        if os.path.isfile(_PID_FILE):
+            try:
+                os.remove(_PID_FILE)
+                print("检测到 Docker 环境，已清理残留 PID 文件。", file=sys.stderr)
+            except OSError:
+                pass
+        return  # Docker 环境跳过单实例检查（由容器编排保证）
     # 读取已有 PID，检查进程是否存活
     try:
         with open(_PID_FILE) as f:

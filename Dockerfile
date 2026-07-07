@@ -69,6 +69,9 @@ RUN apt-get update && apt-get install -y \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
+# 安装 tini（轻量级 init，优雅关闭 + 回收僵尸进程）
+RUN apt-get update -qq && apt-get install -y -qq tini && rm -rf /var/lib/apt/lists/*
+
 # 创建应用目录和数据目录
 RUN mkdir -p ${TOGOSPACE_HOME} ${STORAGE_ROOT}
 
@@ -112,6 +115,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # 切换到非 root 用户运行
 USER togospace
 
-# 启动命令
+# 启动命令（使用 tini 作为 entrypoint，优雅关闭 + 回收僵尸进程）
 WORKDIR ${TOGOSPACE_HOME}/src
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["../.venv/bin/python3", "backend_main.py", "--config-dir", "/storage"]
