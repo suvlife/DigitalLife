@@ -1,0 +1,65 @@
+{
+  "name": "AI视频创作工坊",
+  "uuid": "preset-video-studio-v1",
+  "auto_start": false,
+  "i18n": {
+    "display_name": {"zh-CN": "AI视频创作工坊", "en": "AI Video Studio"}
+  },
+  "agents": [
+    {"name": "chief_dir", "role_template": "chief_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "总导演", "en": "Chief Director"}}},
+    {"name": "doc_dir", "role_template": "documentary_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "纪录片导演", "en": "Documentary Director"}}},
+    {"name": "ad_dir", "role_template": "ad_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "广告导演", "en": "Ad Director"}}},
+    {"name": "tech_dir", "role_template": "tech_science_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "科技科普导演", "en": "Tech Science Director"}}},
+    {"name": "short_dir", "role_template": "short_video_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "短视频导演", "en": "Short Video Director"}}},
+    {"name": "writer", "role_template": "chief_screenwriter", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "首席编剧", "en": "Chief Screenwriter"}}},
+    {"name": "storyboard", "role_template": "storyboard_designer", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "分镜设计师", "en": "Storyboard Designer"}}},
+    {"name": "visual_dir", "role_template": "visual_design_director", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "视觉设计总监", "en": "Visual Design Director"}}},
+    {"name": "ai_video", "role_template": "ai_video_creator", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "AI视频制作专家", "en": "AI Video Creator"}}},
+    {"name": "ai_image", "role_template": "ai_image_creator", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "AI图像创作专家", "en": "AI Image Creator"}}},
+    {"name": "scout", "role_template": "material_scout", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "素材采集专家", "en": "Material Scout"}}},
+    {"name": "storyteller", "role_template": "business_storyteller", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "商业叙事专家", "en": "Business Storyteller"}}}
+  ],
+  "preset_rooms": [
+    {
+      "name": "创作大本营", "agents": ["OPERATOR", "chief_dir", "doc_dir", "ad_dir", "tech_dir", "short_dir", "writer", "storyboard", "visual_dir", "ai_video", "ai_image", "scout", "storyteller"],
+      "initial_topic": "全员创作讨论：用户提出视频创作需求后，各专家从导演、编剧、视觉、制作、叙事多角度分析，辩论最佳创作方案，最终由总导演调用 submit_conclusion 提交综合创作方案。",
+      "max_rounds": 50,
+      "i18n": {"display_name": {"zh-CN": "创作大本营", "en": "Creation HQ"}, "initial_topic": {"zh-CN": "全员创作讨论：用户提出视频创作需求后，各专家从导演、编剧、视觉、制作、叙事多角度分析，辩论最佳创作方案，最终由总导演调用 submit_conclusion 提交综合创作方案。", "en": "Full team creative discussion with multi-perspective debate."}}
+    },
+    {
+      "name": "剧本工作室", "agents": ["OPERATOR", "chief_dir", "writer", "storyboard"],
+      "initial_topic": "剧本与分镜创作：根据创作方向编写完整剧本（含场景描述、人物对白、旁白）和分镜脚本（含镜头号、景别、运镜、画面描述、时长）。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "剧本工作室", "en": "Screenplay Studio"}, "initial_topic": {"zh-CN": "剧本与分镜创作：根据创作方向编写完整剧本和分镜脚本。", "en": "Screenplay and storyboard creation."}}
+    },
+    {
+      "name": "视觉制作室", "agents": ["OPERATOR", "chief_dir", "visual_dir", "ai_video", "ai_image"],
+      "initial_topic": "视觉设计与AI制作：确定美术风格、色彩方案、视觉规范；使用 Seedance 2.0 和 Seedream 生成视频和图片素材。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "视觉制作室", "en": "Visual Production"}, "initial_topic": {"zh-CN": "视觉设计与AI制作：确定美术风格、色彩方案、视觉规范；使用 Seedance 2.0 和 Seedream 生成素材。", "en": "Visual design and AI generation with Seedance/Seedream."}}
+    },
+    {
+      "name": "导演辩论厅", "agents": ["OPERATOR", "chief_dir", "doc_dir", "ad_dir", "tech_dir", "short_dir"],
+      "initial_topic": "导演创意PK：四位导演就同一创作主题各出方案，从不同风格角度阐述创意理念，相互点评辩论，由总导演综合裁决。",
+      "max_rounds": 40,
+      "i18n": {"display_name": {"zh-CN": "导演辩论厅", "en": "Directors' Arena"}, "initial_topic": {"zh-CN": "导演创意PK：四位导演就同一创作主题各出方案，从不同风格角度阐述创意理念，相互点评辩论，由总导演综合裁决。", "en": "Directors pitch and debate creative approaches."}}
+    },
+    {
+      "name": "火山引擎调度室", "agents": ["OPERATOR", "chief_dir", "ai_video", "ai_image"],
+      "initial_topic": "火山引擎产品编排：查询火山引擎公有云产品文档，编排 Seedance/Seedream/API 调用流程，设计自动化制作流水线。",
+      "max_rounds": 100,
+      "i18n": {"display_name": {"zh-CN": "火山引擎调度室", "en": "Volcano Engine Console"}, "initial_topic": {"zh-CN": "火山引擎产品编排：查询火山引擎公有云产品文档，编排 Seedance/Seedream/API 调用流程，设计自动化制作流水线。", "en": "Volcano Engine product orchestration for Seedance/Seedream."}}
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "创作委员会", "responsibility": "统筹全局创作方向与最终决策", "manager": "chief_dir",
+    "agents": ["chief_dir", "doc_dir", "writer", "visual_dir", "scout"],
+    "children": [
+      {"dept_name": "导演组", "responsibility": "多风格导演创意与方向把控", "manager": "doc_dir", "agents": ["doc_dir", "ad_dir", "tech_dir", "short_dir"], "children": [], "i18n": {"dept_name": {"zh-CN": "导演组", "en": "Directors"}, "responsibility": {"zh-CN": "多风格导演创意与方向把控", "en": "Multi-style creative direction"}}},
+      {"dept_name": "剧本组", "responsibility": "剧本结构与分镜设计", "manager": "writer", "agents": ["writer", "storyboard"], "children": [], "i18n": {"dept_name": {"zh-CN": "剧本组", "en": "Screenplay"}, "responsibility": {"zh-CN": "剧本结构与分镜设计", "en": "Screenplay and storyboard"}}},
+      {"dept_name": "视觉组", "responsibility": "视觉设计与AI内容生成", "manager": "visual_dir", "agents": ["visual_dir", "ai_video", "ai_image"], "children": [], "i18n": {"dept_name": {"zh-CN": "视觉组", "en": "Visual"}, "responsibility": {"zh-CN": "视觉设计与AI内容生成", "en": "Visual design and AI generation"}}},
+      {"dept_name": "运营组", "responsibility": "素材采集与商业叙事", "manager": "scout", "agents": ["scout", "storyteller"], "children": [], "i18n": {"dept_name": {"zh-CN": "运营组", "en": "Operations"}, "responsibility": {"zh-CN": "素材采集与商业叙事", "en": "Material sourcing and business storytelling"}}}
+    ],
+    "i18n": {"dept_name": {"zh-CN": "创作委员会", "en": "Creation Committee"}, "responsibility": {"zh-CN": "统筹全局创作方向与最终决策", "en": "Overall creative direction and final decisions"}}
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "顶级规划智库",
+  "uuid": "preset-think-tank-v1",
+  "auto_start": false,
+  "i18n": {
+    "display_name": {"zh-CN": "顶级规划智库", "en": "Top Strategy Think Tank"}
+  },
+  "agents": [
+    {"name": "planner", "role_template": "think_tank_planner", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "总规划师", "en": "Chief Planner"}}},
+    {"name": "mckinsey", "role_template": "mckinsey_consultant", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "麦肯锡咨询顾问", "en": "McKinsey Consultant"}}},
+    {"name": "policy_research", "role_template": "policy_researcher", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "政策研究专家", "en": "Policy Researcher"}}},
+    {"name": "policy_app", "role_template": "policy_application_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "政策申报专家", "en": "Policy Application Expert"}}},
+    {"name": "govt_affairs", "role_template": "govt_affairs_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "政府事务专家", "en": "Government Affairs Expert"}}},
+    {"name": "industry", "role_template": "industry_researcher", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "产业研究专家", "en": "Industry Researcher"}}},
+    {"name": "aic", "role_template": "aic_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "智算中心专家", "en": "AIC Expert"}}},
+    {"name": "llm_research", "role_template": "llm_research_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "大模型研究专家", "en": "LLM Research Expert"}}},
+    {"name": "architect", "role_template": "tech_architect", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "技术架构师", "en": "Tech Architect"}}},
+    {"name": "pm", "role_template": "product_manager_pro", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "产品经理", "en": "Product Manager"}}},
+    {"name": "frontend", "role_template": "frontend_dev_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "前端开发专家", "en": "Frontend Expert"}}},
+    {"name": "backend", "role_template": "backend_dev_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "后端开发专家", "en": "Backend Expert"}}},
+    {"name": "qa", "role_template": "qa_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "测试专家", "en": "QA Expert"}}},
+    {"name": "finance", "role_template": "finance_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "财务专家", "en": "Finance Expert"}}},
+    {"name": "tax", "role_template": "tax_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "税务专家", "en": "Tax Expert"}}},
+    {"name": "legal", "role_template": "legal_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "法务专家", "en": "Legal Expert"}}},
+    {"name": "presales", "role_template": "presales_architect", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "售前架构师", "en": "Presales Architect"}}},
+    {"name": "delivery", "role_template": "delivery_manager", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "交付经理", "en": "Delivery Manager"}}},
+    {"name": "sales", "role_template": "sales_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "销售专家", "en": "Sales Expert"}}},
+    {"name": "ecosystem", "role_template": "ecosystem_operator", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "生态运营专家", "en": "Ecosystem Operator"}}},
+    {"name": "doc_maker", "role_template": "doc_maker_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "文档制作专家", "en": "Document Maker"}}},
+    {"name": "ai_content", "role_template": "ai_content_operator", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "AI内容运营专家", "en": "AI Content Operator"}}},
+    {"name": "hr", "role_template": "hr_expert", "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"], "i18n": {"display_name": {"zh-CN": "人力资源专家", "en": "HR Expert"}}}
+  ],
+  "preset_rooms": [
+    {
+      "name": "战略指挥部", "agents": ["OPERATOR", "planner", "mckinsey", "policy_research", "policy_app", "govt_affairs", "industry", "aic", "llm_research", "architect", "pm", "frontend", "backend", "qa", "finance", "tax", "legal", "presales", "delivery", "sales", "ecosystem", "doc_maker", "ai_content", "hr"],
+      "initial_topic": "全员战略讨论：就指定课题进行跨部门协作，各专家从自身专业角度分析并提出建议，最终由总规划师调用 submit_conclusion 提交综合规划方案。",
+      "max_rounds": 50,
+      "i18n": {"display_name": {"zh-CN": "战略指挥部", "en": "Strategy Command"}, "initial_topic": {"zh-CN": "全员战略讨论：就指定课题进行跨部门协作，各专家从自身专业角度分析并提出建议，最终由总规划师调用 submit_conclusion 提交综合规划方案。", "en": "Cross-department strategy discussion, Chief Planner submits conclusion."}}
+    },
+    {
+      "name": "政策研究室", "agents": ["OPERATOR", "planner", "policy_research", "policy_app", "govt_affairs"],
+      "initial_topic": "政策研究专项：搜集最新政府政策、分析产业政策趋势、规划项目申报路径、编写政府汇报材料。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "政策研究室", "en": "Policy Research Room"}, "initial_topic": {"zh-CN": "政策研究专项：搜集最新政府政策、分析产业政策趋势、规划项目申报路径、编写政府汇报材料。", "en": "Policy research: collect policies, analyze trends, plan applications."}}
+    },
+    {
+      "name": "技术架构室", "agents": ["OPERATOR", "planner", "architect", "pm", "frontend", "backend", "qa"],
+      "initial_topic": "技术方案设计：从架构、产品、前后端、测试多角度设计技术方案，含系统架构图、API设计、技术选型。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "技术架构室", "en": "Tech Architecture Room"}, "initial_topic": {"zh-CN": "技术方案设计：从架构、产品、前后端、测试多角度设计技术方案。", "en": "Technical design from architecture, product, frontend, backend, QA perspectives."}}
+    },
+    {
+      "name": "财务测算室", "agents": ["OPERATOR", "planner", "finance", "tax", "legal"],
+      "initial_topic": "财务模型测算：设计精确财务模型、ROI分析、税务规划、合规审查。",
+      "max_rounds": 30,
+      "i18n": {"display_name": {"zh-CN": "财务测算室", "en": "Finance Room"}, "initial_topic": {"zh-CN": "财务模型测算：设计精确财务模型、ROI分析、税务规划、合规审查。", "en": "Financial modeling, ROI analysis, tax planning, compliance review."}}
+    },
+    {
+      "name": "方案输出室", "agents": ["OPERATOR", "planner", "mckinsey", "doc_maker", "ai_content"],
+      "initial_topic": "方案文档生成：将各专家组的研究成果整合为完整的Word方案、PPT汇报材料、Excel数据表。用户可在此下达文档生成任务。",
+      "max_rounds": 100,
+      "i18n": {"display_name": {"zh-CN": "方案输出室", "en": "Document Output Room"}, "initial_topic": {"zh-CN": "方案文档生成：将各专家组的研究成果整合为完整的Word方案、PPT汇报材料、Excel数据表。", "en": "Generate Word/PPT/Excel documents from research results."}}
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "战略决策委员会", "responsibility": "统筹全局规划与战略决策", "manager": "planner",
+    "agents": ["planner", "mckinsey", "policy_research", "industry", "architect", "finance", "presales", "doc_maker"],
+    "children": [
+      {"dept_name": "政策研究组", "responsibility": "政府政策研究与申报", "manager": "policy_research", "agents": ["policy_research", "policy_app", "govt_affairs"], "children": [], "i18n": {"dept_name": {"zh-CN": "政策研究组", "en": "Policy Research"}, "responsibility": {"zh-CN": "政府政策研究与申报", "en": "Government policy research and applications"}}},
+      {"dept_name": "产业研究组", "responsibility": "产业链分析与智算规划", "manager": "industry", "agents": ["industry", "aic", "llm_research"], "children": [], "i18n": {"dept_name": {"zh-CN": "产业研究组", "en": "Industry Research"}, "responsibility": {"zh-CN": "产业链分析与智算规划", "en": "Industry chain analysis and AIC planning"}}},
+      {"dept_name": "技术架构组", "responsibility": "系统架构与产品开发", "manager": "architect", "agents": ["architect", "pm", "frontend", "backend", "qa"], "children": [], "i18n": {"dept_name": {"zh-CN": "技术架构组", "en": "Tech Architecture"}, "responsibility": {"zh-CN": "系统架构与产品开发", "en": "System architecture and product development"}}},
+      {"dept_name": "财务法务组", "responsibility": "财务测算与合规风控", "manager": "finance", "agents": ["finance", "tax", "legal"], "children": [], "i18n": {"dept_name": {"zh-CN": "财务法务组", "en": "Finance & Legal"}, "responsibility": {"zh-CN": "财务测算与合规风控", "en": "Financial modeling and compliance"}}},
+      {"dept_name": "商务运营组", "responsibility": "市场拓展与交付管理", "manager": "presales", "agents": ["presales", "delivery", "sales", "ecosystem"], "children": [], "i18n": {"dept_name": {"zh-CN": "商务运营组", "en": "Business Operations"}, "responsibility": {"zh-CN": "市场拓展与交付管理", "en": "Market expansion and delivery management"}}},
+      {"dept_name": "文档支撑组", "responsibility": "方案文档与内容运营", "manager": "doc_maker", "agents": ["doc_maker", "ai_content", "hr"], "children": [], "i18n": {"dept_name": {"zh-CN": "文档支撑组", "en": "Document Support"}, "responsibility": {"zh-CN": "方案文档与内容运营", "en": "Document generation and content operations"}}}
+    ],
+    "i18n": {"dept_name": {"zh-CN": "战略决策委员会", "en": "Strategy Committee"}, "responsibility": {"zh-CN": "统筹全局规划与战略决策", "en": "Overall planning and strategic decisions"}}
+  }
+}
