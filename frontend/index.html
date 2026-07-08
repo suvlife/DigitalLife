@@ -4,9 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0" />
     <title>数字人生</title>
+    <script>
+      // 全局错误捕获：防止 JS 加载失败导致白屏
+      window.addEventListener('error', function(e) {
+        if (e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) {
+          console.error('资源加载失败:', e.target.src || e.target.href);
+          var app = document.getElementById('app');
+          if (app && !app.querySelector('.app-loaded')) {
+            app.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;background:#f5f5f5;color:#333"><h1 style="font-size:24px;margin-bottom:10px">数字人生</h1><p style="color:#666;margin-bottom:20px">正在加载，请稍候...</p><button onclick="location.reload()" style="padding:10px 24px;background:#4f46e5;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px">重新加载</button></div>';
+          }
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('未处理的异常:', e.reason);
+      });
+    </script>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;background:#f5f5f5;color:#333"><div style="font-size:28px;font-weight:700;margin-bottom:20px">数字人生</div><div style="width:36px;height:36px;border:3px solid #ddd;border-top-color:#4f46e5;border-radius:50%;animation:spin 0.8s linear infinite"></div></div><style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
-  </html>
+</html>
