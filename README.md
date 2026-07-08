@@ -299,3 +299,68 @@ cd frontend && npm run build
 - [Vue.js](https://vuejs.org/) — 渐进式前端框架
 - [LiteLLM](https://github.com/BerriAI/litellm) — 多厂商 LLM 统一调用
 - [peewee-async](https://github.com/woodyl/peewee-async) — 异步 ORM
+
+---
+
+## 📖 使用指南
+
+### 首次使用
+1. 打开网站，注册第一个账号（自动成为管理员）
+2. 系统内置 LLM API Key，开箱即用无需配置
+3. 在团队列表中启用需要的团队
+4. 进入房间，向 Agent 发送消息开始对话
+
+### 团队使用
+- **股票分析大师团队**：在"大师辩论厅"提问个股分析，各流派大师辩论后由 CIO 调用 `submit_conclusion` 提交综合结论
+- **国学命理团队**：在"排盘请求室"提供生辰八字，排盘师排盘后各流派大师分析，综合研判官提交结论
+- **顶级规划智库**：在"战略指挥部"提出规划需求，各领域专家协作产出方案
+- **AI视频创作工坊**：在"创作大本营"提出视频需求，4位导演辩论后总导演提交创作方案
+- **OPC产业平台社区**：在"OPC作战室"提出产业园区规划需求，全链路专家协作
+
+### 博客自动发布
+- 综合研判官/CIO 调用 `submit_conclusion` 时，自动将完整分析发布到 Ghost 博客
+- 博客内容包含：任务背景 + 各专家分析 + 综合结论
+- 自动生成标题、标签（根据内容关键词）
+- 博客格式：Ghost Lexical（完整渲染标题/段落/列表/粗体）
+
+### 多租户
+- 每个用户有自己的团队空间（私有团队）
+- 公共预设团队所有用户可见
+- 管理员可跨租户访问所有团队
+- 用户可添加自己的 LLM API Key 覆盖内置 Key
+
+### 搜索引擎
+三级自动回退：Tavily（质量最好）> Brave > Bing（无需 Key）
+搜索时自动加入当前年份，默认搜索过去一年的结果。
+
+### 主题与字体
+- 浅色/深色/跟随系统三种主题
+- 默认苹方字体（PingFang SC），回退到 Microsoft YaHei / Noto Sans SC
+
+### 移动端
+- 支持 iOS/Android 浏览器访问
+- 触控目标 44px（Apple HIG 标准）
+- viewport-fit=cover 安全区适配
+
+---
+
+## 🚀 服务器部署
+
+### 一键部署
+```bash
+git clone https://github.com/suvlife/DigitalLife.git
+cd DigitalLife
+bash deploy/deploy.sh
+```
+
+### 安全更新（保留数据）
+```bash
+cd /opt/digitallife
+bash deploy/update.sh
+```
+
+### 自动化运维
+- **systemd**：服务崩溃自动重启
+- **Watchdog**：每 2 分钟健康检查（`deploy/watchdog.sh`）
+- **Certbot**：SSL 证书自动续期
+- **自动更新**：每天凌晨拉取新代码（`deploy/auto-update.sh`）
