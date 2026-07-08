@@ -328,13 +328,22 @@ onMounted(async () => {
   }
 
   // 先检查用户登录状态
-  currentUser.value = await getCurrentUser();
+  try {
+    currentUser.value = await getCurrentUser();
+  } catch {
+    currentUser.value = null;
+  }
   authChecked.value = true;
 
-  // 如果未登录且有旧 Token，尝试兼容旧模式
+  // 如果未登录且没有旧 Token，显示登录页
   if (!currentUser.value && !getToken()) {
-    // 未登录，显示登录页（由模板控制）
     return;
+  }
+
+  // 如果未登录但有旧 Token（兼容旧模式），尝试用 Token 加载
+  if (!currentUser.value && getToken()) {
+    // Token 模式下可能 auth 未启用，继续加载主界面
+    currentUser.value = { id: 0, username: 'operator', display_name: 'Operator', role: 'USER' } as any;
   }
 
   startRealtimeClient();
@@ -366,11 +375,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- 加载中（authChecked 为 false 时） -->
+  <div v-if="!authChecked" class="app-loading">
+    <div class="app-loading-text">数字人生</div>
+    <div class="app-loading-spinner"></div>
+  </div>
+
   <!-- 未登录时显示登录页 -->
-  <LoginPage v-if="authChecked && !currentUser" @logged-in="(u) => { currentUser = u; startRealtimeClient(); loadTeams(); checkSystemStatus(); }" />
+  <LoginPage v-else-if="!currentUser" @logged-in="(u) => { currentUser = u; startRealtimeClient(); loadTeams(); checkSystemStatus(); }" />
 
   <!-- 已登录显示主界面 -->
-  <div v-else-if="authChecked && currentUser" class="shell" :class="{ 'shell-console': isConsoleRoute }">
+  <div v-else class="shell" :class="{ 'shell-console': isConsoleRoute }">
     <div class="ambient ambient-left"></div>
     <div class="ambient ambient-right"></div>
 
@@ -492,6 +507,35 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.app-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--surface-page);
+}
+
+.app-loading-text {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+}
+
+.app-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border-default);
+  border-top-color: var(--interactive-selected);
+  border-radius: 50%;
+  animation: app-loading-spin 0.8s linear infinite;
+}
+
+@keyframes app-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
 .shell {
   position: relative;
   height: 100%;
