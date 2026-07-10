@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-多 Agent 聊天室框架，支持多个 LLM Agent 按轮次对话与 Function Calling。后端提供 HTTP + WebSocket API。当前包含两个前端：终端前端 `tui/` 与 Web 前端 `frontend/`。
+多 Agent 聊天室框架，支持多个 LLM Agent 按轮次对话与 Function Calling。后端提供 HTTP + WebSocket API。当前包含三个前端入口：终端前端 `tui/`、旧版 Web 控制台 `frontend/` 与武侠 2.5D Web 前端 `frontend-v2/`（生产路径 `/v2/`）。
 
 ## 技术栈
 
@@ -37,7 +37,7 @@
 │   ├── constants.py         # 常量定义
 │   ├── route.py             # 路由配置
 │   └── ...                  # 其他模块文件
-├── frontend/                # Web 前端（Git Submodule）
+├── frontend/                # 旧版 Web 控制台（已纳入主仓库）
 │   ├── src/                 # Vue 3 + TypeScript 源码
 │   ├── public/              # 静态资源
 │   ├── scripts/             # 构建脚本
@@ -76,7 +76,7 @@
 
 **Git 工具约定**
 - 使用 `scripts/commit_and_push_frondbackend.py` 统一管理前后端 Git 操作
-- 该脚本会自动处理前端 submodule 切换分支、同步远端、提交、推送等操作
+- 该脚本统一查看和管理仓库 Git 状态、提交与推送
 - 示例用法：
   ```bash
   # 查看前后端状态
@@ -97,9 +97,9 @@
 - 开发完成后不要自动提交，等待用户明确要求「提交」或「commit」后再执行
 - commit message 不要加 `Co-Authored-By` 行，不要署名 AI Agent
 
-**前端子模块**
-- 在 `frontend/` 子模块内提交时，必须先切换到 master 分支，禁止在 detached HEAD 状态下提交
-- 提交后端时若前端有新 commit，需同步更新子模块指针：`git add frontend && git commit`
+**双 Web 前端**
+- `frontend/` 与 `frontend-v2/` 都直接纳入主仓库，不是 Git Submodule。
+- 修改任一前端后分别运行其 build/test；生产构建使用 `scripts/build_frontend.py`。
 
 **冲突处理**
 - 禁止擅自使用 `git checkout --theirs .` 或 `git checkout --ours .` 放弃改动
@@ -231,7 +231,8 @@ STORAGE_ROOT/
 ## 前端仓库说明（双前端）
 
 - `tui/`：仓库内原生终端前端，适合本地排障、终端观察和自动化终端操作。
-- `frontend/`：Web 前端子仓库（Git Submodule，见 `.gitmodules`），基于 Vue 3 + Vite + TypeScript，面向浏览器使用场景。
+- `frontend/`：旧版技术控制台，生产路径 `/`。
+- `frontend-v2/`：武侠 2.5D 沉浸式前端，生产路径 `/v2/`。
 - 两个前端都消费同一套后端 API（HTTP + WebSocket），功能目标保持一致，交互形态不同。
 
 ## 文档索引（docs/）

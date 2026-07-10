@@ -21,6 +21,11 @@ _WS_TOPICS = [
     MessageBusTopic.TASK_CREATED,
     MessageBusTopic.TASK_CHANGED,
     MessageBusTopic.USAGE_UPDATED,
+    MessageBusTopic.RUN_CREATED,
+    MessageBusTopic.RUN_PROGRESS_CHANGED,
+    MessageBusTopic.ROOM_RUN_CHANGED,
+    MessageBusTopic.FINAL_ANSWER_COMPLETED,
+    MessageBusTopic.BLOG_PUBLISH_CHANGED,
 ]
 
 
@@ -130,6 +135,18 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
             payload["event"] = "task_changed"
         if msg.topic == MessageBusTopic.USAGE_UPDATED:
             payload["event"] = "usage_updated"
+        if msg.topic == MessageBusTopic.RUN_CREATED:
+            payload["event"] = "run_created"
+        if msg.topic == MessageBusTopic.RUN_PROGRESS_CHANGED:
+            payload["event"] = "run_progress_changed"
+        if msg.topic == MessageBusTopic.ROOM_RUN_CHANGED:
+            payload["event"] = "room_run_changed"
+        if msg.topic == MessageBusTopic.FINAL_ANSWER_COMPLETED:
+            payload["event"] = "final_answer_completed"
+        if msg.topic == MessageBusTopic.BLOG_PUBLISH_CHANGED:
+            payload["event"] = "blog_publish_changed"
+        if msg.event_id is not None:
+            payload["event_id"] = msg.event_id
         logger.info(f"[ws] event: topic={msg.topic.name}, payload={payload}")
         task = asyncio.get_running_loop().create_task(self._send(jsonUtil.json_dump(payload)))
         self._pending_send_tasks.add(task)

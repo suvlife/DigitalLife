@@ -146,9 +146,9 @@ jobs:
         pip install pyinstaller
 
     - name: Install frontend dependencies
-      working-directory: frontend
       run: |
-        npm ci
+        npm ci --prefix frontend
+        npm ci --prefix frontend-v2
 
     - name: Import Apple certificate
       if: ${{ env.APPLE_CERTIFICATE_P12 != '' }}

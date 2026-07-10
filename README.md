@@ -1,366 +1,704 @@
-![数字人生](image/togo_agent_team.png)
+<p align="center">
+  <img src="image/togo_agent_team.png" alt="数字人生：多智能体协作平台" width="900">
+</p>
 
-# 数字人生 🚀
+# 数字人生（DigitalLife）🚀
 
-[English](README_EN.md) | [中文](README.md)
+<p align="center">
+  面向复杂任务的开源多智能体协作平台：让多个 LLM Agent 在团队、部门与聊天室中自主讨论、调用工具、追踪进度并汇总最终答案。
+</p>
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Framework](https://img.shields.io/badge/framework-Tornado-orange.svg)](https://www.tornadoweb.org/)
-[![UI](https://img.shields.io/badge/UI-Vue3%20%2B%20Textual-green.svg)](https://textual.textualize.io/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#)
+<p align="center">
+  <a href="README.md">中文</a> · <a href="README_EN.md">English</a> ·
+  <a href="https://github.com/suvlife/DigitalLife/releases">Releases</a> ·
+  <a href="deploy/README.md">部署指南</a>
+</p>
 
-**数字人生** 是一款专为大语言模型（LLM）设计的**多智能体协作开源软件**。让多个 AI Agent 能够像人类团队一样自由交流、实时协作、辩论博弈，共同攻克复杂任务。
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.5.0-blue">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
+  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
+  <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
+  <img alt="Frontend" src="https://img.shields.io/badge/frontend-Vue%203%20%2B%20TypeScript-42b883">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey">
+</p>
 
-> **关于名字的由来**：数字人生，寓意在数字世界中构建一个由 AI Agent 组成的"人生"团队，每个 Agent 都有自己独特的专业领域、人格风格和思辨能力，它们在团队中各司其职、相互启发、辩论博弈，最终产出超越单一 AI 的综合智慧。
-
-### 基于 TSP 构建
-
-数字人生的工具执行层基于 [TSP (Tool Service Protocol)](https://github.com/alexazhou/TSP) 构建 —— 一个轻量级的 LLM 工具服务器协议。借助 TSP，你可以用 **10 行代码构建自己的 Agent 工具**。
-
----
-
-## ✨ 核心特性
-
-### 1. 真正的团队协作
-多 Agent 在统一的群聊空间内自由发言、互相启发、补位配合，模拟真实人类团队的沟通模式，通过协作产生 1+1>2 的效果。
-
-### 2. 自由定义的 Agent 人格
-你可以随心所欲地定义每个 Agent 的角色定位、专业技能与性格色彩。无论是严谨的代码审查专家，还是充满创意的产品策划，都能在你的定制下跃然纸上，打造专属的 AI 梦之队。
-
-### 3. 辩论博弈与综合结论
-多流派大师在辩论厅中各抒己见、相互驳斥，最终由综合研判角色调用 `submit_conclusion` 提交统一结论。支持多轮辩论博弈，确保结论经过充分论证。
-
-### 4. 告别繁琐的工作流编排
-无需事先规划死板的流程图。得益于强大的调度逻辑，Agent 们能根据当前任务进展自主决定"下一步该谁上"，广泛适用于各种突发、多变的复杂任务场景。
-
-### 5. 强大的多层级团队架构
-支持多部门、多层级的组织架构管理。你可以像管理真实公司一样划分部门（Dept），应对海量 Agent 参与的超大型复杂工程任务。
-
-### 6. 全程可视化的友好体验
-配备现代化的 Web 前端（Vue 3 + TypeScript），从团队角色配置到 Agent 的每一个思考步骤、每一条消息流向，全部实时可视化呈现。支持**浅色/深色/跟随系统**三种主题切换。
-
-### 7. Token 用量实时统计
-窗口右下角悬浮统计栏实时显示 Token 消耗量和当前模型信息，支持按 Agent / 模型 / 日期维度查看详细统计。
-
-### 8. 文件上传与预览
-聊天窗口支持文件上传（txt/md/json/csv/pdf/docx/xlsx/图片等格式），上传后 Agent 可通过工具读取文件内容，生成的文件支持点击下载和窗口预览。
-
-### 9. 多团队多模型并行
-支持多个团队同时进行独立任务，每个团队可选择不同的 LLM 模型（如团队A用 DeepSeek，团队B用 Qwen），避免多任务共用一个模型触发频率限制。
-
-### 10. 极致的跨平台兼容性
-基于 Python 与现代前端技术构建，完美支持 macOS、Windows 与 Linux 操作系统。提供 Docker 一键部署。
+> [!IMPORTANT]
+> 本项目会调用第三方大模型与可选的搜索、Ghost CMS 等服务，相关费用、数据处理规则与内容合规责任由对应服务和使用者承担。股票、命理等内置团队的输出仅用于研究与辅助分析，不构成投资、医疗、法律或其他专业建议。
 
 ---
 
-## 🏆 内置专业团队
+## 目录
 
-### 股票分析大师团队（20 位 Agent）
-汇聚全球顶级投资大师，覆盖四大投资流派：
-
-| 流派 | 大师 | 核心理论 |
-|------|------|---------|
-| 价值投资 | 巴菲特、格雷厄姆 | 护城河/安全边际/内在价值 |
-| 成长投资 | 费雪、彼得·林奇、欧尼尔 | 闲聊法/十倍股/CAN SLIM |
-| 技术交易 | 威科夫、江恩、利弗莫尔、舒华兹 | 量价分析/时间周期/趋势追踪 |
-| 量化宏观 | 西蒙斯、达里奥、索罗斯 | 统计套利/经济周期/反身性理论 |
-
-另有道氏理论家、艾略特波浪大师、量价分析师、风控官、市场情报员、数据分析师等专业角色，大师们在"大师辩论厅"中辩论博弈，由首席投资官综合研判后提交结论。
-
-### 国学命理研究团队（9 位 Agent）
-融合中华传统命理学三大流派：
-
-| 流派 | 大师 | 核心理论 |
-|------|------|---------|
-| 四柱八字 | 子平格局派、滴天髓派、盲派 | 渊海子平/五行气理/盲派口诀 |
-| 紫微斗数 | 紫微大师 | 十四主星/四化飞星/大限流年 |
-| 梅花易数 | 梅花大师 | 邵雍梅花/体用生克/万物类象 |
-
-另有四柱排盘师、运势分析师、经典考证官、综合研判官，支持事业/财运/健康/爱情/家庭/学业等全领域预测。
-
-### 软件研发团队 & 创意脑暴团队
-内置标准软件开发团队（项目经理/架构师/前端工程师/后端工程师/测试工程师等）和创意脑暴团队（主持人/创意达人/魔鬼代言人/研究员等），开箱即用。
-
-### 顶级规划智库（23 位专家）
-覆盖全链条规划能力的综合智库团队：
-
-| 部门 | 专家 | 职能 |
-|------|------|------|
-| 战略决策委员会 | 总规划师、麦肯锡咨询顾问 | 顶层规划、结构化分析、综合决策 |
-| 政策研究组 | 政策研究/政策申报/政府事务专家 | 政府政策搜集、项目申报、汇报材料 |
-| 产业研究组 | 产业研究/智算中心/大模型专家 | 产业链分析、算力规划、LLM选型 |
-| 技术架构组 | 架构师/产品经理/前后端/测试 | 系统设计、产品规划、开发测试 |
-| 财务法务组 | 财务/税务/法务专家 | 财务模型测算、税务规划、合规审查 |
-| 商务运营组 | 售前/交付/销售/生态专家 | 解决方案、项目交付、市场拓展 |
-| 文档支撑组 | 文档制作/AI内容/人力专家 | Word/PPT/Excel生成、内容运营 |
-
-### AI视频创作工坊（12 位专家）
-以导演制为核心的视频创作团队：
-
-| 部门 | 专家 | 风格 |
-|------|------|------|
-| 导演组 | 纪录片导演、广告导演、科技科普导演、短视频导演 | 4种风格导演创意PK，辩论最佳方案 |
-| 剧本组 | 首席编剧、分镜设计师 | 剧本结构、镜头语言、视觉叙事 |
-| 视觉组 | 视觉设计总监、AI视频专家、AI图像专家 | Seedance 2.0视频 + Seedream图片生成 |
-| 运营组 | 素材采集专家、商业叙事专家 | 素材管理、商业模式讲故事 |
-
-4位导演就同一主题各出方案相互辩论，总导演综合裁决后提交最终创作方案。深度集成火山引擎产品编排能力。
-
-### OPC产业平台社区（18 位专家）
-火山引擎方视角的产业园区/创新中心全链路规划运营团队：
-
-| 部门 | 专家 | 职能 |
-|------|------|------|
-| OPC总指挥部 | OPC总指挥、战略规划总监 | 火山引擎方首席代表、统筹全局、政府对接 |
-| 政策规划组 | 政企合作/政策设计/产业基金专家 | 合作框架、政策体系、引导基金 |
-| 园区规划组 | 园区规划/技术赋能/数字化架构师 | 空间规划、火山引擎技术输出、智慧园区 |
-| 招商运营组 | 招商总监/生态合作/企业服务专家 | 招商引资、产业链整合、企业全生命周期服务 |
-| 产业孵化组 | 孵化运营/投后管理/品牌营销专家 | 创业孵化、投后赋能、品牌建设 |
-| 数据运营组 | 数据分析/活动运营/商业化/合规风控专家 | 数据驱动、活动运营、变现模式、风控 |
-
-覆盖规划→建设→运营→发展全生命周期，政策组vs招商组辩论优惠力度vs可持续性。
+- [项目简介](#项目简介)
+- [v0.5.0 重点更新](#v050-重点更新)
+- [核心能力](#核心能力)
+- [内置团队](#内置团队)
+- [系统架构](#系统架构)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [Web 界面与使用流程](#web-界面与使用流程)
+- [API 与实时事件](#api-与实时事件)
+- [Ghost 博客发布](#ghost-博客发布)
+- [数据、安全与生产部署](#数据安全与生产部署)
+- [开发、测试与发布](#开发测试与发布)
+- [常见问题](#常见问题)
+- [项目结构](#项目结构)
+- [路线与已知边界](#路线与已知边界)
+- [许可证与致谢](#许可证与致谢)
 
 ---
 
-## 🚀 快速开始
+## 项目简介
 
-### 方法 1：Docker 一键部署（推荐）
+**数字人生**是一套 Python + Vue 3 构建的多智能体协作系统。与固定 DAG 或单 Agent 问答不同，它把复杂任务放进一个可配置的“数字组织”中：
 
-```bash
-# 克隆仓库
-git clone https://github.com/suvlife/DigitalLife.git
-cd DigitalLife
+1. 用户向团队或房间提出任务；
+2. 调度器根据房间、部门、Agent 状态和团队策略选择下一位参与者；
+3. Agent 使用不同模型进行分析，并可通过 TSP / Function Calling 调用工具；
+4. WebSocket 将思考、回复、工具调用、重试与运行进度实时推送到前端；
+5. 汇总角色提交最终结论；
+6. 可选地将最终结论持久化并发布到 Ghost CMS。
 
-# 构建并启动
-docker-compose up -d
+项目同时提供三种交互入口：
 
-# 访问 http://localhost:8080
+| 入口 | 路径/目录 | 适用场景 |
+|---|---|---|
+| 经典 Web 控制台 | `/`、`frontend/` | 团队配置、聊天室、设置、用量与日常管理 |
+| 江湖书院 V2 | `/v2/`、`frontend-v2/` | 2.5D 沉浸式团队/房间视图、任务进度与最终答案 |
+| TUI | `tui/` | 终端环境、远程服务器与轻量操作 |
+
+### 基于 TSP 的工具层
+
+工具执行层支持 [TSP（Tool Service Protocol）](https://github.com/alexazhou/TSP)，也保留原生 Function Calling 驱动。通过 `driver_fallback.tsp_to_native` 可以在外部 TSP/GTSP 不可用时回退到原生工具调用，避免单一工具驱动阻塞整个任务。
+
+---
+
+## v0.5.0 重点更新
+
+- **江湖书院 V2 前端**：新增独立的 Vue 3/Vite 应用，生产路径为 `/v2/`，包含院落、房间、NPC、对话时间线、进度卷轴、任务侧栏和归档视图。
+- **可恢复任务运行记录**：新增 `task_runs` / `room_runs` 数据模型与迁移，记录任务、房间、Agent、进度、最终答案和失败信息。
+- **Run 查询 API**：新增当前运行、历史列表、详情、房间快照、时间线与最终答案接口。
+- **实时进度事件**：WebSocket 支持运行状态、房间状态、Agent 活动、LLM 重试与博客发布状态更新。
+- **Ghost 发布队列**：最终结论通过持久化 outbox 异步发布，支持幂等、重试、重启恢复、状态跟踪与安全 HTML 转换。
+- **LLM 性能与限流保护**：每个 LLM 服务可独立设置并发上限与 RPM，包含滑动窗口节流、重试退避和性能元数据。
+- **双前端统一构建**：`scripts/build_frontend.py` 可安装、构建并同步经典前端和 V2 前端。
+- **版本一致性工具**：通过 `VERSION`、`scripts/set_version.py` 与 `scripts/check_version_consistency.py` 统一后端、前端和容器版本。
+- **密钥安全加固**：示例密钥与真实密钥分离，Ghost 密钥不通过设置接口回传，支持环境变量覆盖。
+
+---
+
+## 核心能力
+
+### 多 Agent 自主协作
+
+- Agent 在统一聊天室内自由交流、补充、质疑与辩论；
+- 支持多房间、多部门、多层级团队树；
+- 支持多团队并行运行，每个 Agent 或团队可选择不同模型；
+- 支持顺序讨论、快速共识、并行观点等调度策略；
+- 汇总角色可调用 `submit_conclusion` 形成结构化最终答案。
+
+### 可配置 Agent 与团队
+
+- 自定义角色名称、系统提示词、专业能力、人格风格与工具；
+- 从预设创建团队，也可导出团队预设；
+- 支持房间成员编排和部门树维护；
+- 支持用户私有团队、公共预设与管理员管理能力。
+
+### 运行进度与可观测性
+
+- 任务级状态：排队、运行、完成、失败及百分比；
+- 房间级状态：当前 Agent、活动、消息数、贡献者进度；
+- Agent 活动：推理、回复、工具调用、上游重试等时间线；
+- Token 用量：实时、汇总与总量统计；
+- 最终答案和 Ghost 发布状态可独立查询。
+
+### 工具与文件
+
+- TSP / 原生 Function Calling 双驱动与自动降级；
+- 支持 Skill 导入、查询与删除；
+- 聊天文件上传、下载、预览和工作目录沙箱；
+- 可选搜索能力与自定义模型服务；
+- GTSP 安装脚本支持受信任发布源和校验文件。
+
+### 多模型与兼容接口
+
+项目通过 LiteLLM 接入 OpenAI-compatible 服务，可配置 DeepSeek、通义千问、Kimi、OpenAI、Anthropic 等模型或自建网关。每个服务可单独设置：
+
+- `base_url`、`api_key`、`model`；
+- `max_concurrency` 与 `requests_per_minute`；
+- 上下文窗口、输出预留与自动压缩阈值；
+- 额外请求头和经过白名单校验的 provider 参数。
+
+---
+
+## 内置团队
+
+仓库内置多个可以直接启用或二次修改的团队预设：
+
+| 团队 | 主要角色/能力 | 典型任务 |
+|---|---|---|
+| 股票分析大师团队 | 价值、成长、技术、量化、宏观、风控与 CIO 汇总 | 公司研究、行业比较、风险清单、观点辩论 |
+| 国学命理研究团队 | 四柱、紫微、梅花、经典考证与综合研判 | 传统文化研究与多流派观点整理 |
+| 软件研发团队 | 产品、架构、开发、测试、运维与评审 | 需求拆解、技术方案、代码审查、上线计划 |
+| 创意脑暴团队 | 多角色发散、质疑、筛选与总结 | 产品创意、营销主题、活动方案 |
+| 顶级规划智库 | 战略、产业、政策、金融、技术与风险专家 | 区域/企业战略和复杂规划 |
+| AI 视频创作工坊 | 导演、编剧、分镜、视觉、素材与运营 | 视频策划、脚本、分镜和制作方案 |
+| OPC 产业平台社区 | 政策、园区、招商、孵化、数据与合规 | 园区/创新中心全生命周期规划 |
+
+预设位于 `assets/preset/teams/`，角色模板位于 `assets/preset/role_templates/`。
+
+---
+
+## 系统架构
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│  Classic Web / Wuxia V2 / TUI                             │
+└───────────────────────┬────────────────────────────────────┘
+                        │ HTTP + WebSocket
+┌───────────────────────▼────────────────────────────────────┐
+│ Controller：路由、鉴权、参数校验、租户边界、速率限制       │
+├────────────────────────────────────────────────────────────┤
+│ Service：任务运行、房间调度、Agent、LLM、工具、Ghost 队列 │
+├────────────────────────────────────────────────────────────┤
+│ DAL：SQLite / peewee-async / 迁移 / 运行快照                │
+├────────────────────────────────────────────────────────────┤
+│ Model：团队、房间、Agent、消息、活动、Run、Publication     │
+├────────────────────────────────────────────────────────────┤
+│ Util：配置、路径、日志、序列化、LLM HTTP 客户端            │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### 方法 2：源码运行
+后端遵循单向依赖：
+
+```text
+controller → service → dal → model → util
+```
+
+### 主要技术栈
+
+| 层 | 技术 |
+|---|---|
+| 后端 | Python 3.11+、Tornado、Pydantic、aiohttp、LiteLLM |
+| 数据 | SQLite、peewee、peewee-async、aiosqlite |
+| 经典前端 | Vue 3、TypeScript、Vite、Vitest |
+| V2 前端 | Vue 3、Vue Router、markdown-it、霞鹜文楷、Vitest |
+| TUI | Textual |
+| 部署 | Docker、Docker Compose、Nginx、systemd、GitHub Actions |
+
+---
+
+## 快速开始
+
+### 环境要求
+
+| 组件 | 建议版本 | 用途 |
+|---|---|---|
+| Python | 3.11+ | 后端、测试和构建脚本 |
+| Node.js | 20+ | 两套 Web 前端 |
+| npm | 随 Node.js 安装 | 前端依赖和构建 |
+| Git | 近期稳定版 | 获取源码 |
+| Docker / Compose | 可选 | 容器部署 |
+
+### 方式一：Docker Compose（推荐）
 
 ```bash
-# 克隆仓库
+git clone https://github.com/suvlife/DigitalLife.git
+cd DigitalLife
+docker compose up -d --build
+```
+
+访问：
+
+- 经典控制台：`http://localhost:8080/`
+- 江湖书院 V2：`http://localhost:8080/v2/`
+- 健康检查：`http://localhost:8080/system/status.json`
+
+查看日志或停止服务：
+
+```bash
+docker compose logs -f togospace
+docker compose down
+```
+
+运行数据保存在 Compose 卷 `togospace-storage` 中。删除容器不会自动删除该卷；执行 `docker compose down -v` 会删除卷，请先确认已备份。
+
+### 方式二：源码运行
+
+```bash
 git clone https://github.com/suvlife/DigitalLife.git
 cd DigitalLife
 
-# 安装后端依赖
 python3.11 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
 
-# 构建前端（需要 Node.js 20+）
-cd frontend && npm install && npm run build && cd ..
-mkdir -p assets/frontend && cp -r frontend/dist/* assets/frontend/
+cd frontend && npm ci && cd ..
+cd frontend-v2 && npm ci && cd ..
+.venv/bin/python scripts/build_frontend.py
 
-# 启动后端
 .venv/bin/python src/backend_main.py
-
-# 访问 http://127.0.0.1:8180
 ```
 
-### 方法 3：开发模式（前后端分离）
+默认访问地址为 `http://127.0.0.1:8180/`，V2 为 `http://127.0.0.1:8180/v2/`。
+
+如需指定配置目录或端口：
 
 ```bash
-# 终端 1：启动后端
+.venv/bin/python src/backend_main.py --config-dir /path/to/config --port 8180
+```
+
+### 方式三：前后端分离开发
+
+终端 1：
+
+```bash
 .venv/bin/python src/backend_main.py --port 8180
-
-# 终端 2：启动前端开发服务器
-cd frontend && npm run dev
-# 访问 http://localhost:8181（自动代理到后端）
 ```
 
-### 首次配置
-1. 打开 Web 界面，进入设置页
-2. 在"LLM 服务"中添加你的 API Key（支持 Kimi/DeepSeek/通义千问/OpenAI/Anthropic 等）
-3. 启用团队，开始使用
-
----
-
-## 📁 项目结构
-
-```
-DigitalLife/
-├── src/                        # 后端源码（Python + Tornado）
-│   ├── backend_main.py         # 后端入口
-│   ├── route.py                # API 路由
-│   ├── controller/             # 控制器层（HTTP/WebSocket）
-│   ├── service/                # 业务逻辑层
-│   │   ├── agentService/       # Agent 核心引擎
-│   │   ├── roomService/        # 聊天室与调度
-│   │   ├── llmService/         # LLM 推理服务
-│   │   ├── funcToolService/    # Agent 工具系统
-│   │   └── ...
-│   ├── dal/                    # 数据访问层（peewee-async）
-│   ├── model/                  # 数据模型
-│   └── util/                   # 工具类
-├── frontend/                   # 前端源码（Vue 3 + TypeScript + Vite）
-│   ├── src/
-│   │   ├── components/         # Vue 组件
-│   │   ├── pages/              # 路由页面
-│   │   ├── realtime/           # WebSocket 实时层
-│   │   ├── theme/              # 主题系统（深浅色）
-│   │   └── ...
-│   └── package.json
-├── assets/                     # 静态资源
-│   ├── preset/                 # 预置团队和角色模板
-│   │   ├── teams/              # 团队配置 JSON
-│   │   └── role_templates/     # 角色模板 JSON（56 个）
-│   ├── frontend/               # 前端构建产物
-│   ├── i18n/                   # 国际化文件
-│   └── skills/                 # 内置技能
-├── tests/                      # 测试套件（525 单元测试）
-├── Dockerfile                  # Docker 构建
-├── docker-compose.yml          # Docker Compose
-└── requirements.txt            # Python 依赖
-```
-
----
-
-## 🔧 技术栈
-
-### 后端
-- **Python 3.10+** + **Tornado 6.5**（异步 Web 框架）
-- **peewee + peewee-async + aiosqlite**（异步 ORM + SQLite）
-- **LiteLLM**（多厂商 LLM 统一调用）
-- **claude-agent-sdk**（Claude SDK 驱动）
-- **pytspclient**（TSP 工具协议客户端）
-
-### 前端
-- **Vue 3.5** + **TypeScript 5.7** + **Vite 6**
-- **vue-router 4** + **vue-i18n 9**
-- **markdown-it** + **highlight.js**（Markdown 渲染）
-- 原生 fetch（无 axios 依赖）
-- 模块级 ref 单例 store（无 Pinia 依赖）
-
-### 部署
-- **Docker** + **Docker Compose**
-- 非 root 用户运行
-- SQLite WAL 模式 + 连接池
-
----
-
-## 🛡️ 安全特性
-
-- 默认仅监听 127.0.0.1（需外部访问时显式配置 + 启用鉴权）
-- Bearer Token 鉴权（常量时间比较，防时序攻击）
-- SSRF 防护（LLM 服务测试接口屏蔽内网/元数据端点）
-- Zip-Slip + Zip 炸弹防护（Skill 导入）
-- 文件上传白名单 + 大小限制
-- 路径穿越防护（工作目录沙箱）
-- API 密钥脱敏（不返回明文）
-- 速率限制（敏感接口）
-- provider_params 白名单过滤
-
----
-
-## 📊 API 概览
-
-| 类别 | 端点 | 说明 |
-|------|------|------|
-| 系统 | `GET /system/status.json` | 系统状态 |
-| 团队 | `GET /teams/list.json` | 团队列表 |
-| Agent | `POST /agents/{id}/modify_properties.json` | 修改 Agent 属性（含模型） |
-| 房间 | `POST /rooms/{id}/messages/send.json` | 发送消息 |
-| 房间 | `POST /rooms/{id}/messages/upload.json` | 上传文件 |
-| 文件 | `GET /files/download.json` | 下载文件 |
-| 文件 | `GET /files/preview.json` | 预览文件 |
-| 用量 | `GET /usage/realtime.json` | 实时 Token 统计 |
-| 用量 | `GET /usage/summary.json` | Token 统计面板 |
-| LLM | `GET /config/llm_services/list.json` | LLM 服务列表 |
-| WebSocket | `WS /ws/events.json` | 实时事件推送 |
-
----
-
-## 🧪 测试
+终端 2（经典前端）：
 
 ```bash
-# 后端单元测试
-.venv/bin/python -m pytest tests/unit -v
+cd frontend
+npm run dev
+# http://localhost:8181/
+```
 
-# 前端类型检查
-cd frontend && npx vue-tsc --noEmit
+终端 3（V2，可选）：
 
-# 前端构建
-cd frontend && npm run build
+```bash
+cd frontend-v2
+npm run dev
+# http://localhost:8182/v2/
+```
+
+### TUI
+
+```bash
+.venv/bin/python tui/tui_main.py --base-url http://127.0.0.1:8180
+# 或
+./scripts/start_tui.sh --base-url http://127.0.0.1:8180
 ```
 
 ---
 
-## 📝 License
+## 配置说明
 
-本项目基于开源协议发布，详见 [LICENSE](LICENSE)。
+应用配置由 `setting.json` 管理。源码模式下首次启动会在运行时配置目录生成配置；容器默认使用 `/storage/setting.json`。可以从模板开始：
+
+```bash
+cp assets/config_template.json /path/to/config/setting.json
+```
+
+### 最小 LLM 配置示例
+
+```json
+{
+  "language": "zh-CN",
+  "bind_host": "127.0.0.1",
+  "bind_port": 8180,
+  "default_llm_server": "qwen",
+  "llm_services": [
+    {
+      "name": "qwen",
+      "enable": true,
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "YOUR_API_KEY_HERE",
+      "type": "openai-compatible",
+      "model": "qwen-plus",
+      "max_concurrency": 5,
+      "requests_per_minute": 0
+    }
+  ]
+}
+```
+
+也可在经典 Web 控制台的设置页添加、测试、启用和切换 LLM 服务。
+
+### 关键配置项
+
+| 配置 | 默认值 | 说明 |
+|---|---:|---|
+| `language` | `zh-CN` | 界面与提示语言 |
+| `bind_host` | `127.0.0.1` | 默认仅本机监听 |
+| `bind_port` | `8180` | HTTP / WebSocket 端口 |
+| `auth.enabled` | `false` | Bearer Token 鉴权开关 |
+| `auth.token` | 空 | API 与 WebSocket 使用的共享令牌 |
+| `default_llm_server` | `null` | 默认启用的 LLM 服务名称 |
+| `llm_services[].max_concurrency` | `5` | 单服务最大并发请求数 |
+| `llm_services[].requests_per_minute` | `0` | 单服务每分钟请求限制，`0` 表示不主动限流 |
+| `driver_fallback.tsp_to_native` | `true` | TSP 不可用时回退原生工具调用 |
+| `ghost.enabled` | `false` | Ghost 自动发布总开关 |
+| `ghost.publish_status` | `published` | 发布为 `published` 或 `draft` |
+| `ghost.max_retry_attempts` | `6` | 持久化发布任务最大尝试次数 |
+
+### Bearer Token 鉴权
+
+若要监听局域网或公网地址，请务必开启鉴权并配置反向代理：
+
+```json
+{
+  "bind_host": "0.0.0.0",
+  "auth": {
+    "enabled": true,
+    "token": "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+  }
+}
+```
+
+HTTP 请求使用：
+
+```bash
+curl -H "Authorization: Bearer REPLACE_WITH_A_LONG_RANDOM_TOKEN" \
+  http://127.0.0.1:8180/teams/list.json
+```
+
+WebSocket 客户端连接后需要先发送认证消息；经典前端和 V2 前端会按配置完成该流程。
+
+### 密钥管理
+
+- 不要把真实密钥写进 Git 仓库、镜像层或截图；
+- `.env`、`.env.*`、`*secrets*.json` 和本地密钥覆盖文件已被忽略；
+- `assets/builtin_keys.example.json` 仅包含占位符；
+- Ghost 支持 `GHOST_ENABLED`、`GHOST_API_URL`、`GHOST_ADMIN_API_KEY`、`GHOST_CONTENT_API_KEY`、`GHOST_AUTO_PUBLISH` 环境变量覆盖；
+- 生产环境优先使用部署平台 Secret、私有 `setting.json` 或只读挂载。
 
 ---
 
-## 🙏 致谢
-
-- [TSP (Tool Service Protocol)](https://github.com/alexazhou/TSP) — 工具执行层协议
-- [Tornado](https://www.tornadoweb.org/) — 异步 Web 框架
-- [Vue.js](https://vuejs.org/) — 渐进式前端框架
-- [LiteLLM](https://github.com/BerriAI/litellm) — 多厂商 LLM 统一调用
-- [peewee-async](https://github.com/woodyl/peewee-async) — 异步 ORM
-
----
-
-## 📖 使用指南
+## Web 界面与使用流程
 
 ### 首次使用
-1. 打开网站，注册第一个账号（自动成为管理员）
-2. 系统内置 LLM API Key，开箱即用无需配置
-3. 在团队列表中启用需要的团队
-4. 进入房间，向 Agent 发送消息开始对话
 
-### 团队使用
-- **股票分析大师团队**：在"大师辩论厅"提问个股分析，各流派大师辩论后由 CIO 调用 `submit_conclusion` 提交综合结论
-- **国学命理团队**：在"排盘请求室"提供生辰八字，排盘师排盘后各流派大师分析，综合研判官提交结论
-- **顶级规划智库**：在"战略指挥部"提出规划需求，各领域专家协作产出方案
-- **AI视频创作工坊**：在"创作大本营"提出视频需求，4位导演辩论后总导演提交创作方案
-- **OPC产业平台社区**：在"OPC作战室"提出产业园区规划需求，全链路专家协作
+1. 启动后打开经典控制台；
+2. 在设置页添加至少一个可用的 LLM 服务；
+3. 启用一个内置团队或创建自己的团队；
+4. 进入房间输入任务；
+5. 观察 Agent 活动、工具调用、消息和 Token 使用；
+6. 等待汇总角色提交最终结论；
+7. 在 V2 运行页查看任务级、房间级进度与归档结果。
 
-### 博客自动发布
-- 综合研判官/CIO 调用 `submit_conclusion` 时，自动将完整分析发布到 Ghost 博客
-- 博客内容包含：任务背景 + 各专家分析 + 综合结论
-- 自动生成标题、标签（根据内容关键词）
-- 博客格式：Ghost Lexical（完整渲染标题/段落/列表/粗体）
+### 经典控制台 `/`
 
-### 多租户
-- 每个用户有自己的团队空间（私有团队）
-- 公共预设团队所有用户可见
-- 管理员可跨租户访问所有团队
-- 用户可添加自己的 LLM API Key 覆盖内置 Key
+适合完整配置和管理：
 
-### 搜索引擎
-三级自动回退：Tavily（质量最好）> Brave > Bing（无需 Key）
-搜索时自动加入当前年份，默认搜索过去一年的结果。
+- 团队、部门树、房间和 Agent 编辑；
+- LLM 服务、语言、Skill 与 Ghost 设置；
+- 聊天、文件上传/预览、活动时间线；
+- Token 实时和历史统计；
+- 浅色、深色、跟随系统主题与移动端适配。
 
-### 主题与字体
-- 浅色/深色/跟随系统三种主题
-- 默认苹方字体（PingFang SC），回退到 Microsoft YaHei / Noto Sans SC
+### 江湖书院 V2 `/v2/`
 
-### 移动端
-- 支持 iOS/Android 浏览器访问
-- 触控目标 44px（Apple HIG 标准）
-- viewport-fit=cover 安全区适配
+V2 是独立应用，不替换经典控制台：
+
+- 首页与团队院落；
+- 房间建筑和 NPC 状态；
+- 对话时间线与 Markdown 最终答案；
+- 任务进度卷轴、房间进度和活动状态；
+- 当前运行、历史归档与结果详情；
+- reduced-motion 和移动端卡片降级。
 
 ---
 
-## 🚀 服务器部署
+## API 与实时事件
 
-### 一键部署
+所有 JSON API 与 WebSocket 复用同一后端端口。启用鉴权后，除少量健康检查/认证豁免端点外均需 Bearer Token。
+
+### 常用 API
+
+| 类别 | 方法与端点 | 说明 |
+|---|---|---|
+| 系统 | `GET /system/status.json` | 健康状态与基础信息 |
+| 团队 | `GET /teams/list.json` | 团队列表 |
+| 团队 | `GET /teams/{id}.json` | 团队详情 |
+| 部门 | `GET /teams/{id}/dept_tree.json` | 部门树 |
+| 房间 | `GET /rooms/{id}/messages/list.json` | 消息列表 |
+| 房间 | `POST /rooms/{id}/messages/send.json` | 发送消息并触发任务 |
+| 文件 | `POST /rooms/{id}/messages/upload.json` | 上传文件 |
+| Run | `GET /runs/current.json?team_id={id}` | 当前运行快照 |
+| Run | `GET /runs/list.json?team_id={id}` | 历史运行 |
+| Run | `GET /runs/{id}.json` | 运行详情 |
+| Run | `GET /runs/{id}/rooms.json` | 房间进度 |
+| Run | `GET /runs/{id}/timeline.json` | 活动时间线 |
+| Run | `GET /runs/{id}/final_answer.json` | 最终答案与博客状态 |
+| 用量 | `GET /usage/realtime.json` | 实时 Token 用量 |
+| 用量 | `GET /usage/summary.json` | 聚合用量 |
+| 配置 | `GET /config/llm_services/list.json` | LLM 服务列表（密钥脱敏） |
+| WebSocket | `WS /ws/events.json` | 消息与进度事件 |
+
+### WebSocket
+
+```js
+const ws = new WebSocket("ws://127.0.0.1:8180/ws/events.json");
+ws.addEventListener("open", () => {
+  // 仅在 auth.enabled=true 时发送
+  ws.send(JSON.stringify({ type: "auth", token: "YOUR_TOKEN" }));
+});
+ws.addEventListener("message", (event) => {
+  console.log(JSON.parse(event.data));
+});
+```
+
+前端已处理消息、Agent 活动、Run、Room Run、博客发布和连接状态等事件；自定义客户端应容忍新增事件字段。
+
+---
+
+## Ghost 博客发布
+
+启用后，汇总角色提交最终结论时会创建持久化发布任务。发布 worker 会：
+
+1. 生成标题、正文和标签；
+2. 将 Markdown 转换为经过清理的 HTML；
+3. 使用 Ghost Admin API 创建文章；
+4. 通过 publication key 和内容哈希保证幂等；
+5. 失败后按计划重试，并在应用重启后恢复；
+6. 将发布状态、文章 ID 和 URL 写回 Run 快照并推送事件。
+
+示例：
+
+```json
+{
+  "ghost": {
+    "enabled": true,
+    "api_url": "https://blog.example.com",
+    "admin_api_key": "YOUR_GHOST_ADMIN_API_KEY",
+    "content_api_key": "",
+    "auto_publish": true,
+    "publish_status": "draft",
+    "max_retry_attempts": 6
+  }
+}
+```
+
+> [!NOTE]
+> 写入文章使用 **Ghost Admin API Key**；Content API Key 不能用于发布。建议先设置 `publish_status: "draft"` 验证格式，再切换到 `published`。
+
+---
+
+## 数据、安全与生产部署
+
+### 数据目录与备份
+
+- 源码运行：数据目录由应用路径策略和 `--config-dir` 决定；
+- Docker：`/storage`，Compose 映射到 `togospace-storage`；
+- 主要内容包括 `setting.json`、SQLite 数据库、工作目录和运行日志；
+- 数据库迁移在启动时按顺序执行；
+- 更新前建议备份整个数据目录，或调用系统数据库备份能力。
+
+### 已实现的安全措施
+
+- 默认绑定 `127.0.0.1`；
+- Bearer Token 常量时间比较；
+- 多租户资源归属检查；
+- LLM 测试接口 SSRF 防护；
+- Skill 导入 Zip-Slip / Zip 炸弹防护；
+- 文件类型、大小和路径限制；
+- API 密钥脱敏和 Ghost 密钥不回传；
+- 敏感接口的内存滑动窗口限流；
+- LLM provider 参数白名单；
+- Markdown 到 HTML 的链接和标签清理。
+
+### 生产环境检查清单
+
+- [ ] 使用 HTTPS 反向代理，不直接暴露 Tornado；
+- [ ] `bind_host=0.0.0.0` 时启用 `auth.enabled` 并设置高强度随机 token；
+- [ ] 将 API Key 放入 Secret 或私有配置，不写入仓库；
+- [ ] 限制安全组/防火墙，只开放必要端口；
+- [ ] 持久化并定期备份 `/storage`；
+- [ ] 先在测试环境执行数据库迁移和版本升级；
+- [ ] 根据供应商配额设置并发与 RPM；
+- [ ] 为 Ghost 发布先使用草稿模式；
+- [ ] 监控健康检查、应用日志、磁盘与模型费用。
+
+### Linux 服务器部署
+
+仓库包含 Nginx、systemd、Watchdog、自动更新和 SSL 相关脚本。完整命令和注意事项见 [`deploy/README.md`](deploy/README.md)。快速入口：
+
 ```bash
 git clone https://github.com/suvlife/DigitalLife.git
 cd DigitalLife
 bash deploy/deploy.sh
 ```
 
-### 安全更新（保留数据）
+更新并保留数据：
+
 ```bash
-cd /opt/digitallife
 bash deploy/update.sh
 ```
 
-### 自动化运维
-- **systemd**：服务崩溃自动重启
-- **Watchdog**：每 2 分钟健康检查（`deploy/watchdog.sh`）
-- **Certbot**：SSL 证书自动续期
-- **自动更新**：每天凌晨拉取新代码（`deploy/auto-update.sh`）
+部署脚本带有环境假设，执行前请阅读脚本并根据自己的域名、目录、用户和 TLS 方案调整。
+
+---
+
+## 开发、测试与发布
+
+### 后端测试
+
+```bash
+# 默认：unit + integration，并行执行
+./scripts/run_tests.sh
+
+# 覆盖率
+./scripts/run_tests.sh --cov
+
+# 指定测试或串行调试
+./scripts/run_tests.sh tests/unit
+./scripts/run_tests.sh -k "test_name"
+./scripts/run_tests.sh --serial
+```
+
+API 测试通常需要单独启动后端：
+
+```bash
+./scripts/run_tests.sh tests/api
+```
+
+### 前端测试与构建
+
+```bash
+cd frontend
+npm ci
+npm run test:run
+npm run build
+
+cd ../frontend-v2
+npm ci
+npm run test:run
+npm run build
+```
+
+统一构建并同步静态资源：
+
+```bash
+.venv/bin/python scripts/build_frontend.py --install
+# 仅验证构建、不复制到 assets：
+.venv/bin/python scripts/build_frontend.py --no-sync
+```
+
+### 类型与版本检查
+
+```bash
+./scripts/run_mypy.sh
+.venv/bin/python scripts/check_version_consistency.py
+```
+
+更新版本：
+
+```bash
+.venv/bin/python scripts/set_version.py 0.5.0
+```
+
+脚本会同步 `VERSION`、Python 版本、两套前端 `package.json`、Dockerfile 和 Compose 镜像版本。创建 `v*` 标签会触发 GitHub Actions 的 macOS Release 和多架构容器工作流；发布前应确认仓库 Secrets 已正确配置。
+
+---
+
+## 常见问题
+
+<details>
+<summary><strong>启动后提示没有可用的 LLM 服务</strong></summary>
+
+在经典控制台设置页添加并启用服务，或编辑 `setting.json` 中的 `llm_services`；同时确保 `default_llm_server` 指向已启用服务。
+</details>
+
+<details>
+<summary><strong>Docker 健康检查正常，但外部无法访问</strong></summary>
+
+确认 `8080` 端口映射、防火墙和安全组；生产环境应通过 Nginx/Caddy/Traefik 提供 HTTPS。不要为了方便关闭鉴权。
+</details>
+
+<details>
+<summary><strong>V2 页面刷新后 404</strong></summary>
+
+生产构建由 Tornado `/v2/(.*)` SPA fallback 处理；使用外部反向代理时也要将 `/v2/` 及其子路径转发到后端，而不是当作普通磁盘目录。
+</details>
+
+<details>
+<summary><strong>任务卡住或频繁出现 429</strong></summary>
+
+根据模型供应商限制降低 `max_concurrency`，设置 `requests_per_minute`，检查活动时间线中的重试元数据，并避免多个团队共享同一个低配额 Key。
+</details>
+
+<details>
+<summary><strong>Ghost 发布失败</strong></summary>
+
+确认 URL 可从服务器访问、使用 Admin API Key、时间同步正常，并先调用连接测试。失败任务会持久化重试，状态可从 Run 最终答案接口和前端查看。
+</details>
+
+<details>
+<summary><strong>如何安全更新</strong></summary>
+
+先备份数据目录和数据库，再拉取新版本并运行测试/构建。服务器部署可使用 `deploy/update.sh`，不要删除持久化卷或覆盖私有配置。
+</details>
+
+---
+
+## 项目结构
+
+```text
+DigitalLife/
+├── src/
+│   ├── controller/              # HTTP / WebSocket 控制器
+│   ├── service/                 # Agent、Run、调度、LLM、Ghost 等业务服务
+│   ├── dal/                     # 数据访问和数据库管理器
+│   ├── model/                   # 核心模型与数据库模型
+│   ├── util/                    # 配置、路径、日志、序列化、HTTP 客户端
+│   ├── backend_main.py          # 后端入口
+│   └── route.py                 # API 与双前端路由
+├── frontend/                    # 经典 Vue 3 控制台
+├── frontend-v2/                 # 江湖书院 V2（生产路径 /v2/）
+├── tui/                         # Textual 终端客户端
+├── assets/
+│   ├── migrate/                 # SQLite 迁移
+│   ├── preset/                  # 团队与角色预设
+│   ├── frontend/                # 经典前端构建输出（本地生成）
+│   └── frontend-v2/             # V2 构建输出（本地生成）
+├── tests/                       # unit / integration / api
+├── scripts/                     # 构建、测试、版本、安装与发布工具
+├── deploy/                      # Linux/Nginx/systemd 部署资源
+├── docs/                        # 设计、版本和使用文档
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+└── VERSION
+```
+
+---
+
+## 路线与已知边界
+
+- V2 当前聚焦任务观察、团队导航、进度和结果展示；完整设置与高级编辑继续使用经典控制台；
+- Run API 当前以查询和恢复展示为主，取消、房间级重试等写操作仍可继续演进；
+- 本地限流器是单进程内存实现，多实例生产部署应在网关层增加统一限流；
+- SQLite 适合单机和中小规模部署，大规模多实例部署需要额外评估数据库与消息协调方案；
+- 自动发布、自动更新和模型调用均属于外部副作用，生产环境应配合权限、审计、备份和费用告警。
+
+---
+
+## 贡献
+
+欢迎提交 Issue 与 Pull Request。建议在提交前：
+
+1. 阅读 [`CLAUDE.md`](CLAUDE.md) 中的架构与开发约定；
+2. 保持 `controller → service → dal → model → util` 依赖方向；
+3. 为新增行为补充测试；
+4. 分别验证两套前端；
+5. 不提交 API Key、用户数据、构建产物和本地运行目录。
+
+---
+
+## 许可证与致谢
+
+仓库当前包含的前端许可证文本见 [`frontend/LICENSE`](frontend/LICENSE)，第三方字体许可见 [`frontend-v2/licenses/LXGW-WEN-KAI-NOTICE.md`](frontend-v2/licenses/LXGW-WEN-KAI-NOTICE.md)。在复用或分发代码前，请同时检查各目录和依赖的许可证要求。
+
+感谢以下项目：
+
+- [TSP（Tool Service Protocol）](https://github.com/alexazhou/TSP)
+- [Tornado](https://www.tornadoweb.org/)
+- [Vue.js](https://vuejs.org/)
+- [LiteLLM](https://github.com/BerriAI/litellm)
+- [Textual](https://textual.textualize.io/)
+- [peewee-async](https://github.com/woodyl/peewee-async)
+- [霞鹜文楷](https://github.com/lxgw/LxgwWenKai)
+
+如果这个项目对你有帮助，欢迎 Star、Fork、提交反馈或分享你的团队预设。

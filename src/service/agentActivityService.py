@@ -59,6 +59,12 @@ class AgentActivityMeta:
     retry_max_attempts: int | None = None
     retry_delay_seconds: int | None = None
     last_retry_error: str | None = None
+    # 性能观测（均为毫秒）
+    queue_wait_ms: int | None = None
+    rate_limit_wait_ms: int | None = None
+    infer_duration_ms: int | None = None
+    retry_wait_ms: int | None = None
+    infer_attempts: int | None = None
     # 工具调用
     tool_name: str | None = None
     tool_arguments: Any = None
@@ -86,6 +92,10 @@ class AgentActivityMeta:
         self.retry_attempt = event.attempt
         self.retry_max_attempts = event.max_attempts
         self.last_retry_error = event.error_message
+        self.queue_wait_ms = event.queue_wait_ms
+        self.rate_limit_wait_ms = event.rate_limit_wait_ms
+        self.infer_duration_ms = event.infer_duration_ms
+        self.retry_wait_ms = event.retry_wait_ms
         if event.state == InferRequestStateType.RETRY_SCHEDULED:
             self.retry_delay_seconds = event.retry_delay_seconds
         elif event.state == InferRequestStateType.RETRYING:

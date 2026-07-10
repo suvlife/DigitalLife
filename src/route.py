@@ -3,13 +3,15 @@ import os
 
 import tornado.web
 
-from controller import roleTemplateController, agentController, roomController, wsController, teamController, deptController, configController, activityController, settingController, systemController, initController, superviseController, usageController, fileController, authController
+from controller import roleTemplateController, agentController, roomController, wsController, teamController, deptController, configController, activityController, settingController, systemController, initController, superviseController, usageController, fileController, authController, runController
 
 import sys as _sys
 if getattr(_sys, "frozen", False):
     _FRONTEND_DIST = os.path.join(_sys._MEIPASS, "assets/frontend")
+    _FRONTEND_V2_DIST = os.path.join(_sys._MEIPASS, "assets/frontend-v2")
 else:
     _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "../assets/frontend")
+    _FRONTEND_V2_DIST = os.path.join(os.path.dirname(__file__), "../assets/frontend-v2")
 
 
 class _SPAHandler(tornado.web.StaticFileHandler):
@@ -116,6 +118,14 @@ application = tornado.web.Application([
     (r"/rooms/(\d+)/messages/send.json",            roomController.RoomMessagesHandler),
     (r"/rooms/(\d+)/messages/(\d+)/escalate_to_immediate.json", roomController.EscalateMessageToImmediateHandler),
 
+    # Task Runs (可恢复进度快照)
+    (r"/runs/current.json",                         runController.CurrentRunHandler),
+    (r"/runs/list.json",                            runController.RunListHandler),
+    (r"/runs/(\d+).json",                          runController.RunDetailHandler),
+    (r"/runs/(\d+)/rooms.json",                    runController.RunRoomsHandler),
+    (r"/runs/(\d+)/timeline.json",                 runController.RunTimelineHandler),
+    (r"/runs/(\d+)/final_answer.json",             runController.RunFinalAnswerHandler),
+
     # WebSocket
     (r"/ws/events.json",                            wsController.EventsWsHandler),
 
@@ -159,7 +169,8 @@ application = tornado.web.Application([
     (r"/files/download.json",                        fileController.FileDownloadHandler),
     (r"/files/preview.json",                         fileController.FilePreviewHandler),
 
-    # 前端静态文件（必须放最后，SPA fallback）
+    # 双前端静态文件（必须放最后；/v2 在旧版通配 fallback 之前）
+    (r"/v2/?(.*)", _SPAHandler, {"path": _FRONTEND_V2_DIST, "default_filename": "index.html"}),
     (r"/(.*)", _SPAHandler, {"path": _FRONTEND_DIST, "default_filename": "index.html"}),
 
 ], **tornado_settings)  # type: ignore [arg-type]

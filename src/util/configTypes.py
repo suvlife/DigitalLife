@@ -140,6 +140,10 @@ class LlmServiceConfig(BaseModel):
     compact_trigger_ratio: float = Field(default=0.85, ge=0.0, le=1.0)
     compact_summary_max_tokens: int = 6 * 1024
 
+    # 性能与上游限流保护。每个服务拥有独立并发池；0 RPM 表示不做主动节流。
+    max_concurrency: int = Field(default=5, ge=1, le=256)
+    requests_per_minute: int = Field(default=0, ge=0)
+
     @field_validator("provider_params")
     @classmethod
     def validate_provider_params(cls, value: dict[str, Any] | None) -> dict[str, Any]:
@@ -169,12 +173,23 @@ class AuthConfig(BaseModel):
 
 
 class GhostConfig(BaseModel):
-    """Ghost CMS 博客发布配置。"""
+    """Ghost CMS 博客发布配置。
+
+    密钥只允许从服务器端配置或环境变量读取，控制器不得返回明文。
+    """
     enabled: bool = False
     api_url: str = ""
     admin_api_key: str = ""
     content_api_key: str = ""
-    auto_publish: bool = True  # 任务完成时自动发布
+    auto_publish: bool = True
+    publish_status: str = "published"  # published / draft
+    max_retry_attempts: int = 6
+
+
+class DriverFallbackConfig(BaseModel):
+    """外部 Agent driver 不可用时的降级策略。"""
+    enabled: bool = True
+    tsp_to_native: bool = True
 
 
 class DevConfig(BaseModel):
@@ -192,6 +207,7 @@ class SettingConfig(BaseModel):
     demo_mode: DemoModeConfig = Field(default_factory=DemoModeConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     ghost: GhostConfig = Field(default_factory=GhostConfig)
+    driver_fallback: DriverFallbackConfig = Field(default_factory=DriverFallbackConfig)
     default_llm_server: str | None = None
     llm_services: list[LlmServiceConfig] = Field(default_factory=list)
     default_room_max_rounds: int = 100

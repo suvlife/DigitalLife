@@ -2,10 +2,10 @@
 
 if [ -x ".venv/bin/python" ]; then
   PYTHON_BIN=".venv/bin/python"
-  PIP_BIN=".venv/bin/pip"
+  PIP_CMD=(".venv/bin/python" "-m" "pip")
 else
   PYTHON_BIN="python"
-  PIP_BIN="pip"
+  PIP_CMD=("$PYTHON_BIN" "-m" "pip")
 fi
 
 cmd="$PYTHON_BIN -m mypy --config-file=\"mypy.ini\""
@@ -21,7 +21,7 @@ then
   echo "python version:"
   "$PYTHON_BIN" --version
   echo "package version:"
-  "$PIP_BIN" list
+  "${PIP_CMD[@]}" list 2>/dev/null || echo "pip is not installed in this interpreter"
   exit 1
 fi
 

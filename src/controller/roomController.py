@@ -246,7 +246,17 @@ class RoomMessagesHandler(BaseHandler):
                 error_code="immediate_insert_driver_not_supported",
             )
 
-        await room.add_message(room.OPERATOR_MEMBER_ID, content, insert_immediately=request.insert_immediately)
+        message = await room.add_message(room.OPERATOR_MEMBER_ID, content, insert_immediately=request.insert_immediately)
+        # 每条普通用户问题建立一个可恢复 Run；立即插话属于当前 Run，不新建。
+        if not request.insert_immediately and message.id is not None:
+            from service import runService
+            await runService.create_run_for_user_message(
+                team_id=gt_room.team_id,
+                root_room_id=room_id,
+                user_message_id=message.id,
+                query=content,
+                owner_user_id=self._current_user_id(),
+            )
         if room.get_current_turn_agent_id() == room.OPERATOR_MEMBER_ID:
             await room.handle_finish_request(room.OPERATOR_MEMBER_ID)
         self.return_success()

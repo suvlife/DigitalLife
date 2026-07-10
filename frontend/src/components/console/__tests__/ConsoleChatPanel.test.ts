@@ -3,6 +3,10 @@ import { flushPromises, mount } from '@vue/test-utils';
 import ConsoleChatPanel from '../ConsoleChatPanel.vue';
 import i18n from '../../../i18n';
 import type { RoomState } from '../../../types';
+import { createMemoryHistory, createRouter } from 'vue-router';
+
+const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] });
+void router.push('/');
 
 const {
   postRoomMessageMock,
@@ -56,7 +60,7 @@ describe('ConsoleChatPanel', () => {
         teamEnabled: true,
       },
       global: {
-        plugins: [i18n],
+        plugins: [i18n, router],
       },
     });
 
@@ -80,7 +84,7 @@ describe('ConsoleChatPanel', () => {
         teamEnabled: true,
       },
       global: {
-        plugins: [i18n],
+        plugins: [i18n, router],
       },
     });
 
@@ -104,7 +108,7 @@ describe('ConsoleChatPanel', () => {
         teamEnabled: true,
       },
       global: {
-        plugins: [i18n],
+        plugins: [i18n, router],
       },
     });
 

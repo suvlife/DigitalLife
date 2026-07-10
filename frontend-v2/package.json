@@ -1,0 +1,31 @@
+{
+  "name": "digital-life-wuxia-v2",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource/lxgw-wenkai": "5.2.5",
+    "markdown-it": "14.3.0",
+    "vue": "3.5.13",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.1.2",
+    "@vitejs/plugin-vue": "5.2.4",
+    "@vue/test-utils": "2.4.6",
+    "happy-dom": "20.10.6",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vitest": "3.2.7",
+    "vue-tsc": "2.2.12",
+    "@types/node": "22.10.2"
+  }
+}

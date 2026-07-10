@@ -35,7 +35,7 @@ _RUN_CHAT_TURN_ERROR_ACTION_HINT = (
 
 def build_gtsp_command(raw_command: Optional[list[str]], workdir: str) -> list[str]:
     if raw_command is None:
-        default_binary = appPaths.get_gtsp_binary_path()
+        default_binary = appPaths.get_gtsp_binary_path(require_exists=False)
         command = [default_binary, "--mode", "stdio"]
     else:
         command = list(raw_command)

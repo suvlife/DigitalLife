@@ -296,3 +296,40 @@ async def test_infer_updates_activity_with_retry_status_metadata():
     assert getattr(final_patch, "request_state", None) == ""
     assert getattr(final_patch, "retry_attempt", None) == 2
     assert getattr(final_patch, "retry_max_attempts", None) == 8
+
+@pytest.mark.asyncio
+async def test_infer_records_performance_metadata():
+    """推理完成后，应把排队、上游、限流和重试耗时写入 LLM_INFER activity。"""
+    runner, history = _make_runner_and_history()
+    runner._current_room = MagicMock()
+    runner._current_room.room_id = 1
+    resp = _make_mock_response(content="性能可观测")
+    choice = MagicMock()
+    choice.message = resp.choices[0].message
+    choice.finish_reason = "stop"
+    resp.choices = [choice]
+    resp.usage = _make_usage()
+    output_item = _make_history_item()
+    mock_activity_svc = _mock_activity_service()
+    perf = llmService.InferPerformanceMetrics(
+        queue_wait_ms=12,
+        rate_limit_wait_ms=3,
+        infer_duration_ms=88,
+        retry_wait_ms=20,
+        attempts=2,
+    )
+
+    with (
+        patch(_CONFIG_PATCH, return_value=_mock_config()),
+        patch(_INFER_STREAM_PATCH, AsyncMock(return_value=llmService.InferResult.success(resp, performance=perf))),
+        patch(_ESTIMATE_PATCH, return_value=1000),
+        patch(_ACTIVITY_PATCH, mock_activity_svc),
+    ):
+        await runner._infer_to_item(output_item, tools=[])
+
+    terminal = mock_activity_svc.update_activity_progress.call_args_list[-1].kwargs["metadata_patch"]
+    assert terminal.queue_wait_ms == 12
+    assert terminal.rate_limit_wait_ms == 3
+    assert terminal.infer_duration_ms == 88
+    assert terminal.retry_wait_ms == 20
+    assert terminal.infer_attempts == 2

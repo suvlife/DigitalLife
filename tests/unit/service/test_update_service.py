@@ -128,7 +128,7 @@ class TestCheckForUpdateCache:
             result = await check_for_update(force=False)
 
         assert result["has_update"] is True
-        assert result["current_version"] == "0.3.8"
+        assert result["current_version"] == updateService.__version__
         assert result["latest_version"] == "99.0.0"
         assert result["release_url"] == "https://github.com/test"
         assert result["release_notes"] == "release notes"

@@ -45,33 +45,45 @@ CONFIG_DIR = STORAGE_ROOT
 PRESET_DIR = os.path.abspath(os.environ.get("TEAMAGENT_PRESET_DIR") or os.path.join(ASSETS_DIR, "preset"))
 
 
-def get_gtsp_binary_path() -> str:
-    """
-    根据当前平台返回 gtsp 可执行文件路径。
-
-    支持的平台：
-    - macOS (darwin): amd64 / arm64
-    """
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-
-    # 映射架构名称
-    arch_map = {
-        "x86_64": "amd64",
-        "amd64": "amd64",
-        "arm64": "arm64",
-        "aarch64": "arm64",
-    }
-    arch = arch_map.get(machine, machine)
-
-    # 构建二进制文件名，Windows 使用 .exe 后缀，其他平台不加后缀
-    suffix = ".exe" if system == "windows" else ""
-    binary_name = f"gtsp-{system}-{arch}{suffix}"
-    binary_path = os.path.join(ASSETS_DIR, "execute", "gtsp", binary_name)
-
-    if not os.path.exists(binary_path):
-        raise FileNotFoundError(
-            f"gtsp binary not found for current platform: {binary_path}"
+def get_gtsp_platform_id(*, system: str | None = None, machine: str | None = None) -> str:
+    """Return the release asset platform id used by GTSP binaries."""
+    system_name = (system or platform.system()).lower()
+    machine_name = (machine or platform.machine()).lower()
+    system_map = {"darwin": "darwin", "linux": "linux", "windows": "windows"}
+    arch_map = {"x86_64": "amd64", "amd64": "amd64", "arm64": "arm64", "aarch64": "arm64"}
+    if system_name not in system_map or machine_name not in arch_map:
+        raise RuntimeError(
+            f"Unsupported GTSP platform: system={system_name}, machine={machine_name}. "
+            "Set a custom TSP command or use the native driver."
         )
+    return f"{system_map[system_name]}-{arch_map[machine_name]}"
 
+
+def get_gtsp_binary_path(*, require_exists: bool = True) -> str:
+    """Return the expected GTSP executable path for the current platform.
+
+    ``require_exists=False`` is useful for diagnostics/installers and never
+    causes application startup to fail by itself.
+    """
+    platform_id = get_gtsp_platform_id()
+    suffix = ".exe" if platform_id.startswith("windows-") else ""
+    binary_path = os.path.join(ASSETS_DIR, "execute", "gtsp", f"gtsp-{platform_id}{suffix}")
+    if require_exists and not os.path.isfile(binary_path):
+        raise FileNotFoundError(
+            "GTSP executable is not installed. "
+            f"Expected: {binary_path}. Run 'python scripts/install_gtsp.py --version <version> "
+            "--base-url <trusted-release-base> --checksums <checksums.json>', configure a custom "
+            "TSP command, or enable driver_fallback.tsp_to_native."
+        )
+    if require_exists and os.name != "nt" and not os.access(binary_path, os.X_OK):
+        raise PermissionError(f"GTSP executable is not executable: {binary_path}")
     return binary_path
+
+
+def gtsp_diagnostic() -> dict[str, str | bool]:
+    try:
+        expected = get_gtsp_binary_path(require_exists=False)
+        available = os.path.isfile(expected) and (os.name == "nt" or os.access(expected, os.X_OK))
+        return {"available": available, "path": expected, "platform": get_gtsp_platform_id()}
+    except RuntimeError as exc:
+        return {"available": False, "path": "", "platform": "unsupported", "error": str(exc)}

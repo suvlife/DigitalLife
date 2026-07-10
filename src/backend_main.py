@@ -20,6 +20,8 @@ from service import (
     persistenceService,
     ormService,
     presetService,
+    runService,
+    ghostService,
 )
 import service.skillService as skillService
 import appPaths
@@ -156,6 +158,8 @@ async def main(config_dir: str = None, port: int | None = None):
     await llmService.startup()
     await funcToolService.startup()
     await ormService.startup(app_config.setting.db_path)
+    await runService.startup()
+    await ghostService.startup()
     await persistenceService.startup()
     await agentService.startup()
     await roomService.startup()
@@ -206,8 +210,10 @@ async def main(config_dir: str = None, port: int | None = None):
     finally:
         web_server.stop()
         schedulerService.shutdown()
+        runService.shutdown()
         await agentService.shutdown()
         await persistenceService.shutdown()
+        await ghostService.shutdown()
         await ormService.shutdown()
         funcToolService.shutdown()
         skillService.shutdown()

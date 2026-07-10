@@ -135,7 +135,8 @@
       "name": "综合分析室",
       "agents": ["OPERATOR", "cio", "wyckoff", "dow", "vp", "risk", "buffett", "lynch", "dalio"],
       "initial_topic": "综合讨论个股或板块的技术面与基本面，各流派大师辩论后由首席投资官提交综合结论。",
-      "max_rounds": 50,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {
         "display_name": {"zh-CN": "综合分析室", "en": "Comprehensive Analysis Room"},
         "initial_topic": {"zh-CN": "综合讨论个股或板块的技术面与基本面，各流派大师辩论后由首席投资官提交综合结论。", "en": "Comprehensive analysis with multi-school debate, CIO submits final conclusion."}
@@ -145,7 +146,8 @@
       "name": "大师辩论厅",
       "agents": ["OPERATOR", "cio", "wyckoff", "gann", "dow", "elliott", "vp", "buffett", "graham", "fisher", "lynch", "oneil", "livermore", "schwartz", "simons", "dalio", "soros"],
       "initial_topic": "全部投资大师就指定个股或板块展开多流派辩论博弈，各抒己见后由首席投资官调用 submit_conclusion 提交综合投资结论。",
-      "max_rounds": 50,
+      "max_rounds": 4,
+      "tags": ["STRATEGY:ROUND_ROBIN"],
       "i18n": {
         "display_name": {"zh-CN": "大师辩论厅", "en": "Masters Debate Hall"},
         "initial_topic": {"zh-CN": "全部投资大师就指定个股或板块展开多流派辩论博弈，各抒己见后由首席投资官调用 submit_conclusion 提交综合投资结论。", "en": "All investment masters debate from their respective schools, CIO submits final conclusion."}
@@ -155,7 +157,8 @@
       "name": "价值投资研讨室",
       "agents": ["OPERATOR", "buffett", "graham", "cio"],
       "initial_topic": "从价值投资角度分析个股：护城河、安全边际、内在价值。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "价值投资研讨室", "en": "Value Investing Lab"},
         "initial_topic": {"zh-CN": "从价值投资角度分析个股：护城河、安全边际、内在价值。", "en": "Analyze stocks from value investing perspective: moat, margin of safety, intrinsic value."}
@@ -165,7 +168,8 @@
       "name": "成长投资研讨室",
       "agents": ["OPERATOR", "lynch", "fisher", "oneil", "cio"],
       "initial_topic": "从成长投资角度分析个股：成长性、PEG、CAN SLIM、十倍股。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "成长投资研讨室", "en": "Growth Investing Lab"},
         "initial_topic": {"zh-CN": "从成长投资角度分析个股：成长性、PEG、CAN SLIM、十倍股。", "en": "Analyze stocks from growth investing perspective: growth, PEG, CAN SLIM, tenbaggers."}
@@ -175,7 +179,8 @@
       "name": "量化宏观研讨室",
       "agents": ["OPERATOR", "dalio", "simons", "soros", "cio"],
       "initial_topic": "从量化与宏观对冲角度分析：经济周期、统计套利、反身性理论。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "量化宏观研讨室", "en": "Quant & Macro Lab"},
         "initial_topic": {"zh-CN": "从量化与宏观对冲角度分析：经济周期、统计套利、反身性理论。", "en": "Analyze from quantitative and macro hedge perspective: economic cycles, statistical arbitrage, reflexivity."}
@@ -185,7 +190,8 @@
       "name": "周期与波浪研究室",
       "agents": ["OPERATOR", "gann", "elliott"],
       "initial_topic": "从时间周期与波浪结构角度研判中长期趋势与变盘窗口。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "周期与波浪研究室", "en": "Cycles and Waves Lab"},
         "initial_topic": {"zh-CN": "从时间周期与波浪结构角度研判中长期趋势与变盘窗口。", "en": "Study medium-to-long term trends and turning windows via cycles and waves."}
@@ -195,7 +201,8 @@
       "name": "数据采集室",
       "agents": ["OPERATOR", "collector", "intel", "mda"],
       "initial_topic": "让人类操作者向数据团队下达信息收集任务，获取最新财报、公告、新闻、历史K线和行业数据。",
-      "max_rounds": 100,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "数据采集室", "en": "Data Collection Room"},
         "initial_topic": {"zh-CN": "让人类操作者向数据团队下达信息收集任务，获取最新财报、公告、新闻、历史K线和行业数据。", "en": "Assign data collection tasks to gather latest financials, news, historical K-lines and industry data."}

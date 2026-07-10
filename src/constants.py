@@ -80,6 +80,11 @@ class MessageBusTopic(EnhanceEnum):
     TASK_CREATED = auto()              # 协作任务创建；payload: task(GtAgentTask)
     TASK_CHANGED = auto()              # 协作任务状态变更；payload: task(GtAgentTask), old_status(str)
     USAGE_UPDATED = auto()             # Token 用量更新；payload: model(str), prompt_tokens(int), completion_tokens(int), total_tokens(int)
+    RUN_CREATED = auto()               # 用户问题运行实例创建；payload: run(dict)
+    RUN_PROGRESS_CHANGED = auto()      # Run 阶段/真实进度变化；payload: run(dict)
+    ROOM_RUN_CHANGED = auto()          # Run 内房间状态变化；payload: room_run(dict), run_id(int)
+    FINAL_ANSWER_COMPLETED = auto()     # 最终回答持久化完成；payload: run(dict), final_answer(str)
+    BLOG_PUBLISH_CHANGED = auto()      # 博客发布状态变化；payload: run_id(int), status(str), post_url(str|None)
 
 
 class RoomType(EnhanceEnum):
@@ -192,6 +197,31 @@ class LlmErrorCategory(EnhanceEnum):
     SERVER_ERROR    = auto()  # 服务端 5xx
     NETWORK_ERROR   = auto()  # 连接/超时
     UNKNOWN         = auto()  # 未分类
+
+
+class TaskRunStatus(EnhanceEnum):
+    """一次用户问题从受理到最终交付的生命周期。"""
+    QUEUED = "QUEUED"
+    PLANNING = "PLANNING"
+    DISPATCHING = "DISPATCHING"
+    DISCUSSING = "DISCUSSING"
+    SYNTHESIZING = "SYNTHESIZING"
+    PUBLISHING = "PUBLISHING"
+    COMPLETED = "COMPLETED"
+    PARTIAL_FAILED = "PARTIAL_FAILED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class RoomRunStatus(EnhanceEnum):
+    """某次 Run 中一个房间的真实执行状态。"""
+    WAITING = "WAITING"
+    QUEUED = "QUEUED"
+    DISCUSSING = "DISCUSSING"
+    SYNTHESIZING = "SYNTHESIZING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 
 class TaskStatus(EnhanceEnum):

@@ -67,9 +67,31 @@ def get_builtin_default_llm_server() -> str | None:
 
 
 def get_builtin_ghost_config() -> dict:
-    """获取内置 Ghost CMS 配置。"""
+    """获取无凭据的内置 Ghost 默认配置（仅兼容旧调用）。"""
     builtin = _load_builtin_keys()
     return builtin.get("ghost", {})
+
+
+def apply_secret_environment_overrides(setting: SettingConfig) -> None:
+    """用进程环境变量覆盖敏感配置，且不把环境变量写回 setting.json。"""
+    ghost_url = os.environ.get("GHOST_API_URL")
+    ghost_admin_key = os.environ.get("GHOST_ADMIN_API_KEY")
+    ghost_content_key = os.environ.get("GHOST_CONTENT_API_KEY")
+    if ghost_url:
+        setting.ghost.api_url = ghost_url.strip()
+    if ghost_admin_key:
+        setting.ghost.admin_api_key = ghost_admin_key.strip()
+    if ghost_content_key:
+        setting.ghost.content_api_key = ghost_content_key.strip()
+    if os.environ.get("GHOST_ENABLED") is not None:
+        setting.ghost.enabled = os.environ["GHOST_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
+    if os.environ.get("GHOST_AUTO_PUBLISH") is not None:
+        setting.ghost.auto_publish = os.environ["GHOST_AUTO_PUBLISH"].strip().lower() in {"1", "true", "yes", "on"}
+
+    fallback = os.environ.get("TOGOSPACE_TSP_FALLBACK_NATIVE")
+    if fallback is not None:
+        setting.driver_fallback.enabled = fallback.strip().lower() in {"1", "true", "yes", "on"}
+        setting.driver_fallback.tsp_to_native = setting.driver_fallback.enabled
 
 
 def _is_running_tests() -> bool:
@@ -181,6 +203,10 @@ def _load_setting(config_dir: str) -> SettingConfig:
 
     with open(path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
     if not isinstance(cfg, dict):
         raise ValueError(f"setting.json 内容必须是对象: {path}")
@@ -200,7 +226,9 @@ def _load_setting(config_dir: str) -> SettingConfig:
         if svc.get("reserve_output_tokens") == 8192:
             svc["reserve_output_tokens"] = 16384
 
-    return SettingConfig.model_validate(cfg)
+    setting = SettingConfig.model_validate(cfg)
+    apply_secret_environment_overrides(setting)
+    return setting
 
 
 def load_json_objects_from_dir(dir_path: str) -> list[dict[str, Any]]:
@@ -324,7 +352,19 @@ def _save_setting_to_file() -> None:
     raw["language"] = setting.language
     raw["development_mode"] = setting.development_mode
     raw["auth"] = setting.auth.model_dump(exclude_unset=True, mode="json")
-    raw["ghost"] = setting.ghost.model_dump(exclude_unset=True, mode="json")
+    ghost_raw = setting.ghost.model_dump(exclude_unset=True, mode="json")
+    # Environment-injected secrets must remain process-only. Preserve the
+    # existing file value instead of accidentally persisting an env secret when
+    # an unrelated setting is updated through the API.
+    existing_ghost = raw.get("ghost") if isinstance(raw.get("ghost"), dict) else {}
+    if os.environ.get("GHOST_API_URL"):
+        ghost_raw["api_url"] = existing_ghost.get("api_url", "")
+    if os.environ.get("GHOST_ADMIN_API_KEY"):
+        ghost_raw["admin_api_key"] = existing_ghost.get("admin_api_key", "")
+    if os.environ.get("GHOST_CONTENT_API_KEY"):
+        ghost_raw["content_api_key"] = existing_ghost.get("content_api_key", "")
+    raw["ghost"] = ghost_raw
+    raw["driver_fallback"] = setting.driver_fallback.model_dump(exclude_unset=True, mode="json")
 
     # 原子写入：先写临时文件再 os.replace。失败时清理残留 .tmp 文件。
     # 设置 0o600 权限保护含 api_key/token 的配置文件，防止 world-readable。

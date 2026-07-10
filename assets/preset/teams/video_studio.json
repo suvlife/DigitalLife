@@ -23,31 +23,36 @@
     {
       "name": "创作大本营", "agents": ["OPERATOR", "chief_dir", "doc_dir", "ad_dir", "tech_dir", "short_dir", "writer", "storyboard", "visual_dir", "ai_video", "ai_image", "scout", "storyteller"],
       "initial_topic": "全员创作讨论：用户提出视频创作需求后，各专家从导演、编剧、视觉、制作、叙事多角度分析，辩论最佳创作方案，最终由总导演调用 submit_conclusion 提交综合创作方案。",
-      "max_rounds": 50,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {"display_name": {"zh-CN": "创作大本营", "en": "Creation HQ"}, "initial_topic": {"zh-CN": "全员创作讨论：用户提出视频创作需求后，各专家从导演、编剧、视觉、制作、叙事多角度分析，辩论最佳创作方案，最终由总导演调用 submit_conclusion 提交综合创作方案。", "en": "Full team creative discussion with multi-perspective debate."}}
     },
     {
       "name": "剧本工作室", "agents": ["OPERATOR", "chief_dir", "writer", "storyboard"],
       "initial_topic": "剧本与分镜创作：根据创作方向编写完整剧本（含场景描述、人物对白、旁白）和分镜脚本（含镜头号、景别、运镜、画面描述、时长）。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {"display_name": {"zh-CN": "剧本工作室", "en": "Screenplay Studio"}, "initial_topic": {"zh-CN": "剧本与分镜创作：根据创作方向编写完整剧本和分镜脚本。", "en": "Screenplay and storyboard creation."}}
     },
     {
       "name": "视觉制作室", "agents": ["OPERATOR", "chief_dir", "visual_dir", "ai_video", "ai_image"],
       "initial_topic": "视觉设计与AI制作：确定美术风格、色彩方案、视觉规范；使用 Seedance 2.0 和 Seedream 生成视频和图片素材。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {"display_name": {"zh-CN": "视觉制作室", "en": "Visual Production"}, "initial_topic": {"zh-CN": "视觉设计与AI制作：确定美术风格、色彩方案、视觉规范；使用 Seedance 2.0 和 Seedream 生成素材。", "en": "Visual design and AI generation with Seedance/Seedream."}}
     },
     {
       "name": "导演辩论厅", "agents": ["OPERATOR", "chief_dir", "doc_dir", "ad_dir", "tech_dir", "short_dir"],
       "initial_topic": "导演创意PK：四位导演就同一创作主题各出方案，从不同风格角度阐述创意理念，相互点评辩论，由总导演综合裁决。",
-      "max_rounds": 40,
+      "max_rounds": 4,
+      "tags": ["STRATEGY:ROUND_ROBIN"],
       "i18n": {"display_name": {"zh-CN": "导演辩论厅", "en": "Directors' Arena"}, "initial_topic": {"zh-CN": "导演创意PK：四位导演就同一创作主题各出方案，从不同风格角度阐述创意理念，相互点评辩论，由总导演综合裁决。", "en": "Directors pitch and debate creative approaches."}}
     },
     {
       "name": "火山引擎调度室", "agents": ["OPERATOR", "chief_dir", "ai_video", "ai_image"],
       "initial_topic": "火山引擎产品编排：查询火山引擎公有云产品文档，编排 Seedance/Seedream/API 调用流程，设计自动化制作流水线。",
-      "max_rounds": 100,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {"display_name": {"zh-CN": "火山引擎调度室", "en": "Volcano Engine Console"}, "initial_topic": {"zh-CN": "火山引擎产品编排：查询火山引擎公有云产品文档，编排 Seedance/Seedream/API 调用流程，设计自动化制作流水线。", "en": "Volcano Engine product orchestration for Seedance/Seedream."}}
     }
   ],

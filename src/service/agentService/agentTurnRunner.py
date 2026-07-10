@@ -539,9 +539,8 @@ class AgentTurnRunner:
                 )
                 return patch
 
-            infer_result: llmService.InferResult = await llmService.infer_stream(
-                self.gt_agent.model, ctx, on_progress=_on_progress, on_status_event=_on_status_event,
-                team_config=await self._get_team_config_async(),
+            infer_result: llmService.InferResult = await self._call_infer_stream(
+                ctx, on_progress=_on_progress, on_status_event=_on_status_event,
             )
 
             # overflow retry
@@ -591,9 +590,8 @@ class AgentTurnRunner:
                     chunk_count_since_update = 0
 
                     ctx = GtCoreAgentDialogContext(system_prompt=self.system_prompt, messages=messages, tools=tools, tool_choice=tool_choice)
-                    infer_result = await llmService.infer_stream(
-                        self.gt_agent.model, ctx, on_progress=_on_progress, on_status_event=_on_status_event,
-                        team_config=await self._get_team_config_async(),
+                    infer_result = await self._call_infer_stream(
+                        ctx, on_progress=_on_progress, on_status_event=_on_status_event,
                     )
 
                     # 标记已 compact（用 "post" 表示 compact 后的推理），
@@ -631,6 +629,11 @@ class AgentTurnRunner:
             # 活动记录：LLM_INFER SUCCEEDED
             final_meta = AgentActivityMeta()
             final_meta.apply_usage(usage)
+            final_meta.queue_wait_ms = infer_result.performance.queue_wait_ms
+            final_meta.rate_limit_wait_ms = infer_result.performance.rate_limit_wait_ms
+            final_meta.infer_duration_ms = infer_result.performance.infer_duration_ms
+            final_meta.retry_wait_ms = infer_result.performance.retry_wait_ms
+            final_meta.infer_attempts = infer_result.performance.attempts
             request_retry_meta = _build_request_retry_meta_for_terminal()
             if request_retry_meta is not None:
                 final_meta.request_state = request_retry_meta.request_state
@@ -919,6 +922,21 @@ class AgentTurnRunner:
             return team.config if team else None
         except Exception:
             return None
+
+    async def _call_infer_stream(self, ctx: GtCoreAgentDialogContext, **kwargs) -> llmService.InferResult:
+        """Call infer_stream while remaining compatible with narrow test/mocking handlers.
+
+        Production ``llmService.infer_stream`` accepts ``team_config``. Some integrations
+        replace it with a small two-argument coroutine; only pass the optional keyword
+        when the active callable declares it or accepts ``**kwargs``.
+        """
+        infer_callable = llmService.infer_stream
+        # The real service function accepts team_config. Mock wrappers often expose
+        # ``*args, **kwargs`` but forward to a narrower handler, so identity is a
+        # more reliable compatibility check than wrapper signature introspection.
+        if infer_callable is llmService.core.infer_stream:
+            kwargs["team_config"] = await self._get_team_config_async()
+        return await infer_callable(self.gt_agent.model, ctx, **kwargs)
 
     @staticmethod
     def _build_usage(

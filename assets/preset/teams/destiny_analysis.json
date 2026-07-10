@@ -69,7 +69,8 @@
       "name": "命理综合研判室",
       "agents": ["OPERATOR", "synthesizer", "ziping", "dts", "blind", "ziwei", "meihua", "fortune", "scholar"],
       "initial_topic": "用户提供生辰八字后，各流派大师分别从八字格局、紫微星盘、梅花易数角度分析，相互辩论驳斥，最终由综合研判官调用 submit_conclusion 提交统一结论，覆盖事业、财运、健康、爱情、家庭、学业等各领域。",
-      "max_rounds": 40,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {
         "display_name": {"zh-CN": "命理综合研判室", "en": "Destiny Comprehensive Room"},
         "initial_topic": {
@@ -82,7 +83,8 @@
       "name": "四柱八字研讨室",
       "agents": ["OPERATOR", "ziping", "dts", "blind", "sizhu_analyst"],
       "initial_topic": "四柱八字专项辩论：子平格局派、滴天髓派、盲派从不同角度分析同一命局，排盘师提供客观排盘数据。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "四柱八字研讨室", "en": "Four Pillars Lab"},
         "initial_topic": {
@@ -95,7 +97,8 @@
       "name": "紫微斗数研讨室",
       "agents": ["OPERATOR", "ziwei", "fortune"],
       "initial_topic": "紫微斗数专项分析：根据生辰排紫微星盘，分析十四主星、四化飞星、大限流年，由运势分析师分领域解读。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "紫微斗数研讨室", "en": "Ziwei Dou Shu Lab"},
         "initial_topic": {
@@ -108,7 +111,8 @@
       "name": "梅花易数研讨室",
       "agents": ["OPERATOR", "meihua"],
       "initial_topic": "梅花易数占卜：以时间、数字或方位起卦，分析体用生克与万物类象，断吉凶趋势。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {
         "display_name": {"zh-CN": "梅花易数研讨室", "en": "Plum Blossom Lab"},
         "initial_topic": {
@@ -121,7 +125,8 @@
       "name": "排盘请求室",
       "agents": ["OPERATOR", "sizhu_analyst"],
       "initial_topic": "用户在此提供出生年月日时（注明性别和阳历/农历），排盘师将排出完整的四柱八字、十神、大运流年排盘表，并同步到研讨室。",
-      "max_rounds": 100,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {
         "display_name": {"zh-CN": "排盘请求室", "en": "Chart Casting Room"},
         "initial_topic": {

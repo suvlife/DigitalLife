@@ -1,23 +1,28 @@
 import asyncio
 import random
-from dataclasses import asdict, dataclass
-from collections.abc import Awaitable, Callable
+import time
+from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, field
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable
 import json
 import logging
 import uuid
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from constants import InferRequestStateType, LlmErrorCategory, LlmServiceType
 
 logger = logging.getLogger(__name__)
 
-# LLM 并发限制：允许多个 Agent 同时请求 LLM，提高响应速度。
-# RateLimitError 时通过重试自动退避，而非预先串行限制。
-_LLM_SEMAPHORE = asyncio.Semaphore(5)  # 最多 5 个并发 LLM 请求
+# 请求门按 LLM 服务隔离，避免慢服务占满全局并发。生命周期内配置变化时自动重建。
+_SERVICE_REQUEST_GATES: dict[str, "ServiceRequestGate"] = {}
 from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
 from service.llmService.llmErrorClassifier import classify_llm_error, RETRYABLE_CATEGORIES
 from service.llmService.llmRequestRules import apply_llm_request_rules
 from util import configUtil, llmApiUtil
+
+if TYPE_CHECKING:
+    from util.configTypes import LlmServiceConfig
 
 # LiteLLM custom_llm_provider 映射表
 _TYPE_TO_PROVIDER = {
@@ -34,6 +39,88 @@ _RATE_LIMIT_RETRY_DELAYS = (10, 20, 30, 60, 60, 60, 90, 90)  # RateLimitError �
 
 
 @dataclass
+class InferPerformanceMetrics:
+    """单次推理（含重试）的关键性能指标，单位均为毫秒。"""
+
+    queue_wait_ms: int = 0
+    rate_limit_wait_ms: int = 0
+    infer_duration_ms: int = 0
+    retry_wait_ms: int = 0
+    attempts: int = 0
+
+
+class SlidingWindowRateLimiter:
+    """进程内、按服务隔离的请求级 RPM 滑动窗口。
+
+    这是主动保护而非分布式配额协调。多进程部署仍应使用网关/Redis 做全局限流。
+    """
+
+    def __init__(self, requests_per_minute: int) -> None:
+        self.requests_per_minute = max(0, requests_per_minute)
+        self._timestamps: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> float:
+        if self.requests_per_minute <= 0:
+            return 0.0
+        waited = 0.0
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                cutoff = now - 60.0
+                while self._timestamps and self._timestamps[0] <= cutoff:
+                    self._timestamps.popleft()
+                if len(self._timestamps) < self.requests_per_minute:
+                    self._timestamps.append(now)
+                    return waited
+                delay = max(0.001, 60.0 - (now - self._timestamps[0]))
+            started = time.monotonic()
+            await asyncio.sleep(delay)
+            waited += time.monotonic() - started
+
+
+class ServiceRequestGate:
+    """一个 LLM 服务的独立并发池和 RPM 限流器。"""
+
+    def __init__(self, max_concurrency: int, requests_per_minute: int) -> None:
+        self.max_concurrency = max_concurrency
+        self.requests_per_minute = requests_per_minute
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._rate_limiter = SlidingWindowRateLimiter(requests_per_minute)
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[tuple[float, float]]:
+        queue_started = time.monotonic()
+        rate_wait_seconds = await self._rate_limiter.acquire()
+        await self._semaphore.acquire()
+        queue_wait_seconds = time.monotonic() - queue_started
+        try:
+            yield queue_wait_seconds, rate_wait_seconds
+        finally:
+            self._semaphore.release()
+
+
+def _service_gate_key(llm_config: "LlmServiceConfig") -> str:
+    return f"{llm_config.name}|{llm_config.base_url}"
+
+
+def _get_service_request_gate(llm_config: "LlmServiceConfig") -> ServiceRequestGate:
+    key = _service_gate_key(llm_config)
+    max_concurrency = int(getattr(llm_config, "max_concurrency", 5) or 5)
+    requests_per_minute = int(getattr(llm_config, "requests_per_minute", 0) or 0)
+    gate = _SERVICE_REQUEST_GATES.get(key)
+    if gate is None or (gate.max_concurrency, gate.requests_per_minute) != (max_concurrency, requests_per_minute):
+        gate = ServiceRequestGate(max_concurrency, requests_per_minute)
+        _SERVICE_REQUEST_GATES[key] = gate
+    return gate
+
+
+def reset_request_gates_for_testing() -> None:
+    """清空进程内请求门；配置热更新和测试隔离可调用。"""
+    _SERVICE_REQUEST_GATES.clear()
+
+
+@dataclass
 class InferResult:
     ok: bool
     response: Optional[llmApiUtil.OpenAIResponse] = None
@@ -41,19 +128,31 @@ class InferResult:
     error: Optional[Exception] = None
     error_category: Optional[LlmErrorCategory] = None
     request_id: str = ""
+    performance: InferPerformanceMetrics = field(default_factory=InferPerformanceMetrics)
 
     @classmethod
-    def success(cls, response: llmApiUtil.OpenAIResponse, request_id: str = "") -> "InferResult":
-        return cls(ok=True, response=response, request_id=request_id)
+    def success(
+        cls,
+        response: llmApiUtil.OpenAIResponse,
+        request_id: str = "",
+        performance: InferPerformanceMetrics | None = None,
+    ) -> "InferResult":
+        return cls(ok=True, response=response, request_id=request_id, performance=performance or InferPerformanceMetrics())
 
     @classmethod
-    def failure(cls, error: Exception, request_id: str = "") -> "InferResult":
+    def failure(
+        cls,
+        error: Exception,
+        request_id: str = "",
+        performance: InferPerformanceMetrics | None = None,
+    ) -> "InferResult":
         return cls(
             ok=False,
             error_message=str(error),
             error=error,
             error_category=classify_llm_error(error),
             request_id=request_id,
+            performance=performance or InferPerformanceMetrics(),
         )
 
     @property
@@ -71,6 +170,10 @@ class InferRequestStatusEvent:
     max_attempts: int = 0
     retry_delay_seconds: int | None = None
     error_message: str | None = None
+    queue_wait_ms: int | None = None
+    rate_limit_wait_ms: int | None = None
+    infer_duration_ms: int | None = None
+    retry_wait_ms: int | None = None
 
 
 InferRequestStatusEventHandler = Callable[[InferRequestStatusEvent], Awaitable[None]]
@@ -137,6 +240,8 @@ def _get_builtin_llm_service() -> "LlmServiceConfig | None":
                 context_window_tokens=svc.get("context_window_tokens", 131072),
                 reserve_output_tokens=svc.get("reserve_output_tokens", 16384),
                 compact_trigger_ratio=svc.get("compact_trigger_ratio", 0.85),
+                max_concurrency=svc.get("max_concurrency", 5),
+                requests_per_minute=svc.get("requests_per_minute", 0),
             )
     # 如果默认服务未启用，取第一个启用的
     for svc in builtin_services:
@@ -151,6 +256,8 @@ def _get_builtin_llm_service() -> "LlmServiceConfig | None":
                 context_window_tokens=svc.get("context_window_tokens", 131072),
                 reserve_output_tokens=svc.get("reserve_output_tokens", 16384),
                 compact_trigger_ratio=svc.get("compact_trigger_ratio", 0.85),
+                max_concurrency=svc.get("max_concurrency", 5),
+                requests_per_minute=svc.get("requests_per_minute", 0),
             )
     return None
 
@@ -165,7 +272,7 @@ def _build_request(
     *,
     model: str,
     ctx: GtCoreAgentDialogContext,
-    llm_config,
+    llm_config: "LlmServiceConfig",
 ) -> tuple[llmApiUtil.OpenAIRequest, tuple[str, ...]]:
     messages: list[llmApiUtil.OpenAIMessage] = [
         llmApiUtil.OpenAIMessage.text(llmApiUtil.OpenaiApiRole.SYSTEM, ctx.system_prompt),
@@ -200,6 +307,9 @@ async def _send_with_retry(
     send_request: Callable[..., Awaitable[llmApiUtil.OpenAIResponse]],
     args: tuple,
     kwargs: dict,
+    *,
+    request_gate: ServiceRequestGate,
+    metrics: InferPerformanceMetrics,
     on_status_event: InferRequestStatusEventHandler | None = None,
     on_retry_reset: Callable[[], None] | None = None,
 ) -> llmApiUtil.OpenAIResponse:
@@ -209,30 +319,29 @@ async def _send_with_retry(
     request_name = getattr(send_request, "__name__", repr(send_request))
 
     for attempt in range(1, total_attempts + 1):
+        metrics.attempts = attempt
         try:
-            # 信号量限制并发，防止多 Agent 同时请求导致 API 连接错误
-            async with _LLM_SEMAPHORE:
-                return await send_request(*args, **kwargs)
+            async with request_gate.slot() as (queue_wait_seconds, rate_wait_seconds):
+                metrics.queue_wait_ms += round(queue_wait_seconds * 1000)
+                metrics.rate_limit_wait_ms += round(rate_wait_seconds * 1000)
+                infer_started = time.monotonic()
+                try:
+                    return await send_request(*args, **kwargs)
+                finally:
+                    metrics.infer_duration_ms += round((time.monotonic() - infer_started) * 1000)
 
         except Exception as e:
-
             last_error = e
-
             error_category = classify_llm_error(e)
-            if error_category not in RETRYABLE_CATEGORIES:
+            if error_category not in RETRYABLE_CATEGORIES or attempt >= total_attempts:
                 raise
 
-            if attempt >= total_attempts:
-                raise
-
-            # 智能退避：RateLimitError 用更长延迟，其他错误用短延迟
             if error_category == LlmErrorCategory.RATE_LIMITED:
                 delay = _RATE_LIMIT_RETRY_DELAYS[min(attempt - 1, len(_RATE_LIMIT_RETRY_DELAYS) - 1)]
-                logger.warning(f"LLM RateLimit 退避: {request_id=}, attempt={attempt}, delay={delay}s")
+                logger.warning("LLM RateLimit 退避: request_id=%s, attempt=%s, delay=%ss", request_id, attempt, delay)
             else:
                 delay = _INFER_RETRY_DELAYS_SECONDS[attempt - 1]
 
-            # 重置流式回调侧的进度状态
             if on_retry_reset is not None:
                 on_retry_reset()
             await _safe_call_handler(
@@ -244,12 +353,17 @@ async def _send_with_retry(
                     max_attempts=total_attempts,
                     retry_delay_seconds=delay,
                     error_message=str(e),
+                    queue_wait_ms=metrics.queue_wait_ms,
+                    rate_limit_wait_ms=metrics.rate_limit_wait_ms,
+                    infer_duration_ms=metrics.infer_duration_ms,
+                    retry_wait_ms=metrics.retry_wait_ms,
                 ),
             )
-            logger.warning(f"LLM infer retry scheduled: {request_id=}, {request_name=}, {attempt=}, {total_attempts=}, {delay=}, {e=}")
-            # 加 jitter 防止多 agent 同步重试形成 thundering herd
+            logger.warning("LLM infer retry scheduled: request_id=%s, request_name=%s, attempt=%s/%s, delay=%s, error=%r", request_id, request_name, attempt, total_attempts, delay, e)
             jittered_delay = delay + random.uniform(0, delay * 0.1)
+            retry_wait_started = time.monotonic()
             await asyncio.sleep(jittered_delay)
+            metrics.retry_wait_ms += round((time.monotonic() - retry_wait_started) * 1000)
             await _safe_call_handler(
                 on_status_event,
                 InferRequestStatusEvent(
@@ -257,6 +371,10 @@ async def _send_with_retry(
                     request_id=request_id,
                     attempt=attempt + 1,
                     max_attempts=total_attempts,
+                    queue_wait_ms=metrics.queue_wait_ms,
+                    rate_limit_wait_ms=metrics.rate_limit_wait_ms,
+                    infer_duration_ms=metrics.infer_duration_ms,
+                    retry_wait_ms=metrics.retry_wait_ms,
                 ),
             )
 
@@ -278,6 +396,7 @@ async def infer(
     request_id = uuid.uuid4().hex
     resolved_model = model
     resolved_provider: str | None = None
+    metrics = InferPerformanceMetrics()
     try:
         llm_config = get_llm_service_for_team(team_config) if team_config else (configUtil.get_app_config().setting.current_llm_service or _get_builtin_llm_service())
         if llm_config is None:
@@ -294,6 +413,7 @@ async def infer(
             request_id, False, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
             ctx.prompt_cache, list(applied_rules),
         )
+        request_gate = _get_service_request_gate(llm_config)
         response = await _send_with_retry(
             send_request=llmApiUtil.send_request_non_stream,
             args=(),
@@ -305,23 +425,26 @@ async def infer(
                 "extra_headers": llm_config.extra_headers,
                 "request_id": request_id,
             },
+            request_gate=request_gate,
+            metrics=metrics,
             on_status_event=on_status_event,
         )
         logger.info(
-            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s",
+            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s, queue_wait_ms=%s, rate_limit_wait_ms=%s, infer_duration_ms=%s, retry_wait_ms=%s, attempts=%s",
             request_id, False, response.request_id, _usage_to_log_json(response.usage),
+            metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
         )
-        return InferResult.success(response, request_id=request_id)
+        return InferResult.success(response, request_id=request_id, performance=metrics)
     except Exception as e:
         logger.exception(
             "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
             request_id, False, resolved_model, resolved_provider,
         )
-        return InferResult.failure(e, request_id=request_id)
+        return InferResult.failure(e, request_id=request_id, performance=metrics)
 
 
 def shutdown() -> None:
-    pass
+    reset_request_gates_for_testing()
 
 
 @dataclass
@@ -351,6 +474,7 @@ async def infer_stream(
     request_id = uuid.uuid4().hex
     resolved_model = model
     resolved_provider: str | None = None
+    metrics = InferPerformanceMetrics()
     try:
         llm_config = get_llm_service_for_team(team_config) if team_config else (configUtil.get_app_config().setting.current_llm_service or _get_builtin_llm_service())
         if llm_config is None:
@@ -404,6 +528,7 @@ async def infer_stream(
                 if inspect.isawaitable(result):
                     await result
 
+        request_gate = _get_service_request_gate(llm_config)
         response = await _send_with_retry(
             send_request=llmApiUtil.send_request_stream,
             args=(),
@@ -416,17 +541,20 @@ async def infer_stream(
                 "on_chunk": _on_chunk,
                 "request_id": request_id,
             },
+            request_gate=request_gate,
+            metrics=metrics,
             on_status_event=on_status_event,
             on_retry_reset=lambda: stream_state.update(completion_tokens=0),
         )
         logger.info(
-            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s",
+            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s, queue_wait_ms=%s, rate_limit_wait_ms=%s, infer_duration_ms=%s, retry_wait_ms=%s, attempts=%s",
             request_id, True, response.request_id, _usage_to_log_json(response.usage),
+            metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
         )
-        return InferResult.success(response, request_id=request_id)
+        return InferResult.success(response, request_id=request_id, performance=metrics)
     except Exception as e:
         logger.exception(
             "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
             request_id, True, resolved_model, resolved_provider,
         )
-        return InferResult.failure(e, request_id=request_id)
+        return InferResult.failure(e, request_id=request_id, performance=metrics)

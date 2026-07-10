@@ -49,16 +49,16 @@ describe('themeStore', () => {
     expect(readStoredThemePreference()).toBe('light');
   });
 
-  it('readStoredThemePreference returns "dark" fallback for invalid value', () => {
+  it('readStoredThemePreference returns "light" fallback for invalid value', () => {
     localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, 'neon');
-    expect(readStoredThemePreference()).toBe('dark');
+    expect(readStoredThemePreference()).toBe('light');
   });
 
-  it('readStoredThemePreference returns "dark" fallback when unset', () => {
-    expect(readStoredThemePreference()).toBe('dark');
+  it('readStoredThemePreference returns "light" fallback when unset', () => {
+    expect(readStoredThemePreference()).toBe('light');
   });
 
-  it('readStoredThemePreference falls back to dark when localStorage throws', () => {
+  it('readStoredThemePreference falls back to light when localStorage throws', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => {
         throw new Error('denied');
@@ -68,7 +68,7 @@ describe('themeStore', () => {
       clear: () => {},
     });
 
-    expect(readStoredThemePreference()).toBe('dark');
+    expect(readStoredThemePreference()).toBe('light');
   });
 
   it('setThemePreference updates the ref and persists to localStorage', () => {

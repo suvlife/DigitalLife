@@ -1,0 +1,28 @@
+import { computed, reactive, readonly } from 'vue';
+import * as api from '../api/client';
+import { calculateRunProgress, deriveRoomRuntime } from '../domain/status';
+import type { NormalizedEvent, RunSnapshot, WorldSnapshot } from '../domain/types';
+import { EventsSocket } from '../realtime/socket';
+const initial:WorldSnapshot={team:null,teams:[],rooms:[],agents:[],messages:{},activities:[],tasks:[],run:null,loading:false,error:'',connection:'closed',lastUpdated:null};
+const state=reactive<WorldSnapshot>({...initial,messages:{}});let socket:EventsSocket|null=null;let loadedTeam:number|null=null;
+const agentName=(id:number|null)=>state.agents.find(a=>a.id===id)?.name || (id ? `大师 ${id}`:'大师');
+function fallbackRun(teamId:number,runId='live'):RunSnapshot{
+ const roomRuns=Object.fromEntries(state.rooms.filter(r=>r.type==='group').map(r=>[r.id,deriveRoomRuntime(r,state.tasks,state.activities,agentName)]));const rr=Object.values(roomRuns);const latestUser=Object.values(state.messages).flat().filter(m=>m.senderId<0).sort((a,b)=>Date.parse(b.sentAt)-Date.parse(a.sentAt))[0];const root=state.rooms.find(r=>r.tags.includes('task')||r.tags.includes('root'))||state.rooms.find(r=>r.type==='group');const final=(root?state.messages[root.id]||[]:[]).filter(m=>m.senderId>0).at(-1)?.content||'';const completed=rr.filter(r=>r.status==='completed').map(r=>r.roomId);const active=rr.filter(r=>['discussing','synthesizing'].includes(r.status));const phase=rr.length&&completed.length===rr.length?'synthesizing':active.length?'discussing':'queued';return{id:runId,teamId,phase,progress:calculateRunProgress(rr,phase),question:latestUser?.content||'',finalAnswer:final,roomRuns,activeAgentIds:[...new Set(active.map(r=>r.currentAgentId).filter((x):x is number=>Boolean(x)))],completedRoomIds:completed,publication:{status:'idle'},source:'fallback'};
+}
+export function applyEvent(e:NormalizedEvent){if(loadedTeam&&'teamId'in e&&e.teamId!==loadedTeam)return;
+ if(e.type==='message'){const list=state.messages[e.roomId]||(state.messages[e.roomId]=[]);if(!list.some(m=>m.id!=null&&m.id===e.message.id))list.push(e.message);}
+ else if(e.type==='room_status'){const r=state.rooms.find(r=>r.id===e.roomId);if(r){r.state=e.state;r.needScheduling=e.needScheduling;r.currentTurnAgentId=e.currentAgentId;}}
+ else if(e.type==='agent_status'){const a=state.agents.find(a=>a.id===e.agentId);if(a)a.status=e.status;}
+ else if(e.type==='agent_activity'){const i=state.activities.findIndex(a=>a.id===e.activity.id);if(i>=0)state.activities[i]=e.activity;else state.activities.unshift(e.activity);}
+ else if(e.type==='task_changed'){const i=state.tasks.findIndex(t=>t.id===e.task.id);if(i>=0)state.tasks[i]=e.task;else state.tasks.push(e.task);}
+ else if(e.type==='run_changed'){state.run={...(state.run||fallbackRun(e.teamId,e.run.id)),...e.run,source:'native'} as RunSnapshot;}
+ else if(e.type==='room_run_changed'&&state.run?.id===e.runId){state.run.roomRuns[e.roomRuntime.roomId]=e.roomRuntime;}
+ else if(e.type==='publication_changed'&&state.run?.id===e.runId)state.run.publication=e.publication;
+ if(!state.run||state.run.source==='fallback')state.run=fallbackRun(loadedTeam||('teamId'in e?e.teamId:0),state.run?.id||'live');state.lastUpdated=Date.now();}
+export async function loadTeams(){state.loading=true;state.error='';try{state.teams=await api.getTeams();}catch(e){state.error=e instanceof Error?e.message:'无法载入团队';}finally{state.loading=false;}}
+export async function loadTeam(teamId:number,runId?:string){loadedTeam=teamId;state.loading=true;state.error='';try{const [team,rooms,agents,activities,tasks,native]=await Promise.all([api.getTeam(teamId),api.getRooms(teamId),api.getAgents(teamId),api.getActivities(teamId).catch(()=>[]),api.getTasks(teamId).catch(()=>[]),runId?api.getRun(runId):api.getCurrentRun(teamId)]);state.team=team;state.rooms=rooms;state.agents=agents;state.activities=activities;state.tasks=tasks;const groupRooms=rooms.filter(r=>r.type==='group');const loaded=await Promise.all(groupRooms.map(async r=>[r.id,await api.getMessages(r.id).catch(()=>[])] as const));state.messages=Object.fromEntries(loaded);state.run=native?{...native,source:'native'}:fallbackRun(teamId,runId||'live');state.lastUpdated=Date.now();connect();}catch(e){state.error=e instanceof Error?e.message:'院落载入失败';}finally{state.loading=false;}}
+export async function loadRoomMessages(roomId:number){state.messages[roomId]=await api.getMessages(roomId);}
+export async function submitMessage(roomId:number,content:string,immediate=false){await api.sendMessage(roomId,content,immediate);await loadRoomMessages(roomId);if(state.run?.source==='fallback')state.run=fallbackRun(loadedTeam||0,state.run.id);}
+function connect(){if(socket)return;socket=new EventsSocket(applyEvent,s=>state.connection=s);socket.connect();}
+export function disconnect(){socket?.close();socket=null;}
+export const world={state:readonly(state),loadTeams,loadTeam,loadRoomMessages,submitMessage,applyEvent,activeRooms:computed(()=>Object.values(state.run?.roomRuns||{}).filter(r=>['discussing','synthesizing'].includes(r.status)))};

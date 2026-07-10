@@ -86,7 +86,7 @@ describe('TeamTreeEditor.vue Cancel Edit Behavior', () => {
     await flushPromises();
     
     const deptDialog = wrapper.findComponent({ name: 'DepartmentEditorDialog' });
-    await deptDialog.vm.$emit('update:department-name', 'New Dept Name');
+    await deptDialog.vm.$emit('update:departmentName', 'New Dept Name');
     await deptDialog.vm.$emit('save');
     await flushPromises();
 

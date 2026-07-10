@@ -1,10 +1,9 @@
 {
   "_comment": "TeamAgent 配置文件，请根据实际 LLM 服务修改",
-
   "language": "zh-CN",
   "development_mode": false,
   "bind_host": "127.0.0.1",
-  "bind_port": 8080,
+  "bind_port": 8180,
   "default_llm_server": "qwen",
   "llm_services": [
     {
@@ -13,7 +12,22 @@
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_key": "YOUR_API_KEY_HERE",
       "type": "openai-compatible",
-      "model": "qwen-plus"
+      "model": "qwen-plus",
+      "max_concurrency": 5,
+      "requests_per_minute": 0
     }
-  ]
+  ],
+  "ghost": {
+    "enabled": false,
+    "api_url": "",
+    "admin_api_key": "",
+    "content_api_key": "",
+    "auto_publish": true,
+    "publish_status": "published",
+    "max_retry_attempts": 6
+  },
+  "driver_fallback": {
+    "enabled": true,
+    "tsp_to_native": true
+  }
 }

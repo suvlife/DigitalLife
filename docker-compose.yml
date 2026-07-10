@@ -8,7 +8,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: togospace:0.3.8
+      args:
+        APP_VERSION: "0.5.0"
+    image: togospace:0.5.0
     container_name: togospace
     restart: unless-stopped
     ports:
@@ -19,10 +21,13 @@ services:
       # 可选：挂载自定义配置文件
       # - ./setting.json:/storage/setting.json:ro
     environment:
-      # 可选：覆盖监听端口
-      # - BIND_PORT=8080
-      # 可选：覆盖监听地址
-      # - BIND_HOST=0.0.0.0
+      # Docker 需要监听容器网卡；公网部署必须在反向代理层启用鉴权。
+      - BIND_HOST=0.0.0.0
+      - BIND_PORT=8080
+      # Ghost 等密钥建议通过部署平台 Secret 或 .env 注入，不写入镜像。
+      # - GHOST_ENABLED=true
+      # - GHOST_API_URL=https://your-blog.example
+      # - GHOST_ADMIN_API_KEY=${GHOST_ADMIN_API_KEY}
       - TZ=Asia/Shanghai
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/system/status.json"]

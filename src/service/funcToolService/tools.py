@@ -986,24 +986,7 @@ async def submit_conclusion(
 
     logger.info(f"综合结论已提交: agent_id={_context.agent_id}, room={room.name}, confidence={confidence}")
 
-    # 触发 Ghost 博客发布（全量模式：收集所有专家消息 + 综合结论）
-    try:
-        import asyncio as _aio
-        from service import ghostService
-
-        class _ConclusionBlogProxy:
-            def __init__(self, room, conclusion):
-                self.title = f"{room.name} 综合分析报告"
-                self.description = room.initial_topic or ""
-                self.result = conclusion
-                self.room_id = room.room_id
-                # 无 _filter_agent_id -> 全量模式，收集所有专家消息
-
-        proxy = _ConclusionBlogProxy(room, conclusion)
-        _aio.create_task(ghostService.publish_task_if_enabled(proxy))
-        logger.info("综合结论提交，触发 Ghost 博客全量发布: room=%s", room.name)
-    except Exception as e:
-        logger.warning("Ghost 博客发布触发失败（不影响结论）: %s", e)
+    # 最终答案由 runService 在消息持久化后统一入队发布，避免工具层重复触发。
 
     return {
         "success": True,

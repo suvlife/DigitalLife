@@ -1,90 +1,106 @@
 #!/usr/bin/env python3
-"""
-前端资源构建脚本：构建、同步产物到 assets/frontend/
+"""构建并同步 DigitalLife 的旧版与 V2 Web 前端。"""
 
-用法：
-  python scripts/build_frontend.py             # 构建 + sync（默认跳过 npm install）
-  python scripts/build_frontend.py --install   # npm install + 构建 + sync
-  python scripts/build_frontend.py --no-sync   # 仅构建，不同步到 assets/frontend/
-"""
+from __future__ import annotations
 
 import argparse
 import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT    = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
-DIST_DIR     = os.path.join(FRONTEND_DIR, "dist")
-ASSETS_DIR   = os.path.join(REPO_ROOT, "assets", "frontend")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 
-def _check_submodule():
-    if not os.path.exists(os.path.join(FRONTEND_DIR, "package.json")):
-        print("❌ frontend/ 子模块未初始化，请先运行：", file=sys.stderr)
-        print("   git submodule update --init frontend", file=sys.stderr)
-        sys.exit(1)
+@dataclass(frozen=True)
+class FrontendTarget:
+    name: str
+    source_dir: str
+    asset_dir: str
+
+    @property
+    def dist_dir(self) -> str:
+        return os.path.join(self.source_dir, "dist")
 
 
-def _run(cmd: list[str], cwd: str = FRONTEND_DIR):
+TARGETS = {
+    "legacy": FrontendTarget(
+        name="旧版前端",
+        source_dir=os.path.join(REPO_ROOT, "frontend"),
+        asset_dir=os.path.join(REPO_ROOT, "assets", "frontend"),
+    ),
+    "v2": FrontendTarget(
+        name="V2 武侠前端",
+        source_dir=os.path.join(REPO_ROOT, "frontend-v2"),
+        asset_dir=os.path.join(REPO_ROOT, "assets", "frontend-v2"),
+    ),
+}
+
+
+def _run(cmd: list[str], cwd: str) -> None:
     print(f"  $ {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
-        print(f"❌ 命令失败（exit {result.returncode}）: {' '.join(cmd)}", file=sys.stderr)
-        sys.exit(result.returncode)
+        raise SystemExit(result.returncode)
 
 
-def _npm_install():
-    print("\n--- 1. npm install ---")
-    _run(["npm", "install"])
-    print("✅ 依赖安装完成")
+def _validate_target(target: FrontendTarget) -> None:
+    package_json = os.path.join(target.source_dir, "package.json")
+    if not os.path.isfile(package_json):
+        raise SystemExit(f"❌ {target.name} 尚未初始化：{package_json} 不存在")
 
 
-def _npm_build():
-    print("\n--- 2. npm run build ---")
-    _run(["npm", "run", "build"])
-    if not os.path.isdir(DIST_DIR):
-        print(f"❌ 构建产物目录不存在: {DIST_DIR}", file=sys.stderr)
-        sys.exit(1)
-    print("✅ 前端构建完成")
+def _install(target: FrontendTarget) -> None:
+    lock_file = os.path.join(target.source_dir, "package-lock.json")
+    command = ["npm", "ci"] if os.path.isfile(lock_file) else ["npm", "install"]
+    print(f"\n--- {target.name}: 安装依赖 ---")
+    _run(command, target.source_dir)
 
 
-def _sync():
-    print("\n--- 3. 同步产物 → assets/frontend/ ---")
-    if os.path.exists(ASSETS_DIR):
-        shutil.rmtree(ASSETS_DIR)
-    shutil.copytree(DIST_DIR, ASSETS_DIR)
+def _build(target: FrontendTarget) -> None:
+    print(f"\n--- {target.name}: npm run build ---")
+    _run(["npm", "run", "build"], target.source_dir)
+    if not os.path.isdir(target.dist_dir):
+        raise SystemExit(f"❌ 构建产物目录不存在：{target.dist_dir}")
+
+
+def _sync(target: FrontendTarget) -> None:
+    print(f"\n--- {target.name}: 同步到 {os.path.relpath(target.asset_dir, REPO_ROOT)} ---")
+    if os.path.exists(target.asset_dir):
+        shutil.rmtree(target.asset_dir)
+    shutil.copytree(target.dist_dir, target.asset_dir)
     size_mb = sum(
-        os.path.getsize(os.path.join(dp, f))
-        for dp, _, files in os.walk(ASSETS_DIR)
-        for f in files
+        os.path.getsize(os.path.join(directory, filename))
+        for directory, _, filenames in os.walk(target.asset_dir)
+        for filename in filenames
     ) / (1024 * 1024)
-    print(f"✅ 同步完成（{size_mb:.1f} MB → assets/frontend/）")
+    print(f"✅ {target.name} 同步完成（{size_mb:.1f} MB）")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="前端资源构建脚本")
-    parser.add_argument("--install", action="store_true", help="执行 npm install")
-    parser.add_argument("--no-sync", action="store_true", help="不同步产物到 assets/frontend/")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="构建旧版与 V2 Web 前端")
+    parser.add_argument("--install", action="store_true", help="构建前安装依赖")
+    parser.add_argument("--no-sync", action="store_true", help="仅构建，不同步到 assets")
+    parser.add_argument(
+        "--target",
+        choices=("all", "legacy", "v2"),
+        default="all",
+        help="要构建的前端，默认 all",
+    )
     args = parser.parse_args()
 
-    _check_submodule()
+    selected = list(TARGETS.values()) if args.target == "all" else [TARGETS[args.target]]
+    for target in selected:
+        _validate_target(target)
+        if args.install:
+            _install(target)
+        _build(target)
+        if not args.no_sync:
+            _sync(target)
 
-    if args.install:
-        _npm_install()
-    else:
-        print("⏭️  已跳过 npm install（如需安装依赖请加 --install）")
-
-    _npm_build()
-
-    if not args.no_sync:
-        _sync()
-    else:
-        print(f"⏭️  已跳过同步（产物在 frontend/dist/）")
-
-    print("\n✅ 前端构建完成")
+    print("\n✅ 所选前端全部构建完成")
 
 
 if __name__ == "__main__":

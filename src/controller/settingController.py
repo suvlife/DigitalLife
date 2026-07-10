@@ -8,9 +8,9 @@ from pydantic import BaseModel, ValidationError
 
 from constants import LlmServiceType
 from controller.baseController import BaseHandler
-from service import schedulerService
+from service import llmService, schedulerService
 from util import assertUtil, configUtil, llmApiUtil
-from util.configTypes import LlmServiceConfig
+from util.configTypes import GhostConfig, LlmServiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,7 @@ class LlmServiceCreateHandler(BaseHandler):
             s.llm_services.append(new_service)
 
         configUtil.update_setting(mutator)
+        llmService.reset_request_gates_for_testing()
         self.return_json({"status": "ok", "index": len(setting.llm_services) - 1})
 
 
@@ -240,6 +241,7 @@ class LlmServiceModifyHandler(BaseHandler):
             s.llm_services[index] = new_service
 
         configUtil.update_setting(mutator)
+        llmService.reset_request_gates_for_testing()
 
         if not configUtil.is_initialized():
             schedulerService.stop_schedule("无可用的大模型服务")
@@ -265,6 +267,7 @@ class LlmServiceDeleteHandler(BaseHandler):
             s.llm_services.pop(index)
 
         configUtil.update_setting(mutator)
+        llmService.reset_request_gates_for_testing()
 
         # 删除服务后检查：若无可用 LLM 服务，阻塞调度
         if not configUtil.is_initialized():
@@ -489,52 +492,59 @@ class ToolListHandler(BaseHandler):
         self.return_json({"tools": tools})
 
 
+def _apply_ghost_config_patch(ghost: GhostConfig, body: dict[str, object]) -> None:
+    """Apply a Ghost config patch without exposing or accidentally clearing secrets."""
+    if "enabled" in body:
+        ghost.enabled = bool(body["enabled"])
+    if "api_url" in body:
+        ghost.api_url = str(body["api_url"]).strip()
+    if bool(body.get("clear_admin_api_key")):
+        ghost.admin_api_key = ""
+    elif str(body.get("admin_api_key", "")).strip():
+        ghost.admin_api_key = str(body["admin_api_key"]).strip()
+    if bool(body.get("clear_content_api_key")):
+        ghost.content_api_key = ""
+    elif str(body.get("content_api_key", "")).strip():
+        ghost.content_api_key = str(body["content_api_key"]).strip()
+    if "auto_publish" in body:
+        ghost.auto_publish = bool(body["auto_publish"])
+    if "publish_status" in body:
+        status = str(body["publish_status"]).strip().lower()
+        if status not in {"published", "draft"}:
+            raise assertUtil.TogoException("publish_status 必须为 published 或 draft")
+        ghost.publish_status = status
+
+
 class GhostConfigHandler(BaseHandler):
     """GET/POST /config/ghost.json — Ghost CMS 博客发布配置。"""
 
     async def get(self) -> None:
-        setting = _get_setting()
-        ghost = setting.ghost
-        # 如果用户未配置 Ghost，回退到内置配置
-        if not ghost.api_url and not ghost.admin_api_key:
-            builtin_ghost = configUtil.get_builtin_ghost_config()
-            self.return_json({
-                "enabled": builtin_ghost.get("enabled", False),
-                "api_url": builtin_ghost.get("api_url", ""),
-                "admin_api_key": "",  # 内置 Key 不返回明文
-                "content_api_key": "",
-                "auto_publish": builtin_ghost.get("auto_publish", True),
-                "has_key": bool(builtin_ghost.get("admin_api_key")),
-                "is_builtin": True,
-            })
-            return
+        ghost = _get_setting().ghost
+        # 密钥永不返回明文。空字符串用于保持前端表单兼容。
         self.return_json({
             "enabled": ghost.enabled,
             "api_url": ghost.api_url,
-            "admin_api_key": ghost.admin_api_key,
-            "content_api_key": ghost.content_api_key,
+            "admin_api_key": "",
+            "content_api_key": "",
             "auto_publish": ghost.auto_publish,
-            "has_key": bool(ghost.admin_api_key),
+            "publish_status": ghost.publish_status,
+            "has_admin_key": bool(ghost.admin_api_key),
+            "has_content_key": bool(ghost.content_api_key),
+            "has_key": bool(ghost.admin_api_key),  # 兼容旧前端
             "is_builtin": False,
         })
 
     async def post(self) -> None:
         body = self.parse_request_dict()
 
-        def _update(ghost):
-            if "enabled" in body:
-                ghost.enabled = bool(body["enabled"])
-            if "api_url" in body:
-                ghost.api_url = str(body["api_url"]).strip()
-            if "admin_api_key" in body:
-                ghost.admin_api_key = str(body["admin_api_key"]).strip()
-            if "content_api_key" in body:
-                ghost.content_api_key = str(body["content_api_key"]).strip()
-            if "auto_publish" in body:
-                ghost.auto_publish = bool(body["auto_publish"])
-
-        configUtil.update_setting(lambda s: _update(s.ghost))
-        self.return_success()
+        # 空 key 表示保留；只有显式 clear_* 才清空保存值。
+        configUtil.update_setting(lambda setting: _apply_ghost_config_patch(setting.ghost, body))
+        ghost = _get_setting().ghost
+        self.return_json({
+            "success": True,
+            "has_admin_key": bool(ghost.admin_api_key),
+            "has_content_key": bool(ghost.content_api_key),
+        })
 
 
 class GhostTestHandler(BaseHandler):

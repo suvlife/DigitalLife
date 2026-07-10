@@ -30,42 +30,48 @@
       "name": "OPC作战室",
       "agents": ["OPERATOR", "commander", "strategist", "govt_partner", "policy_designer", "fund_mgr", "park_planner", "tech_empower", "digital_arch", "inv_director", "eco_partner", "ent_service", "incubation", "post_inv", "brand", "data_analyst", "event_ops", "commercial", "compliance"],
       "initial_topic": "OPC产业平台社区全链路讨论：从政策规划、园区建设、招商运营到生态体系搭建，各专家从火山引擎方视角协作，最终由总指挥调用 submit_conclusion 提交综合方案。",
-      "max_rounds": 50,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {"display_name": {"zh-CN": "OPC作战室", "en": "OPC War Room"}, "initial_topic": {"zh-CN": "OPC产业平台社区全链路讨论：从政策规划、园区建设、招商运营到生态体系搭建，各专家从火山引擎方视角协作，最终由总指挥调用 submit_conclusion 提交综合方案。", "en": "Full-chain OPC discussion from planning to ecosystem building."}}
     },
     {
       "name": "政企合作室",
       "agents": ["OPERATOR", "commander", "govt_partner", "policy_designer", "fund_mgr"],
       "initial_topic": "政企合作专项：设计火山引擎-政府合作框架、OPC专项政策体系、产业引导基金方案。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {"display_name": {"zh-CN": "政企合作室", "en": "Govt Partnership Room"}, "initial_topic": {"zh-CN": "政企合作专项：设计合作框架、政策体系、产业基金方案。", "en": "Govt partnership: framework, policy, fund design."}}
     },
     {
       "name": "招商指挥部",
       "agents": ["OPERATOR", "commander", "inv_director", "eco_partner", "ent_service", "incubation", "brand"],
       "initial_topic": "招商策略与执行：目标企业画像、招商渠道、产业链整合、企业入驻服务、品牌推广。",
-      "max_rounds": 30,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {"display_name": {"zh-CN": "招商指挥部", "en": "Investment Command"}, "initial_topic": {"zh-CN": "招商策略与执行：目标企业画像、招商渠道、产业链整合、企业入驻服务、品牌推广。", "en": "Investment strategy and execution."}}
     },
     {
       "name": "园区规划室",
       "agents": ["OPERATOR", "commander", "park_planner", "tech_empower", "digital_arch"],
       "initial_topic": "园区与技术规划：物理空间设计、智算中心配套、火山引擎技术栈输出、数字化平台架构。",
-      "max_rounds": 30,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {"display_name": {"zh-CN": "园区规划室", "en": "Park Planning Room"}, "initial_topic": {"zh-CN": "园区与技术规划：物理空间设计、智算中心配套、火山引擎技术栈输出、数字化平台架构。", "en": "Park and tech planning: space, AIC, tech stack, digital platform."}}
     },
     {
       "name": "生态运营室",
       "agents": ["OPERATOR", "commander", "eco_partner", "ent_service", "data_analyst", "event_ops", "commercial", "compliance"],
       "initial_topic": "生态运营策略：社区健康度指标、活动运营体系、商业化变现模式、合规风控体系。政策组vs招商组辩论：优惠力度vs招商吸引力vs财务可持续性。",
-      "max_rounds": 40,
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
       "i18n": {"display_name": {"zh-CN": "生态运营室", "en": "Ecosystem Operations"}, "initial_topic": {"zh-CN": "生态运营策略：社区健康度、活动运营、商业化变现、合规风控。辩论：优惠力度vs可持续性。", "en": "Ecosystem ops: health, events, monetization, compliance."}}
     },
     {
       "name": "方案输出室",
       "agents": ["OPERATOR", "commander", "strategist", "brand"],
       "initial_topic": "方案文档输出：将各专家组讨论成果整合为完整的OPC规划方案、政府汇报材料、招商手册。",
-      "max_rounds": 100,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {"display_name": {"zh-CN": "方案输出室", "en": "Document Output Room"}, "initial_topic": {"zh-CN": "方案文档输出：将各专家组讨论成果整合为完整的OPC规划方案、政府汇报材料、招商手册。", "en": "Generate OPC plans, govt reports, investment brochures."}}
     }
   ],

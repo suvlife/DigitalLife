@@ -1,20 +1,21 @@
-"""Ghost CMS 博客自动发布服务。
+"""Reliable Ghost CMS publication service.
 
-任务完成时自动将任务标题和结果整理为 Markdown 博客文章，
-通过 Ghost Admin API 发布到用户的 Ghost 博客。
-
-JWT 签名流程：
-1. admin_api_key 格式为 "id:secret"
-2. 用 PyJWT 生成 JWT，payload 含 iat/exp/aud
-3. POST /ghost/api/admin/posts/ with Authorization: Ghost <jwt>
+Only final conclusions enter this service. Publications are persisted in an
+outbox table before network I/O, use a stable idempotency key, and can be
+retried after a process restart. Ghost Admin API credentials never leave the
+server and are never written to logs.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import datetime
 import hashlib
 import hmac
+import html
 import json
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -22,281 +23,223 @@ from urllib.parse import urlparse
 import aiohttp
 
 logger = logging.getLogger(__name__)
-
 _GHOST_API_TIMEOUT = aiohttp.ClientTimeout(total=30)
+_RETRY_DELAYS_SECONDS = (10, 30, 120, 300, 900, 3600)
+_worker_task: asyncio.Task[None] | None = None
+_worker_wakeup: asyncio.Event | None = None
 
 
 def _generate_ghost_jwt(admin_api_key: str) -> str:
-    """从 Ghost Admin API Key 生成 JWT token。
-
-    admin_api_key 格式: "id:secret"
-    JWT payload: {iat, exp, aud: "/admin/"}
-    签名算法: HS256
-    """
+    """Generate a short-lived Ghost Admin API JWT from ``id:hex-secret``."""
     try:
         key_id, key_secret = admin_api_key.split(":", 1)
-    except ValueError:
-        raise ValueError("Invalid Ghost admin API key format (expected 'id:secret')")
-
-    # Ghost JWT 使用 hex 解码的 secret
+    except ValueError as exc:
+        raise ValueError("Invalid Ghost admin API key format (expected 'id:secret')") from exc
+    if not key_id or not key_secret:
+        raise ValueError("Invalid Ghost admin API key format (empty id or secret)")
     try:
         secret = bytes.fromhex(key_secret)
-    except ValueError:
-        secret = key_secret.encode("utf-8")
-
-    header = {"alg": "HS256", "typ": "JWT", "kid": key_id}
-    now = int(time.time())
-    payload = {
-        "iat": now,
-        "exp": now + 300,  # 5 分钟有效
-        "aud": "/admin/",
-    }
-
-    # 手动构建 JWT（避免依赖 PyJWT 库）
-    import base64
+    except ValueError as exc:
+        raise ValueError("Invalid Ghost admin API key secret (expected hexadecimal)") from exc
 
     def _b64(data: bytes) -> str:
         return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
+    now = int(time.time())
+    header = {"alg": "HS256", "typ": "JWT", "kid": key_id}
+    payload = {"iat": now, "exp": now + 300, "aud": "/admin/"}
     header_b64 = _b64(json.dumps(header, separators=(",", ":")).encode())
     payload_b64 = _b64(json.dumps(payload, separators=(",", ":")).encode())
     signing_input = f"{header_b64}.{payload_b64}".encode()
     signature = hmac.new(secret, signing_input, hashlib.sha256).digest()
-    signature_b64 = _b64(signature)
-
-    return f"{header_b64}.{payload_b64}.{signature_b64}"
+    return f"{header_b64}.{payload_b64}.{_b64(signature)}"
 
 
-def _markdown_to_lexical(markdown_text: str) -> str:
-    """将 Markdown 文本转换为 Ghost Lexical 格式（JSON 字符串）。
+def _safe_ghost_base_url(api_url: str) -> str:
+    parsed = urlparse(api_url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Ghost API URL must be an absolute http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("Ghost API URL must not contain credentials")
+    # Keep an explicitly configured subpath, but strip Admin API suffixes.
+    path = parsed.path.rstrip("/")
+    marker = "/ghost/api/admin"
+    if marker in path:
+        path = path.split(marker, 1)[0]
+    return f"{parsed.scheme}://{parsed.netloc}{path}".rstrip("/")
 
-    Ghost v5+ 使用 Lexical 编辑器格式，支持标题、段落、列表、代码块等。
+
+def _sanitize_link(url: str) -> str:
+    value = html.unescape(url.strip())
+    parsed = urlparse(value)
+    if parsed.scheme.lower() in {"http", "https", "mailto"}:
+        return html.escape(value, quote=True)
+    if not parsed.scheme and not value.startswith("//"):
+        return html.escape(value, quote=True)
+    return "#"
+
+
+def _render_inline_markdown(text: str) -> str:
+    """Render a conservative inline Markdown subset with HTML escaping."""
+    escaped = html.escape(text, quote=False)
+    placeholders: list[str] = []
+
+    def _stash(value: str) -> str:
+        placeholders.append(value)
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    escaped = re.sub(
+        r"`([^`]+)`",
+        lambda m: _stash(f"<code>{html.escape(html.unescape(m.group(1)), quote=False)}</code>"),
+        escaped,
+    )
+    escaped = re.sub(
+        r"!\[([^\]]*)\]\(([^\s)]+)(?:\s+&quot;.*?&quot;)?\)",
+        lambda m: _stash(
+            f'<img src="{_sanitize_link(html.unescape(m.group(2)))}" alt="{html.escape(html.unescape(m.group(1)), quote=True)}">'
+        ),
+        escaped,
+    )
+    escaped = re.sub(
+        r"\[([^\]]+)\]\(([^\s)]+)(?:\s+&quot;.*?&quot;)?\)",
+        lambda m: _stash(
+            f'<a href="{_sanitize_link(html.unescape(m.group(2)))}" rel="noopener noreferrer">{html.escape(html.unescape(m.group(1)), quote=False)}</a>'
+        ),
+        escaped,
+    )
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", escaped)
+    escaped = re.sub(r"~~([^~]+)~~", r"<del>\1</del>", escaped)
+    for index, value in enumerate(placeholders):
+        escaped = escaped.replace(f"\x00{index}\x00", value)
+    return escaped
+
+
+def markdown_to_safe_html(markdown_text: str) -> str:
+    """Convert Markdown to allowlisted HTML suitable for Ghost ``source=html``.
+
+    Raw HTML is always escaped. Supported blocks include headings, paragraphs,
+    fenced code, blockquotes, ordered/unordered/task lists, tables and rules.
     """
-    import json as _json
-    import re as _re
+    lines = markdown_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    output: list[str] = []
+    paragraph: list[str] = []
+    list_type: str | None = None
+    in_quote = False
+    in_code = False
+    code_language = ""
+    code_lines: list[str] = []
 
-    def _text_node(text: str, fmt: int = 0) -> dict:
-        return {'type': 'text', 'version': 1, 'text': text, 'format': fmt}
+    def flush_paragraph() -> None:
+        if paragraph:
+            output.append(f"<p>{'<br>'.join(_render_inline_markdown(part) for part in paragraph)}</p>")
+            paragraph.clear()
 
-    def _heading(tag: str, text: str) -> dict:
-        return {'type': 'heading', 'version': 1, 'tag': tag, 'direction': 'ltr', 'format': '', 'indent': 0,
-                'children': [_text_node(text)]}
+    def close_list() -> None:
+        nonlocal list_type
+        if list_type:
+            output.append(f"</{list_type}>")
+            list_type = None
 
-    def _paragraph(text: str) -> dict:
-        children = []
-        parts = _re.split(r'(\*\*.+?\*\*)', text)
-        for part in parts:
-            if part.startswith('**') and part.endswith('**'):
-                children.append(_text_node(part[2:-2], 1))
-            elif part:
-                children.append(_text_node(part))
-        if not children:
-            children = [_text_node('')]
-        return {'type': 'paragraph', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
-                'children': children}
+    def close_quote() -> None:
+        nonlocal in_quote
+        if in_quote:
+            flush_paragraph()
+            output.append("</blockquote>")
+            in_quote = False
 
-    def _list(ordered: bool, items: list[str]) -> dict:
-        list_type = 'ordered' if ordered else 'unordered'
-        children = []
-        for item in items:
-            children.append({
-                'type': 'listitem', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
-                'value': item, 'children': [_text_node(item)]
-            })
-        return {'type': list_type, 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
-                'start': 1 if ordered else None, 'children': children}
-
-    nodes = []
-    lines = markdown_text.split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i]
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        fence = re.match(r"^\s*```\s*([\w.+-]*)\s*$", line)
+        if fence:
+            flush_paragraph(); close_list(); close_quote()
+            if in_code:
+                language_attr = f' class="language-{html.escape(code_language, quote=True)}"' if code_language else ""
+                output.append(f"<pre><code{language_attr}>{html.escape(chr(10).join(code_lines))}</code></pre>")
+                code_lines.clear(); code_language = ""; in_code = False
+            else:
+                in_code = True; code_language = fence.group(1)
+            index += 1
+            continue
+        if in_code:
+            code_lines.append(line)
+            index += 1
+            continue
         if not line.strip():
-            i += 1
+            flush_paragraph(); close_list(); close_quote(); index += 1; continue
+
+        # GFM-style tables with a header separator.
+        if "|" in line and index + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-{3,}", lines[index + 1]):
+            flush_paragraph(); close_list(); close_quote()
+            headers = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            output.append("<table><thead><tr>" + "".join(f"<th>{_render_inline_markdown(cell)}</th>" for cell in headers) + "</tr></thead><tbody>")
+            index += 2
+            while index < len(lines) and "|" in lines[index] and lines[index].strip():
+                cells = [cell.strip() for cell in lines[index].strip().strip("|").split("|")]
+                output.append("<tr>" + "".join(f"<td>{_render_inline_markdown(cell)}</td>" for cell in cells) + "</tr>")
+                index += 1
+            output.append("</tbody></table>")
             continue
 
-        h_match = _re.match(r'^(#{1,3})\s+(.+)$', line)
-        if h_match:
-            tag = f'h{len(h_match.group(1))}'
-            nodes.append(_heading(tag, h_match.group(2).strip()))
-            i += 1
-            continue
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            flush_paragraph(); close_list(); close_quote()
+            level = len(heading.group(1))
+            output.append(f"<h{level}>{_render_inline_markdown(heading.group(2).strip())}</h{level}>")
+            index += 1; continue
+        if re.match(r"^\s*(---|\*\*\*|___)\s*$", line):
+            flush_paragraph(); close_list(); close_quote(); output.append("<hr>"); index += 1; continue
+        quote = re.match(r"^\s*>\s?(.*)$", line)
+        if quote:
+            flush_paragraph(); close_list()
+            if not in_quote:
+                output.append("<blockquote>"); in_quote = True
+            paragraph.append(quote.group(1)); index += 1; continue
+        if in_quote:
+            close_quote()
+        item = re.match(r"^\s*([-+*]|\d+[.)])\s+(.+)$", line)
+        if item:
+            flush_paragraph()
+            wanted = "ol" if item.group(1)[0].isdigit() else "ul"
+            if list_type != wanted:
+                close_list(); output.append(f"<{wanted}>"); list_type = wanted
+            value = item.group(2)
+            task = re.match(r"^\[([ xX])\]\s+(.+)$", value)
+            if task:
+                checked = " checked" if task.group(1).lower() == "x" else ""
+                value = f'<input type="checkbox" disabled{checked}> {_render_inline_markdown(task.group(2))}'
+            else:
+                value = _render_inline_markdown(value)
+            output.append(f"<li>{value}</li>"); index += 1; continue
+        close_list()
+        paragraph.append(line.strip())
+        index += 1
 
-        if line.strip().startswith("```"):
-            code_lines = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code_lines.append(lines[i])
-                i += 1
-            i += 1
-            nodes.append({'type': 'code', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0,
-                          'language': '', 'code': '\n'.join(code_lines)})
-            continue
-
-        if _re.match(r'^[-*]\s+', line):
-            items = []
-            while i < len(lines) and _re.match(r'^[-*]\s+', lines[i]):
-                items.append(_re.sub(r'^[-*]\s+', '', lines[i]).strip())
-                i += 1
-            nodes.append(_list(False, items))
-            continue
-
-        if _re.match(r'^\d+\.\s+', line):
-            items = []
-            while i < len(lines) and _re.match(r'^\d+\.\s+', lines[i]):
-                items.append(_re.sub(r'^\d+\.\s+', '', lines[i]).strip())
-                i += 1
-            nodes.append(_list(True, items))
-            continue
-
-        if line.strip() in ("---", "***", "___"):
-            nodes.append(_paragraph('———'))
-            i += 1
-            continue
-
-        para_lines = [line.strip()]
-        i += 1
-        while i < len(lines) and lines[i].strip() and not _re.match(r'^#{1,3}\s', lines[i]) \
-                and not _re.match(r'^[-*]\s', lines[i]) and not _re.match(r'^\d+\.\s', lines[i]) \
-                and not lines[i].strip().startswith("```") and lines[i].strip() not in ("---", "***", "___"):
-            para_lines.append(lines[i].strip())
-            i += 1
-        para_text = " ".join(para_lines)
-        para_text = _re.sub(r'`(.+?)`', r'\1', para_text)
-        nodes.append(_paragraph(para_text))
-
-    return _json.dumps({
-        'root': {'type': 'root', 'version': 1, 'direction': 'ltr', 'format': '', 'indent': 0, 'children': nodes}
-    }, ensure_ascii=False)
+    if in_code:
+        language_attr = f' class="language-{html.escape(code_language, quote=True)}"' if code_language else ""
+        output.append(f"<pre><code{language_attr}>{html.escape(chr(10).join(code_lines))}</code></pre>")
+    flush_paragraph(); close_list(); close_quote()
+    return "\n".join(output)
 
 
 def _extract_tags_from_content(title: str, content: str) -> list[str]:
-    """从标题和内容中提取关键词作为标签。"""
-    tags: list[str] = []
-    title_words = [w.strip() for w in title.replace(",", " ").replace("，", " ").split() if len(w.strip()) >= 2]
-    tags.extend(title_words[:3])
-    keyword_map = {
-        "股票": "股票分析", "A股": "A股", "投资": "投资策略",
-        "八字": "八字命理", "紫微": "紫微斗数", "梅花": "梅花易数",
-        "命理": "命理", "运势": "运势预测", "风水": "风水",
-        "价值投资": "价值投资", "技术分析": "技术分析",
-        "威科夫": "威科夫", "江恩": "江恩", "巴菲特": "巴菲特",
-        "代码": "编程", "开发": "软件开发",
-    }
-    content_lower = content.lower()
-    for keyword, tag in keyword_map.items():
-        if keyword in content_lower and tag not in tags:
-            tags.append(tag)
+    tags = ["数字人生", "多智能体"]
+    words = [word.strip() for word in re.split(r"[,，\s]+", title) if len(word.strip()) >= 2]
+    for word in words[:3]:
+        if word not in tags:
+            tags.append(word[:40])
     return tags[:5]
 
 
-def _build_blog_content_from_task(task: Any) -> str:
-    """从单个任务构建博客内容（Markdown 格式）。"""
-    title = task.title or "未命名任务"
-    description = task.description or ""
-    result = task.result or ""
-
-    sections = [f"# {title}\n"]
-    if description:
-        sections.append(f"## 任务描述\n\n{description}\n")
-    if result:
-        sections.append(f"## 分析结果\n\n{result}\n")
-    sections.append("---\n*本文由数字人生多智能体协作平台自动生成*\n")
-    return "\n".join(sections)
-
-
-async def _build_blog_content_from_room(task: Any) -> str:
-    """从任务关联的房间收集分析消息，构建博客内容。
-
-    支持两种模式：
-    - 全量模式：收集所有 Agent 的消息（task 无 _filter_agent_id 时）
-    - 单 Agent 模式：只收集指定 Agent 的消息（task 有 _filter_agent_id 时）
-    """
-    from model.dbModel.gtRoomMessage import GtRoomMessage
-    from model.dbModel.gtAgent import GtAgent
-
-    title = task.title or "未命名任务"
-    description = task.description or ""
-    result = task.result or ""
-
-    # 获取房间 ID
-    room_id = None
-    if hasattr(task, 'room_id') and task.room_id:
-        room_id = task.room_id
-    else:
-        room_id = getattr(task, 'task_data', {}).get('room_id') if hasattr(task, 'task_data') else None
-
-    # 单 Agent 过滤模式
-    filter_agent_id = getattr(task, '_filter_agent_id', None)
-
-    sections = [f"# {title}\n"]
-    if description:
-        sections.append(f"## 任务背景\n\n{description}\n")
-
-    if room_id:
-        try:
-            messages = list(await GtRoomMessage.select()
-                .where(GtRoomMessage.room_id == room_id)
-                .order_by(GtRoomMessage.seq.asc())
-                .aio_execute())
-
-            if messages:
-                agent_messages: dict[int, list[str]] = {}
-                for msg in messages:
-                    if msg.sender_id <= 0:
-                        continue
-                    # 单 Agent 模式：只收集该 Agent 的消息
-                    if filter_agent_id is not None and msg.sender_id != filter_agent_id:
-                        continue
-                    if msg.sender_id not in agent_messages:
-                        agent_messages[msg.sender_id] = []
-                    content = msg.content or ""
-                    if content.strip():
-                        agent_messages[msg.sender_id].append(content)
-
-                if filter_agent_id is not None:
-                    # 单 Agent 模式：直接输出该专家的分析
-                    for agent_id, msgs in agent_messages.items():
-                        agent_name = f"专家{agent_id}"
-                        try:
-                            agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
-                            if agent:
-                                agent_name = agent.display_name or agent.name
-                        except Exception:
-                            pass
-                        combined = "\n\n".join(msgs)
-                        sections.append(f"{combined}\n")
-                else:
-                    # 全量模式：按 Agent 分组输出
-                    sections.append("## 各专家分析\n")
-                    for agent_id, msgs in agent_messages.items():
-                        agent_name = f"专家{agent_id}"
-                        try:
-                            agent = await GtAgent.aio_get_or_none(GtAgent.id == agent_id)
-                            if agent:
-                                agent_name = agent.display_name or agent.name
-                        except Exception:
-                            pass
-                        sections.append(f"### {agent_name}\n")
-                        combined = "\n\n".join(msgs)
-                        sections.append(f"{combined}\n")
-
-                    if result:
-                        sections.append("## 综合结论\n")
-                        sections.append(f"{result}\n")
-            else:
-                if result:
-                    sections.append(f"## 分析结果\n\n{result}\n")
-        except Exception as e:
-            logger.warning("收集房间消息失败: %s, 回退到任务结果", e)
-            if result:
-                sections.append(f"## 分析结果\n\n{result}\n")
-    else:
-        if result:
-            sections.append(f"## 分析结果\n\n{result}\n")
-
-    sections.append("---\n*本文由数字人生多智能体协作平台自动生成*\n")
-    return "\n".join(sections)
+def _build_final_markdown(title: str, conclusion: str, *, question: str = "") -> str:
+    sections = [f"# {title}"]
+    if question.strip():
+        sections.append(f"## 用户问题\n\n{question.strip()}")
+    sections.append(f"## 最终结论\n\n{conclusion.strip()}")
+    sections.append("---\n\n*本文由数字人生多智能体协作平台自动生成*")
+    return "\n\n".join(sections)
 
 
 async def publish_post(
@@ -306,152 +249,250 @@ async def publish_post(
     *,
     api_url: str,
     admin_api_key: str,
+    status: str = "published",
 ) -> dict[str, Any]:
-    """通过 Ghost Admin API 发布博客文章。
-
-    Returns:
-        {"success": bool, "message": str, "post_url": str | None}
-    """
+    """Publish complete Markdown via Ghost Admin API ``source=html``."""
     if not api_url or not admin_api_key:
-        return {"success": False, "message": "Ghost API URL 或 Admin Key 未配置"}
-
-    # 去除尾部斜杠
-    base_url = api_url.rstrip("/")
-    # 确保 API 路径正确
-    if not base_url.endswith("/ghost/api/admin"):
-        if "/ghost/api/admin" not in base_url:
-            base_url = f"{base_url}/ghost/api/admin"
-
-    post_url = f"{base_url}/posts/"
-
+        return {"success": False, "message": "Ghost API URL 或 Admin Key 未配置", "retryable": False}
+    if status not in {"published", "draft"}:
+        return {"success": False, "message": "Ghost status 必须为 published 或 draft", "retryable": False}
     try:
+        base_url = _safe_ghost_base_url(api_url)
         jwt_token = _generate_ghost_jwt(admin_api_key)
-    except Exception as e:
-        logger.error("Ghost JWT 生成失败: %s", e)
-        return {"success": False, "message": f"JWT 生成失败: {e}"}
+    except ValueError as exc:
+        return {"success": False, "message": str(exc), "retryable": False}
 
-    # 自动生成标签
-    if tags is None:
-        tags = _extract_tags_from_content(title, content)
-
-    # 构建 Ghost API 请求体（使用 Lexical 格式，Ghost v5+ 原生内容格式）
-    lexical = _markdown_to_lexical(content)
-    body = {
-        "posts": [
-            {
-                "title": title,
-                "lexical": lexical,
-                "tags": [{"name": tag} for tag in tags],
-                "status": "published",
-                "feature_image": None,
-            }
-        ]
-    }
-
+    endpoint = f"{base_url}/ghost/api/admin/posts/?source=html"
+    body = {"posts": [{
+        "title": title,
+        "html": markdown_to_safe_html(content),
+        "tags": [{"name": tag} for tag in (tags or _extract_tags_from_content(title, content))],
+        "status": status,
+    }]}
     headers = {
         "Authorization": f"Ghost {jwt_token}",
+        "Accept-Version": "v5.0",
         "Content-Type": "application/json",
     }
-
     try:
         async with aiohttp.ClientSession(timeout=_GHOST_API_TIMEOUT) as session:
-            async with session.post(post_url, json=body, headers=headers) as resp:
-                resp_text = await resp.text()
-                if resp.status == 201:
-                    data = await resp.json()
-                    posts = data.get("posts", [])
-                    if posts:
-                        slug = posts[0].get("slug", "")
-                        published_url = f"{api_url.rstrip('/')}/{slug}/"
-                        logger.info("Ghost 博客发布成功: title=%s, url=%s", title, published_url)
-                        return {"success": True, "message": "发布成功", "post_url": published_url}
-                    return {"success": True, "message": "发布成功"}
-                else:
-                    logger.warning("Ghost 发布失败: HTTP %d, %s", resp.status, resp_text[:200])
-                    return {"success": False, "message": f"Ghost API 返回 HTTP {resp.status}: {resp_text[:200]}"}
-    except Exception as e:
-        logger.warning("Ghost 发布异常: %s", e)
-        return {"success": False, "message": f"发布请求异常: {e}"}
+            async with session.post(endpoint, json=body, headers=headers) as response:
+                response_text = await response.text()
+                if response.status in {200, 201}:
+                    data = json.loads(response_text) if response_text else {}
+                    post = (data.get("posts") or [{}])[0]
+                    return {
+                        "success": True,
+                        "message": "发布成功",
+                        "post_url": post.get("url"),
+                        "post_id": post.get("id"),
+                        "retryable": False,
+                    }
+                retryable = response.status == 429 or response.status >= 500
+                logger.warning("Ghost publish failed: status=%s", response.status)
+                return {
+                    "success": False,
+                    "message": f"Ghost API 返回 HTTP {response.status}: {response_text[:500]}",
+                    "retryable": retryable,
+                }
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        logger.warning("Ghost publish transport error: %s", type(exc).__name__)
+        return {"success": False, "message": f"发布请求异常: {type(exc).__name__}", "retryable": True}
 
 
-async def publish_task_if_enabled(task: Any) -> None:
-    """任务完成时自动发布到 Ghost 博客（如果已启用）。
-
-    优先使用用户配置，回退到内置配置。
-    """
+async def enqueue_final_conclusion(
+    *,
+    source_id: str | int,
+    title: str,
+    conclusion: str,
+    question: str = "",
+    team_id: int | None = None,
+    room_id: int | None = None,
+    publication_key: str | None = None,
+    run_id: int | None = None,
+) -> dict[str, Any]:
+    """Unified final-conclusion entry point used by current submit_conclusion."""
+    from dal.db import gtBlogPublicationManager
     from util import configUtil
 
-    setting = configUtil.get_app_config().setting
-    ghost_config = setting.ghost
+    ghost = configUtil.get_app_config().setting.ghost
+    if not (ghost.enabled and ghost.auto_publish and ghost.api_url and ghost.admin_api_key):
+        return {"success": False, "queued": False, "message": "Ghost 自动发布未启用或配置不完整"}
+    if not conclusion.strip():
+        return {"success": False, "queued": False, "message": "最终结论不能为空"}
 
-    # 用户未配置时回退到内置配置
-    if not ghost_config.api_url and not ghost_config.admin_api_key:
-        builtin = configUtil.get_builtin_ghost_config()
-        if not builtin.get("enabled"):
-            return
-        api_url = builtin.get("api_url", "")
-        admin_api_key = builtin.get("admin_api_key", "")
-    else:
-        if not ghost_config.enabled or not ghost_config.auto_publish:
-            return
-        api_url = ghost_config.api_url
-        admin_api_key = ghost_config.admin_api_key
+    source_text = str(source_id)
+    key = publication_key or f"final-conclusion:{source_text}"
+    markdown_content = _build_final_markdown(title, conclusion, question=question)
+    content_hash = hashlib.sha256(markdown_content.encode("utf-8")).hexdigest()
+    row = await gtBlogPublicationManager.upsert_pending(
+        publication_key=key,
+        source_type="FINAL_CONCLUSION",
+        source_id=source_text,
+        title=title.strip() or "综合分析报告",
+        markdown_content=markdown_content,
+        content_hash=content_hash,
+        tags=_extract_tags_from_content(title, markdown_content),
+        team_id=team_id,
+        room_id=room_id,
+        run_id=run_id,
+    )
+    _wake_worker()
+    return {
+        "success": True,
+        "queued": row.status != "PUBLISHED",
+        "publication_id": row.id,
+        "status": row.status,
+        "post_url": row.post_url,
+    }
 
-    if not api_url or not admin_api_key:
-        logger.debug("Ghost 发布跳过：API URL 或 Admin Key 未配置")
+
+async def publish_task_if_enabled(task: Any) -> dict[str, Any]:
+    """Compatibility wrapper; only objects explicitly marked final are accepted.
+
+    Ordinary collaboration task ``DONE`` records are intentionally ignored to
+    prevent fragmented and duplicate blog posts.
+    """
+    if not bool(getattr(task, "is_final_conclusion", False)):
+        logger.debug("Skip non-final task publication: task_id=%s", getattr(task, "id", None))
+        return {"success": False, "queued": False, "message": "仅最终结论可发布"}
+    source_id = getattr(task, "publication_source_id", None) or getattr(task, "id", None) or getattr(task, "room_id", None)
+    if source_id is None:
+        return {"success": False, "queued": False, "message": "最终结论缺少稳定 source_id"}
+    return await enqueue_final_conclusion(
+        source_id=source_id,
+        title=getattr(task, "title", "综合分析报告"),
+        conclusion=getattr(task, "result", ""),
+        question=getattr(task, "description", ""),
+        team_id=getattr(task, "team_id", None),
+        room_id=getattr(task, "room_id", None),
+    )
+
+
+def _wake_worker() -> None:
+    if _worker_wakeup is not None:
+        _worker_wakeup.set()
+
+
+async def _process_publication(row: Any) -> None:
+    from dal.db import gtBlogPublicationManager
+    from util import configUtil
+
+    ghost = configUtil.get_app_config().setting.ghost
+    result = await publish_post(
+        row.title,
+        row.markdown_content,
+        list(row.tags or []),
+        api_url=ghost.api_url,
+        admin_api_key=ghost.admin_api_key,
+        status=ghost.publish_status,
+    )
+    if result.get("success"):
+        post_id = result.get("post_id")
+        post_url = result.get("post_url")
+        await gtBlogPublicationManager.mark_published(
+            row.id, ghost_post_id=post_id, post_url=post_url
+        )
+        if getattr(row, "run_id", None) is not None:
+            try:
+                from service import runService
+                await runService.update_blog_publish_status(
+                    run_id=row.run_id, status="PUBLISHED", post_id=post_id, post_url=post_url,
+                )
+            except Exception:
+                logger.exception("Failed to update TaskRun blog publication status")
         return
 
-    # 构建博客内容（收集房间内所有大师的分析消息）
-    title = task.title or "未命名任务"
-    content = await _build_blog_content_from_room(task)
-    tags = _extract_tags_from_content(title, content)
+    max_attempts = max(1, int(ghost.max_retry_attempts))
+    terminal = not bool(result.get("retryable")) or row.attempt_count >= max_attempts
+    delay_index = min(max(row.attempt_count - 1, 0), len(_RETRY_DELAYS_SECONDS) - 1)
+    error_message = str(result.get("message", "Ghost publish failed"))
+    await gtBlogPublicationManager.mark_retry(
+        row.id,
+        error=error_message,
+        next_retry_at=datetime.datetime.now() + datetime.timedelta(seconds=_RETRY_DELAYS_SECONDS[delay_index]),
+        terminal=terminal,
+    )
+    if getattr(row, "run_id", None) is not None:
+        try:
+            from service import runService
+            await runService.update_blog_publish_status(
+                run_id=row.run_id,
+                status="FAILED" if terminal else "RETRY_WAITING",
+                error_message=error_message,
+            )
+        except Exception:
+            logger.exception("Failed to update TaskRun blog publication failure status")
 
-    # 异步发布（不阻塞任务流程）
-    try:
-        result_pub = await publish_post(
-            title=title,
-            content=content,
-            tags=tags,
-            api_url=api_url,
-            admin_api_key=admin_api_key,
-        )
-        if result_pub["success"]:
-            logger.info("任务博客自动发布成功: task_id=%s, title=%s", task.id, title)
-        else:
-            logger.warning("任务博客自动发布失败: task_id=%s, error=%s", task.id, result_pub["message"])
-    except Exception as e:
-        logger.warning("任务博客自动发布异常: task_id=%s, error=%s", task.id, e)
+
+async def process_pending_once(limit: int = 10) -> int:
+    from dal.db import gtBlogPublicationManager
+    rows = await gtBlogPublicationManager.claim_due(limit=limit)
+    for row in rows:
+        await _process_publication(row)
+    return len(rows)
+
+
+async def _worker_loop() -> None:
+    assert _worker_wakeup is not None
+    while True:
+        try:
+            processed = await process_pending_once()
+            if processed:
+                continue
+            _worker_wakeup.clear()
+            try:
+                await asyncio.wait_for(_worker_wakeup.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Ghost publication worker iteration failed")
+            await asyncio.sleep(5)
+
+
+async def startup() -> None:
+    global _worker_task, _worker_wakeup
+    if _worker_task is not None and not _worker_task.done():
+        return
+    from dal.db import gtBlogPublicationManager
+    await gtBlogPublicationManager.recover_interrupted()
+    _worker_wakeup = asyncio.Event()
+    _worker_task = asyncio.create_task(_worker_loop(), name="ghost-publication-worker")
+
+
+async def shutdown() -> None:
+    global _worker_task, _worker_wakeup
+    task = _worker_task
+    _worker_task = None
+    _worker_wakeup = None
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 async def test_ghost_connection(api_url: str, admin_api_key: str) -> dict[str, Any]:
-    """测试 Ghost CMS 连接。"""
+    """Test server-side Admin API authentication without publishing content."""
     if not api_url or not admin_api_key:
-        return {"success": False, "message": "API URL 和 Admin Key 不能为空"}
-
-    base_url = api_url.rstrip("/")
-    if not base_url.endswith("/ghost/api/admin"):
-        if "/ghost/api/admin" not in base_url:
-            base_url = f"{base_url}/ghost/api/admin"
-
-    test_url = f"{base_url}/site/"
-
+        return {"success": False, "message": "请填写 Ghost API URL 和 Admin API Key"}
     try:
-        jwt_token = _generate_ghost_jwt(admin_api_key)
-    except Exception as e:
-        return {"success": False, "message": f"JWT 生成失败: {e}"}
-
-    headers = {"Authorization": f"Ghost {jwt_token}"}
-
+        base_url = _safe_ghost_base_url(api_url)
+        token = _generate_ghost_jwt(admin_api_key)
+    except ValueError as exc:
+        return {"success": False, "message": str(exc)}
+    endpoint = f"{base_url}/ghost/api/admin/site/"
+    headers = {"Authorization": f"Ghost {token}", "Accept-Version": "v5.0"}
     try:
         async with aiohttp.ClientSession(timeout=_GHOST_API_TIMEOUT) as session:
-            async with session.get(test_url, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+            async with session.get(endpoint, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
                     site = data.get("site", {})
-                    title = site.get("title", "Unknown")
-                    return {"success": True, "message": f"连接成功: {title}"}
-                else:
-                    text = await resp.text()
-                    return {"success": False, "message": f"HTTP {resp.status}: {text[:200]}"}
-    except Exception as e:
-        return {"success": False, "message": f"连接异常: {e}"}
+                    return {"success": True, "message": "连接成功", "site_title": site.get("title", "")}
+                return {"success": False, "message": f"连接失败：HTTP {response.status}"}
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        return {"success": False, "message": f"连接异常：{type(exc).__name__}"}

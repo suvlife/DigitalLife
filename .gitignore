@@ -27,3 +27,14 @@ build_config.json
 # 开发模式下本地运行数据（统一目录）
 dev_storage_root/
 assets/execute/gtsp/gtsp-*
+
+# Local secrets and credential overrides
+.env
+.env.*
+!.env.example
+assets/builtin_keys.local.json
+*secrets*.json
+
+frontend-v2/node_modules/
+frontend-v2/dist/
+assets/frontend-v2/

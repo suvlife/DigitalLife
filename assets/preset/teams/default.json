@@ -46,7 +46,8 @@
       "name": "小马哥",
       "agents": ["OPERATOR", "小马哥"],
       "initial_topic": "你好，小马哥。我们在这里进行私下沟通。",
-      "max_rounds": 100,
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
       "i18n": {
         "display_name": {
           "zh-CN": "小马哥",

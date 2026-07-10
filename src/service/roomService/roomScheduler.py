@@ -71,10 +71,25 @@ class RoomScheduler:
         self.current_turn_has_content = False
         self._last_speaker_id = None
 
+    def discussion_strategy(self) -> str:
+        """读取房间策略；策略保存在 tags 中，不要求数据库迁移。"""
+        strategy_tag = next((tag for tag in (self._gt_room.tags or []) if str(tag).upper().startswith("STRATEGY:")), None)
+        raw = str(strategy_tag).split(":", 1)[1] if strategy_tag else "ROUND_ROBIN"
+        strategy = raw.upper()
+        if strategy not in {"ROUND_ROBIN", "FAST_CONSENSUS", "PARALLEL_OPINIONS"}:
+            logger.warning("房间 %s 使用未知讨论策略 %s，回退 ROUND_ROBIN", self._key, raw)
+            return "ROUND_ROBIN"
+        return strategy
+
     def _effective_max_rounds(self) -> int:
-        if self._gt_room.max_rounds is not None:
-            return self._gt_room.max_rounds
-        return configUtil.get_app_config().setting.default_room_max_rounds
+        configured = self._gt_room.max_rounds
+        if configured is None:
+            configured = configUtil.get_app_config().setting.default_room_max_rounds
+        # 快速共识/并行观点入口采用单轮收集：每位专家至多发言一次，随后结束。
+        # 这保持现有串行状态机的正确性，同时显著缩短尾部；跨房间仍可并行。
+        if self.discussion_strategy() in {"FAST_CONSENSUS", "PARALLEL_OPINIONS"}:
+            return 1 if configured <= 0 else min(configured, 1)
+        return configured
 
     # ─── turn 生命周期 ──────────────────────────────────────
 

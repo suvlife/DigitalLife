@@ -171,15 +171,15 @@ class ChatRoom:
         return self._store.has_unread_messages(agent_id)
 
     async def add_message(self, sender_id: int, content: str, send_time: datetime | None = None, *,
-                          insert_immediately: bool = False) -> None:
-        await self._append_message(sender_id, content, send_time=send_time, insert_immediately=insert_immediately)
+                          insert_immediately: bool = False) -> GtRoomMessage:
+        return await self._append_message(sender_id, content, send_time=send_time, insert_immediately=insert_immediately)
 
     async def _append_message(
         self, sender_id: int, content: str,
         send_time: datetime | None = None, *,
         update_turn_state: bool = True,
         insert_immediately: bool = False,
-    ) -> None:
+    ) -> GtRoomMessage:
         assertUtil.assertTrue(
             self.can_post_message(sender_id),
             error_message=f"sender_id '{sender_id}' is not an agent of room '{self.key}'",
@@ -233,6 +233,8 @@ class ChatRoom:
                 self._scheduler.publish_status(next_agent_id, need_scheduling=True)
             if sender_id == self.OPERATOR_MEMBER_ID and next_agent_id is None:
                 await self.handle_finish_request(self.OPERATOR_MEMBER_ID)
+
+        return message
 
     async def flush_pending_immediate_messages(self) -> None:
         await self._store.flush_pending_immediate()

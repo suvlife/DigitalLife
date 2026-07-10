@@ -1,0 +1,2 @@
+import { world } from './world';
+describe('world reducer',()=>{it('applies planned native run event',()=>{world.applyEvent({type:'run_changed',teamId:1,run:{id:'r1',teamId:1,phase:'planning',progress:5}});expect(world.state.run?.id).toBe('r1');expect(world.state.run?.source).toBe('native')});it('updates publication',()=>{world.applyEvent({type:'publication_changed',teamId:1,runId:'r1',publication:{status:'published',url:'https://example.test/post'}});expect(world.state.run?.publication.status).toBe('published')})});

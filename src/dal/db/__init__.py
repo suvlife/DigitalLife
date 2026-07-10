@@ -11,6 +11,9 @@ from . import gtRoomMessageManager
 from . import gtSystemConfigManager
 from . import gtAgentTaskManager
 from . import gtTeamManager
+from . import gtTaskRunManager
+from . import gtRoomRunManager
+from . import gtBlogPublicationManager
 from .transaction import atomic_transaction
 
 __all__ = [
@@ -25,5 +28,8 @@ __all__ = [
     "gtSystemConfigManager",
     "gtAgentTaskManager",
     "gtTeamManager",
+    "gtTaskRunManager",
+    "gtRoomRunManager",
+    "gtBlogPublicationManager",
     "atomic_transaction",
 ]

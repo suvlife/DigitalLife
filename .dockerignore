@@ -8,6 +8,7 @@
 # 开发环境
 .venv
 node_modules
+frontend-v2/node_modules
 
 # 测试
 tests/
@@ -41,6 +42,7 @@ pytest.ini
 
 # 构建产物（前端会在 Docker 中重新构建）
 frontend/dist
+frontend-v2/dist
 
 # 临时文件
 *.pyc
@@ -67,3 +69,7 @@ scripts/run_tests.sh
 # 前端开发调试文件（不应进入生产构建）
 frontend/src/components/settings/ThemeDebuggerSection.vue
 frontend/src/components/settings/themeTokens.ts
+# Credential examples/local overrides are not runtime assets
+assets/builtin_keys.example.json
+assets/builtin_keys.local.json
+*secrets*.json

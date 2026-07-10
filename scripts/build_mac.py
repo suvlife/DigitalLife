@@ -4,8 +4,8 @@ macOS 打包脚本：构建 TogoSpace.app
 
 步骤：
   1. 读取后端版本号（src/version.py）
-  2. 前端构建（npm run build）
-  3. 同步前端产物到 assets/frontend/
+  2. 构建经典前端与 V2 前端
+  3. 同步产物到 assets/frontend/ 与 assets/frontend-v2/
   4. PyInstaller 打包
   5. 重命名产物为带版本号的 .app
 """
@@ -42,38 +42,12 @@ def _read_backend_version() -> str:
 
 # ── 前端构建 ──────────────────────────────────────────────────────────────────
 
-def _build_frontend():
-    frontend_dir = os.path.join(REPO_ROOT, "frontend")
-    print("✳️  构建前端...")
-    subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
-    print("✅ 前端构建完成")
-
-
-def _assert_frontend_submodule_clean():
-    frontend_dir = os.path.join(REPO_ROOT, "frontend")
-    result = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
-        cwd=frontend_dir,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    dirty_lines = [line for line in result.stdout.splitlines() if line.strip()]
-    if dirty_lines:
-        print("❌ 前端子模块存在已跟踪文件的未提交改动，请先提交或还原后再打包：", file=sys.stderr)
-        for line in dirty_lines:
-            print(f"   {line}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _sync_frontend():
-    src = os.path.join(REPO_ROOT, "frontend", "dist")
-    dst = os.path.join(REPO_ROOT, "assets", "frontend")
-    print("✳️  同步前端产物 → assets/frontend/")
-    if os.path.exists(dst):
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst)
-    print("✅ 同步完成")
+def _build_frontends() -> None:
+    """构建并同步经典前端与 V2 前端。"""
+    build_script = os.path.join(SCRIPT_DIR, "build_frontend.py")
+    print("✳️  构建并同步经典前端与 V2 前端...")
+    subprocess.run([sys.executable, build_script], cwd=REPO_ROOT, check=True)
+    print("✅ 双前端构建与同步完成")
 
 
 # ── 清理 & 打包 ───────────────────────────────────────────────────────────────
@@ -168,9 +142,7 @@ def main():
     print(f"ℹ️  版本：{backend_ver}")
 
     _check_quarantine_on_executables()
-    _assert_frontend_submodule_clean()
-    _build_frontend()
-    _sync_frontend()
+    _build_frontends()
     _clean()
     _run_pyinstaller()
     _rename_app(backend_ver)

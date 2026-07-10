@@ -1275,8 +1275,8 @@ function openMemberViewerByNode(_agentId: number | null, nodeId: string, _agentN
       :department-responsibility="departmentEditorResponsibility"
       @close="closeDepartmentEditor"
       @save="saveDepartmentEditor"
-      @update:department-name="departmentEditorName = $event"
-      @update:department-responsibility="departmentEditorResponsibility = $event"
+      @update:departmentName="departmentEditorName = $event"
+      @update:departmentResponsibility="departmentEditorResponsibility = $event"
     />
   </div>
 </template>
