@@ -211,7 +211,14 @@ jobs:
 
     - name: Get zip path
       run: |
-        ZIP_PATH=$(ls dist/*.zip | head -1)
+        ZIP_PATH=$(ls dist/*.zip 2>/dev/null | head -1 || true)
+        if [ -z "$ZIP_PATH" ]; then
+          APP_PATH=$(ls -d dist/TogoSpace-*.app | head -1)
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZIP_PATH="dist/TogoSpace-${VERSION}-macos-${{ matrix.arch }}.zip"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+        fi
+        test -s "$ZIP_PATH"
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
 
     - name: Create GitHub Release
