@@ -56,7 +56,7 @@ COPY assets/ ${TOGOSPACE_HOME}/assets/
 COPY --from=frontend-builder /build/frontend/dist ${TOGOSPACE_HOME}/assets/frontend
 COPY --from=frontend-builder /build/frontend-v2/dist ${TOGOSPACE_HOME}/assets/frontend-v2
 
-RUN useradd --create-home --shell /usr/sbin/nologin --uid 1000 togospace \
+RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 togospace \
     && mkdir -p ${STORAGE_ROOT} \
     && if [ ! -f ${STORAGE_ROOT}/setting.json ]; then \
         cp ${TOGOSPACE_HOME}/assets/config_template.json ${STORAGE_ROOT}/setting.json; \
