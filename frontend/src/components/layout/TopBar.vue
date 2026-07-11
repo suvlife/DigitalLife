@@ -492,7 +492,7 @@ function closeLogoutConfirm(): void {
       </div>
       <a
         v-if="hasUpdate"
-        :href="releaseUrl || 'https://github.com/alexazhou/TogoSpace/releases'"
+        :href="releaseUrl || 'https://github.com/suvlife/DigitalLife/releases'"
         target="_blank"
         rel="noopener"
         class="update-pill"

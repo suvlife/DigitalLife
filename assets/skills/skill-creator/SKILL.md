@@ -22,7 +22,7 @@ Togo has a two-tier skill system:
 
 - Location: `<STORAGE_ROOT>/skills/` directory
   - Development mode: `<repo>/dev_storage_root/skills/`
-  - Production mode: `~/.togospace/skills/`
+  - Production mode: `~/.digitallife/skills/`
 - Loaded at startup, marked `is_builtin=False`
 - Created by users at runtime, no code deployment needed
 - If a user skill has the same name as a built-in skill, the user skill takes priority

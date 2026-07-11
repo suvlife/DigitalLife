@@ -337,7 +337,7 @@ watch(
           <div class="settings-eyebrow-group">
             <a
               v-if="appVersion && hasUpdate"
-              :href="'https://github.com/alexazhou/TogoSpace/releases'"
+              :href="'https://github.com/suvlife/DigitalLife/releases'"
               target="_blank"
               rel="noopener"
               class="settings-version-badge settings-version-badge--has-update"

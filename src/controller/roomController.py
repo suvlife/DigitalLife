@@ -233,7 +233,7 @@ class RoomMessagesHandler(BaseHandler):
         if request.insert_immediately:
             assertUtil.assertTrue(
                 room.room_type == RoomType.PRIVATE,
-                error_message="insert_immediately is only supported in PRIVATE rooms",
+                error_message="只有单独问道的雅室支持在当前一轮中立即插话；本研讨室请按普通传讯发送",
                 error_code="room_immediate_insert_not_supported",
             )
             ai_agents = [
@@ -242,7 +242,7 @@ class RoomMessagesHandler(BaseHandler):
             ]
             assertUtil.assertTrue(
                 len(ai_agents) > 0 and ai_agents[0].host_managed_turn_loop,
-                error_message="insert_immediately is not supported for this agent's driver",
+                error_message="这位先生当前的推演方式不支持立即插话，请改用普通传讯",
                 error_code="immediate_insert_driver_not_supported",
             )
 
@@ -273,7 +273,7 @@ class EscalateMessageToImmediateHandler(BaseHandler):
         assertUtil.assertNotNull(room, error_message=f"room_id '{room_id}' not found", error_code="room_not_found")
         assertUtil.assertTrue(
             room.room_type == RoomType.PRIVATE,
-            error_message="escalate_to_immediate is only supported in PRIVATE rooms",
+            error_message="只有单独问道的雅室支持将传讯提升为本轮急件",
             error_code="room_immediate_insert_not_supported",
         )
         await room.escalate_message_to_immediate(db_id)
@@ -457,7 +457,7 @@ class TeamRoomAgentsModifyHandler(BaseHandler):
 
 _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 _ALLOWED_UPLOAD_EXTENSIONS = {
-    "txt", "md", "json", "csv", "pdf", "docx", "xlsx", "xls",
+    "txt", "md", "markdown", "json", "csv", "pdf", "doc", "docx", "ppt", "pptx", "xlsx", "xls",
     "png", "jpg", "jpeg", "gif", "svg", "zip",
     "py", "js", "ts", "sql", "yaml", "yml",
 }
@@ -533,7 +533,7 @@ class RoomMessageUploadHandler(BaseHandler):
 
         file_size_kb = len(file_body) / 1024
         message_text = self.get_body_argument("message", "")
-        notification = f"[文件] {filename} ({file_size_kb:.1f}KB)\n路径: uploads/{saved_filename}"
+        notification = f"[文件:uploads/{saved_filename}]{filename}|{len(file_body)}\n已递交卷宗，可请本室大师读取并分析。"
         if message_text:
             notification += f"\n{message_text}"
 

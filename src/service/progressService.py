@@ -32,10 +32,11 @@ def room_progress_for_status(status: RoomRunStatus, *, completed_contributors: i
     if status == RoomRunStatus.DISCUSSING:
         if expected_contributors > 0:
             ratio = min(1.0, completed_contributors / expected_contributors)
-            return min(80, 20 + round(ratio * 60))
-        return 20
+            # 10% 表示本室已经开议；随后严格按已完成发言的大师人数推进到 85%。
+            return min(85, 10 + round(ratio * 75))
+        return 10
     if status == RoomRunStatus.SYNTHESIZING:
-        return 90
+        return 92
     if status in _FINISHED_ROOM_STATUSES:
         return 100
     return 0

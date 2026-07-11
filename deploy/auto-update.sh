@@ -32,14 +32,19 @@ git pull origin main
 .venv/bin/pip install -r requirements.txt -q 2>> $LOG_FILE
 
 # 重建前端（仅当 frontend/src 有变化时）
-if git diff --name-only $LOCAL..$REMOTE | grep -q "^frontend/"; then
+if git diff --name-only $LOCAL..$REMOTE | grep -Eq "^frontend(-v2)?/"; then
     log "前端代码有变化，重建前端..."
     cd frontend
     npm install --silent 2>> $LOG_FILE
     npm run build 2>> $LOG_FILE
+    cd ../frontend-v2
+    npm install --silent 2>> $LOG_FILE
+    npm run build 2>> $LOG_FILE
     cd ..
+    mkdir -p assets/frontend assets/frontend-v2
     cp -r frontend/dist/* assets/frontend/
-    log "前端重建完成"
+    cp -r frontend-v2/dist/* assets/frontend-v2/
+    log "两套前端重建完成"
 fi
 
 # 重启服务

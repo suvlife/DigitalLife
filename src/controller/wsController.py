@@ -33,9 +33,9 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._subscribed = False
-        # 保留后台发送任务的强引用，避免被 GC 中途回收，
-        # 并在连接关闭时统一取消未完成的发送任务。
-        self._pending_send_tasks: set[asyncio.Task] = set()
+        self._send_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=512)
+        self._sender_task: asyncio.Task | None = None
+        self._dropped_events = 0
 
     def check_origin(self, origin: str) -> bool:
         """WebSocket Origin 校验：仅允许同源连接（公网部署安全防护）。"""
@@ -62,14 +62,13 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
         self._subscribe_events()
 
     def on_close(self):
-        logger.info("[ws] WebSocket closed")
+        logger.info("[ws] WebSocket closed: code=%s reason=%s queued=%s dropped=%s", self.close_code, self.close_reason, self._send_queue.qsize(), self._dropped_events)
         if self._subscribed:
             messageBus.unsubscribe_many(_WS_TOPICS, self._on_event)
             self._subscribed = False
-        # 取消所有未完成的发送任务，避免向已关闭连接写入
-        for task in self._pending_send_tasks:
-            task.cancel()
-        self._pending_send_tasks.clear()
+        if self._sender_task is not None:
+            self._sender_task.cancel()
+            self._sender_task = None
 
     def on_message(self, message):
         """处理客户端消息（认证消息）。"""
@@ -110,6 +109,7 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
             return
         messageBus.subscribe_many(_WS_TOPICS, self._on_event)
         self._subscribed = True
+        self._sender_task = asyncio.get_running_loop().create_task(self._sender_loop())
 
     def _on_event(self, msg: messageBus.EventBusMessage) -> None:
         payload = dict(msg.payload)
@@ -147,17 +147,34 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
             payload["event"] = "blog_publish_changed"
         if msg.event_id is not None:
             payload["event_id"] = msg.event_id
-        logger.info(f"[ws] event: topic={msg.topic.name}, payload={payload}")
-        task = asyncio.get_running_loop().create_task(self._send(jsonUtil.json_dump(payload)))
-        self._pending_send_tasks.add(task)
-        task.add_done_callback(self._pending_send_tasks.discard)
-
-    async def _send(self, payload: str) -> None:
+        logger.debug("[ws] event: topic=%s", msg.topic.name)
+        serialized = jsonUtil.json_dump(payload)
         try:
-            logger.debug(f"[ws] sending: {payload[:100]}...")
-            self.write_message(payload)
-            logger.debug(f"[ws] sent successfully")
+            self._send_queue.put_nowait(serialized)
+        except asyncio.QueueFull:
+            # 活动与用量是高频快照事件，队列繁忙时允许丢弃旧瞬态，关键消息仍尽量入队。
+            if msg.topic in {MessageBusTopic.AGENT_ACTIVITY_CHANGED, MessageBusTopic.USAGE_UPDATED, MessageBusTopic.AGENT_STATUS_CHANGED}:
+                self._dropped_events += 1
+                return
+            try:
+                self._send_queue.get_nowait()
+                self._send_queue.task_done()
+                self._send_queue.put_nowait(serialized)
+                self._dropped_events += 1
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                self._dropped_events += 1
+
+    async def _sender_loop(self) -> None:
+        try:
+            while True:
+                payload = await self._send_queue.get()
+                try:
+                    await self.write_message(payload)
+                finally:
+                    self._send_queue.task_done()
+        except asyncio.CancelledError:
+            raise
         except tornado.websocket.WebSocketClosedError:
-            logger.info("[ws] WebSocket closed, skipping message")
-        except Exception as e:
-            logger.error(f"[ws] error sending message: {e}")
+            logger.info("[ws] WebSocket closed, sender stopped")
+        except Exception:
+            logger.exception("[ws] sender loop failed")

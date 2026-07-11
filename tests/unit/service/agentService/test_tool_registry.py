@@ -34,12 +34,12 @@ def test_validate_tool_allow_specs() -> None:
 def test_build_runtime_allow_specs() -> None:
     # 默认权限（安全策略：不包含 Execute）
     specs = build_runtime_allow_specs(None, is_root_leader=False)
-    assert set(specs) == {"Category:Basic", "Category:Read", "Category:Write"}
+    assert set(specs) == {"Category:Basic", "Category:Read", "Category:Write", "extract_office_file", "generate_office_file"}
     
     # 指定权限，应自动补齐 Basic
     # list_dir 是 READ
     specs = build_runtime_allow_specs(["list_dir"], is_root_leader=False)
-    assert set(specs) == {"list_dir", "Category:Basic"}
+    assert set(specs) == {"list_dir", "Category:Basic", "extract_office_file", "generate_office_file"}
     
     # Root Leader 自动补齐 Admin 和 Basic
     specs = build_runtime_allow_specs(None, is_root_leader=True)

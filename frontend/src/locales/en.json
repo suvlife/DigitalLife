@@ -328,7 +328,7 @@
     "llmServiceDisabled": "Disabled",
     "llmServiceSaved": "LLM service saved",
     "namePlaceholder": "e.g.: alpha-delivery",
-    "workDirPlaceholder": "e.g.: ~/.togospace/workspace/team_name (usually not required)",
+    "workDirPlaceholder": "e.g.: ~/.digitallife/workspace/team_name (usually not required)",
     "sloganPlaceholder": "e.g.: Silicon power, excellent capability",
     "responsibilityPlaceholder": "e.g.: 1. Core business dev 2. Improve system availability"
   },

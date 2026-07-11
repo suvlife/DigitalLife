@@ -26,6 +26,8 @@ CATEGORY_CONFIG: dict[str, ToolCategory] = {
     "get_task": ToolCategory.BASIC,
     "list_tasks": ToolCategory.BASIC,
     "load_skill": ToolCategory.BASIC,
+    "extract_office_file": ToolCategory.READ,
+    "generate_office_file": ToolCategory.WRITE,
     "reload_team": ToolCategory.ADMIN,
     "list_role_templates": ToolCategory.ADMIN,
     "get_role_template": ToolCategory.ADMIN,
@@ -83,9 +85,12 @@ def build_runtime_allow_specs(
     else:
         effective_specs = list(allowed_tools)
 
-    # 强制包含基础类别
+    # 强制包含基础类别。Office 读取/生成是产品标准能力，分别映射到 Read/Write。
     if "Category:Basic" not in effective_specs:
         effective_specs.append("Category:Basic")
+    for office_tool in ("extract_office_file", "generate_office_file"):
+        if office_tool not in effective_specs:
+            effective_specs.append(office_tool)
 
     if is_root_leader:
         if "Category:Admin" not in effective_specs:

@@ -24,7 +24,7 @@ for relative in ("frontend/package.json", "frontend-v2/package.json"):
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 for relative, pattern, replacement in (
-    ("docker-compose.yml", r"(image:\s*togospace:)[^\s]+", rf"\g<1>{version}"),
+    ("docker-compose.yml", r"(image:\s*digitallife:)[^\s]+", rf"\g<1>{version}"),
     ("docker-compose.yml", r"(APP_VERSION:\s*[\"]?)[0-9A-Za-z.+-]+", rf"\g<1>{version}"),
     ("Dockerfile", r"ARG APP_VERSION=[^\s]+", f"ARG APP_VERSION={version}"),
 ):

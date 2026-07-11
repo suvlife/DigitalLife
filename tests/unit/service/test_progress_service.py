@@ -21,8 +21,8 @@ def test_room_progress_uses_real_contributor_ratio() -> None:
     assert progressService.room_progress_for_status(RoomRunStatus.QUEUED) == 10
     assert progressService.room_progress_for_status(
         RoomRunStatus.DISCUSSING, completed_contributors=1, expected_contributors=2,
-    ) == 50
-    assert progressService.room_progress_for_status(RoomRunStatus.SYNTHESIZING) == 90
+    ) == 48
+    assert progressService.room_progress_for_status(RoomRunStatus.SYNTHESIZING) == 92
     assert progressService.room_progress_for_status(RoomRunStatus.COMPLETED) == 100
 
 

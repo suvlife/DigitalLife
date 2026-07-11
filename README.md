@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="image/togo_agent_team.png" alt="数字人生：多智能体协作平台" width="900">
-</p>
 
 # 数字人生（DigitalLife）🚀
 
@@ -15,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.5.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.6.0-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -31,7 +28,7 @@
 ## 目录
 
 - [项目简介](#项目简介)
-- [v0.5.0 重点更新](#v050-重点更新)
+- [v0.6.0 重点更新](#v060-重点更新)
 - [核心能力](#核心能力)
 - [内置团队](#内置团队)
 - [系统架构](#系统架构)
@@ -74,17 +71,19 @@
 
 ---
 
-## v0.5.0 重点更新
+## v0.6.0 重点更新
 
-- **江湖书院 V2 前端**：新增独立的 Vue 3/Vite 应用，生产路径为 `/v2/`，包含院落、房间、NPC、对话时间线、进度卷轴、任务侧栏和归档视图。
-- **可恢复任务运行记录**：新增 `task_runs` / `room_runs` 数据模型与迁移，记录任务、房间、Agent、进度、最终答案和失败信息。
-- **Run 查询 API**：新增当前运行、历史列表、详情、房间快照、时间线与最终答案接口。
-- **实时进度事件**：WebSocket 支持运行状态、房间状态、Agent 活动、LLM 重试与博客发布状态更新。
-- **Ghost 发布队列**：最终结论通过持久化 outbox 异步发布，支持幂等、重试、重启恢复、状态跟踪与安全 HTML 转换。
-- **LLM 性能与限流保护**：每个 LLM 服务可独立设置并发上限与 RPM，包含滑动窗口节流、重试退避和性能元数据。
-- **双前端统一构建**：`scripts/build_frontend.py` 可安装、构建并同步经典前端和 V2 前端。
-- **版本一致性工具**：通过 `VERSION`、`scripts/set_version.py` 与 `scripts/check_version_consistency.py` 统一后端、前端和容器版本。
-- **密钥安全加固**：示例密钥与真实密钥分离，Ghost 密钥不通过设置接口回传，支持环境变量覆盖。
+- **房间对话重新排版**：扩大讨论窗口，修复长内容逐字竖排和右侧大面积空白，Markdown、表格与代码块保持横向可读。
+- **发言时间轴**：在大师座次与堂内对话之间增加真实消息顺序时间轴，点击人物或时间可跳转并高亮对应发言。
+- **全站霞鹜文楷**：经典控制台和江湖书院 V2 均将霞鹜文楷字体文件打包进前端，不依赖 CDN 或本机字体。
+- **Office 文件上传与读取**：房间支持上传 Word、PPT、Excel、Markdown、PDF、CSV 和文本，大师可读取 DOCX、XLSX、PPTX 等内容。
+- **Office 交付物生成**：新增 DOCX、XLSX、PPTX、Markdown 生成工具，产物写入团队 `outputs/` 并可下载。
+- **文档技能**：内置 `document-studio`、`spreadsheet-studio` 和 `guizang-ppt-skill`。
+- **真实房间进度**：按实际完成发言的大师和结构化任务比例计算，同一大师不会重复计数。
+- **WebSocket 稳定性**：增加有界发送队列、背压、稳定重连退避和重连后快照恢复。
+- **中文国风表达**：大师名称、活动、任务卷轴、系统提示和连接状态不再暴露内部英文术语。
+- **digitallife 品牌统一**：应用、Release、Docker、Compose 和运行目录统一命名，保留旧数据目录兼容。
+- **macOS 社区安装器**：Release ZIP 包含签名校验、隔离属性处理和 `/Applications` 安装脚本；具备 Developer ID Secrets 时 CI 自动正式签名公证。
 
 ---
 
@@ -118,6 +117,8 @@
 - TSP / 原生 Function Calling 双驱动与自动降级；
 - 支持 Skill 导入、查询与删除；
 - 聊天文件上传、下载、预览和工作目录沙箱；
+- 支持读取 DOCX/XLSX/PPTX/Markdown，并生成 Word、Excel、PowerPoint 与 Markdown 交付物；
+- 房间内提供卷宗上传入口和可点击下载卡片；
 - 可选搜索能力与自定义模型服务；
 - GTSP 安装脚本支持受信任发布源和校验文件。
 
@@ -218,11 +219,11 @@ docker compose up -d --build
 查看日志或停止服务：
 
 ```bash
-docker compose logs -f togospace
+docker compose logs -f digitallife
 docker compose down
 ```
 
-运行数据保存在 Compose 卷 `togospace-storage` 中。删除容器不会自动删除该卷；执行 `docker compose down -v` 会删除卷，请先确认已备份。
+运行数据保存在 Compose 卷 `digitallife-storage` 中。删除容器不会自动删除该卷；执行 `docker compose down -v` 会删除卷，请先确认已备份。
 
 ### 方式二：源码运行
 
@@ -481,7 +482,7 @@ ws.addEventListener("message", (event) => {
 ### 数据目录与备份
 
 - 源码运行：数据目录由应用路径策略和 `--config-dir` 决定；
-- Docker：`/storage`，Compose 映射到 `togospace-storage`；
+- Docker：`/storage`，Compose 映射到 `digitallife-storage`；
 - 主要内容包括 `setting.json`、SQLite 数据库、工作目录和运行日志；
 - 数据库迁移在启动时按顺序执行；
 - 更新前建议备份整个数据目录，或调用系统数据库备份能力。
@@ -586,7 +587,7 @@ npm run build
 更新版本：
 
 ```bash
-.venv/bin/python scripts/set_version.py 0.5.0
+.venv/bin/python scripts/set_version.py 0.6.0
 ```
 
 脚本会同步 `VERSION`、Python 版本、两套前端 `package.json`、Dockerfile 和 Compose 镜像版本。创建 `v*` 标签会触发 GitHub Actions 的 macOS Release 和多架构容器工作流；发布前应确认仓库 Secrets 已正确配置。
@@ -629,6 +630,19 @@ npm run build
 <summary><strong>如何安全更新</strong></summary>
 
 先备份数据目录和数据库，再拉取新版本并运行测试/构建。服务器部署可使用 `deploy/update.sh`，不要删除持久化卷或覆盖私有配置。
+</details>
+
+<details>
+<summary><strong>macOS 提示“无法验证开发者”或“应用已损坏”</strong></summary>
+
+当前 GitHub Release 在仓库未配置 Apple Developer ID 证书时发布的是 **ad-hoc 完整性签名社区包**，不是 Apple 官方公证包。请不要直接拖动旧版 `.app`：
+
+1. 下载名称以 `digitallife-` 开头的 ZIP；
+2. 解压并双击 `安装数字人生.command`；
+3. 若脚本被拦截，按住 Control 点击后选择“打开”，或在“系统设置 → 隐私与安全性”中允许；
+4. 安装脚本会验证签名、移除下载隔离属性并安装到 `/Applications/DigitalLife.app`。
+
+维护者配置 `APPLE_CERTIFICATE_P12`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_APP_PASSWORD`、`APPLE_TEAM_ID` 和 `APPLE_SIGNING_IDENTITY` 后，GitHub Actions 会自动生成 Developer ID 签名且完成 Apple 公证、Staple 的正式包。
 </details>
 
 ---

@@ -4,20 +4,20 @@
 version: "3.8"
 
 services:
-  togospace:
+  digitallife:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "0.5.0"
-    image: togospace:0.5.0
-    container_name: togospace
+        APP_VERSION: "0.6.0"
+    image: digitallife:0.6.0
+    container_name: digitallife
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
       # 持久化数据目录
-      - togospace-storage:/storage
+      - digitallife-storage:/storage
       # 可选：挂载自定义配置文件
       # - ./setting.json:/storage/setting.json:ro
     environment:
@@ -37,5 +37,5 @@ services:
       start_period: 5s
 
 volumes:
-  togospace-storage:
-    name: togospace-storage
+  digitallife-storage:
+    name: digitallife-storage

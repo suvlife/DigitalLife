@@ -471,7 +471,7 @@ def process_repo(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="TogoAgent 前后端提交/同步/推送脚本")
+    parser = argparse.ArgumentParser(description="DigitalLife 前后端提交/同步/推送脚本")
     parser.add_argument(
         "--action",
         type=str,

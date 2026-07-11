@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-macOS 打包脚本：构建 TogoSpace.app
+macOS 打包脚本：构建 DigitalLife.app
 
 步骤：
   1. 读取后端版本号（src/version.py）
@@ -25,7 +25,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT  = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 DIST_PATH  = os.path.join(REPO_ROOT, "dist")
 BUILD_PATH = os.path.join(REPO_ROOT, "build")
-SPEC_FILE  = os.path.join(SCRIPT_DIR, "togo_agent.spec")
+SPEC_FILE  = os.path.join(SCRIPT_DIR, "digital_life.spec")
 
 
 # ── 版本读取 ──────────────────────────────────────────────────────────────────
@@ -76,11 +76,17 @@ def _run_pyinstaller():
 
 
 def _rename_app(version: str):
-    original = os.path.join(DIST_PATH, "TogoSpace.app")
-    final    = os.path.join(DIST_PATH, f"TogoSpace-{version}.app")
+    original = os.path.join(DIST_PATH, "DigitalLife.app")
+    final    = os.path.join(DIST_PATH, f"DigitalLife-{version}.app")
     if os.path.exists(original):
         os.rename(original, final)
-        print(f"✅ 产物：dist/TogoSpace-{version}.app")
+        # 没有 Developer ID 时至少进行 ad-hoc 完整性签名，避免 bundle 内嵌二进制签名状态不一致。
+        subprocess.run(["xattr", "-cr", final], check=False)
+        subprocess.run([
+            "codesign", "--deep", "--force", "--sign", "-", final,
+        ], check=True)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", final], check=True)
+        print(f"✅ 产物：dist/DigitalLife-{version}.app（ad-hoc 完整性签名）")
     else:
         print(f"❌ 未找到 {original}")
         sys.exit(1)

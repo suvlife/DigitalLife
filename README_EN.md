@@ -1,4 +1,3 @@
-![Digital Life](image/togo_agent_team.png)
 
 # Digital Life 🚀
 
@@ -64,7 +63,7 @@ Supports uploading zip files to import custom Skills. Agents can call `web_searc
 
 ### Method 1: Download Pre-built App Package (Recommended for macOS Users)
 We currently provide a **macOS** Release package for a quick start.
-- **Download**: [Go to the Releases page](https://github.com/alexazhou/TogoAgent/releases)
+- **Download**: [Go to the Releases page](https://github.com/suvlife/DigitalLife/releases)
 - **Usage**: Once running, Digital Life stays in your system status bar. Click the icon to open the console, manage teams, or execute tasks.
 
 ![Status Bar Entry](image/en/entry.png)
@@ -72,8 +71,8 @@ We currently provide a **macOS** Release package for a quick start.
 ### Method 2: Run from Source
 ```bash
 # Clone the repository
-git clone https://github.com/suvlife/togospace.git
-cd togospace
+git clone https://github.com/suvlife/DigitalLife.git
+cd DigitalLife
 
 # Install backend dependencies
 pip install -r requirements.txt
@@ -99,18 +98,18 @@ export TAVILY_API_KEY=your_tavily_api_key
 ### Method 3: Docker Deployment
 ```bash
 # Pull the image from GitHub Container Registry (recommended)
-docker pull ghcr.io/alexazhou/togospace:latest
+docker pull ghcr.io/suvlife/digitallife:latest
 
 # Or from Docker Hub
-# docker pull alexazhou/togospace:latest
+# docker pull suvlife/digitallife:latest
 
 # Run with storage persistence and port mapping
 # /path/to/your/storage is the directory where Digital Life data will be stored
 docker run \
-  --name togospace \
+  --name digitallife \
   -p 8080:8080 \
   -v /path/to/your/storage:/storage \
-  ghcr.io/alexazhou/togospace:latest
+  ghcr.io/suvlife/digitallife:latest
 
 # Access the Web console at http://localhost:8080
 ```

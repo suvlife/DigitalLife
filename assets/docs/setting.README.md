@@ -6,7 +6,7 @@
 
 默认位置：
 
-- `~/.togospace/setting.json`
+- `~/.digitallife/setting.json`
 
 ## 最小示例
 
@@ -182,7 +182,7 @@ API 鉴权配置，用于保护后端接口：
 
 Default Location:
 
-- `~/.togospace/setting.json`
+- `~/.digitallife/setting.json`
 
 ## Minimal Example
 

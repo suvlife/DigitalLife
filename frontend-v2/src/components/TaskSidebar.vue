@@ -1,2 +1,16 @@
-<script setup lang="ts">import type { Activity,Agent,Task } from '../domain/types';const props=defineProps<{tasks:readonly Task[];activities:readonly Activity[];agents:readonly Agent[]}>();const agent=(id:number)=>props.agents.find(a=>a.id===id)?.name||`大师 ${id}`;const activityText=(x:string)=>({llm_infer:'推演思考',reasoning:'梳理脉络',tool_call:'调用器具',chat_reply:'起身发言',message_received:'接收传讯',task_received:'接下任务',compact:'整理记忆'}[x]||x);</script>
-<template><aside class="task-sidebar"><section><h2>任务卷轴</h2><ul class="task-list"><li v-if="!tasks.length">暂无结构化任务</li><li v-for="t in tasks" :key="t.id" :class="t.status.toLowerCase()"><span>{{t.status}}</span><b>{{t.title}}</b><small>{{agent(t.assigneeId)}} · {{t.priority}}</small></li></ul></section><section><h2>堂内动静</h2><ol class="activity-list"><li v-if="!activities.length">暂时风平浪静</li><li v-for="a in activities.slice(0,12)" :key="a.id"><i :class="a.status"></i><span><b>{{agent(a.agentId)}}</b>{{activityText(a.type)}}<small>{{a.title||a.detail}}</small></span></li></ol></section></aside></template>
+<script setup lang="ts">
+import { computed } from 'vue';
+import type { Activity,Agent,RoomStatus,Task } from '../domain/types';
+import { activityDetail,activityNarrative,masterName,priorityText,roomStatusText,taskStatusText,taskTheme } from '../domain/presentation';
+const props=defineProps<{tasks:readonly Task[];activities:readonly Activity[];agents:readonly Agent[];initialTopic?:string|null;question?:string;roomStatus?:RoomStatus}>();
+const agent=(id:number)=>masterName(props.agents.find(a=>a.id===id),`第 ${id} 位先生`);
+const theme=computed(()=>taskTheme(props.tasks,props.initialTopic,props.question));
+const recent=computed(()=>[...props.activities].sort((a,b)=>Date.parse(b.startedAt||'')-Date.parse(a.startedAt||'')).slice(0,12));
+</script>
+<template><aside class="task-sidebar">
+  <section class="topic-scroll"><header><h2>本室问道卷</h2><span :class="roomStatus">{{roomStatusText(roomStatus)}}</span></header><p>{{theme}}</p>
+    <ul v-if="tasks.length" class="task-list"><li v-for="t in tasks" :key="t.id" :class="t.status.toLowerCase()"><span>{{taskStatusText(t.status)}}</span><b>{{t.title}}</b><small>{{agent(t.assigneeId)}} · {{priorityText(t.priority)}}</small></li></ul>
+    <small v-else class="scroll-note">卷上所书，即为本室诸位先生共同参详之题。</small>
+  </section>
+  <section><h2>堂内动静</h2><ol class="activity-list"><li v-if="!recent.length">诸位先生已入座静候，堂中暂且安然。</li><li v-for="a in recent" :key="a.id"><i :class="a.status"></i><span><b>{{activityNarrative(a,agent(a.agentId))}}</b><small v-if="activityDetail(a)">{{activityDetail(a)}}</small></span></li></ol></section>
+</aside></template>

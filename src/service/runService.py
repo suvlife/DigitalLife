@@ -459,9 +459,15 @@ async def _on_agent_activity_changed(msg: EventBusMessage) -> None:
             started_at=room_run.started_at or datetime.now(),
         )
     else:
-        completed = room_run.completed_contributors
+        metadata = dict(room_run.metadata or {})
+        completed_agent_ids = {int(agent_id) for agent_id in metadata.get("completed_agent_ids", [])}
         if activity.status == AgentActivityStatus.SUCCEEDED and activity.activity_type == AgentActivityType.CHAT_REPLY:
-            completed = min(room_run.expected_contributors, completed + 1) if room_run.expected_contributors else completed + 1
+            completed_agent_ids.add(activity.agent_id)
+        completed = len(completed_agent_ids)
+        if room_run.expected_contributors:
+            completed = min(room_run.expected_contributors, completed)
+        metadata["completed_agent_ids"] = sorted(completed_agent_ids)
+        fields["metadata"] = metadata
         fields.update(
             completed_contributors=completed,
             current_agent_id=None if room_run.current_agent_id == activity.agent_id else room_run.current_agent_id,

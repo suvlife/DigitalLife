@@ -206,6 +206,8 @@ jobs:
         if [ -f scripts/build_config.json ]; then
           $PYTHON scripts/build_release.py --arch ${{ matrix.arch }}
         else
+          echo "⚠️ Apple Developer ID / notarization secrets are not configured."
+          echo "Building the documented ad-hoc signed community package instead."
           TARGET_ARCH=${{ matrix.arch }} $PYTHON scripts/build_mac.py
         fi
 
@@ -213,10 +215,14 @@ jobs:
       run: |
         ZIP_PATH=$(ls dist/*.zip 2>/dev/null | head -1 || true)
         if [ -z "$ZIP_PATH" ]; then
-          APP_PATH=$(ls -d dist/TogoSpace-*.app | head -1)
+          APP_PATH=$(ls -d dist/DigitalLife-*.app | head -1)
           VERSION="${GITHUB_REF_NAME#v}"
-          ZIP_PATH="dist/TogoSpace-${VERSION}-macos-${{ matrix.arch }}.zip"
-          ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+          ZIP_PATH="dist/digitallife-${VERSION}-macos-${{ matrix.arch }}.zip"
+          PACKAGE_DIR="dist/digitallife-${VERSION}-macos-${{ matrix.arch }}"
+          mkdir -p "$PACKAGE_DIR"
+          ditto "$APP_PATH" "$PACKAGE_DIR/DigitalLife.app"
+          cp scripts/macos-installer/安装数字人生.command scripts/macos-installer/README.txt "$PACKAGE_DIR/"
+          ditto -c -k --keepParent "$PACKAGE_DIR" "$ZIP_PATH"
         fi
         test -s "$ZIP_PATH"
         echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
@@ -224,7 +230,7 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v3
       with:
-        name: "数字人生 ${{ github.ref_name }}"
+        name: "digitallife ${{ github.ref_name }}"
         tag_name: ${{ github.ref_name }}
         draft: false
         prerelease: false

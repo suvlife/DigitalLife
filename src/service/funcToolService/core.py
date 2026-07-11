@@ -34,6 +34,7 @@ from .tools import (
     wake_up_agent,
 )
 from .webTools import web_search, web_fetch
+from service.artifactService import extract_office_file, generate_office_file
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ def load_func_tools() -> dict[str, FuncTool]:
         "get_task": get_task,
         "list_tasks": list_tasks,
         "load_skill": load_skill,
+        "extract_office_file": extract_office_file,
+        "generate_office_file": generate_office_file,
         "web_search": web_search,
         "web_fetch": web_fetch,
     }

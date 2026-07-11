@@ -63,6 +63,13 @@ npm run build 2>/dev/null
 cd ..
 mkdir -p assets/frontend
 cp -r frontend/dist/* assets/frontend/
+
+cd frontend-v2
+npm install --silent 2>/dev/null
+npm run build 2>&1 | tail -3
+cd ..
+mkdir -p assets/frontend-v2
+cp -r frontend-v2/dist/* assets/frontend-v2/
 echo "  前端构建完成"
 
 # ===== 6. 创建数据目录 =====

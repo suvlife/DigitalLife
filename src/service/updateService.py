@@ -13,7 +13,7 @@ from version import __version__
 
 logger = logging.getLogger(__name__)
 
-_GITHUB_RELEASES_URL = "https://api.github.com/repos/alexazhou/TogoSpace/releases/latest"
+_GITHUB_RELEASES_URL = "https://api.github.com/repos/suvlife/DigitalLife/releases/latest"
 _CACHE_TTL_SECONDS = 12 * 60 * 60  # 12 hours
 
 _cached_result: dict[str, Any] | None = None

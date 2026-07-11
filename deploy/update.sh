@@ -44,6 +44,13 @@ npm install --silent 2>/dev/null
 npm run build 2>&1 | tail -3
 cd ..
 cp -r frontend/dist/* assets/frontend/
+
+cd frontend-v2
+npm install --silent 2>/dev/null
+npm run build 2>&1 | tail -3
+cd ..
+mkdir -p assets/frontend-v2
+cp -r frontend-v2/dist/* assets/frontend-v2/
 echo "  依赖安装 + 前端构建完成"
 
 # 5. 重启服务

@@ -137,7 +137,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="TogoSpace",
+    name="DigitalLife",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -156,20 +156,20 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="TogoSpace",
+    name="DigitalLife",
 )
 
 # ── macOS App Bundle ──────────────────────────────────────────────────────────
 
 app = BUNDLE(
     coll,
-    name="TogoSpace.app",
+    name="DigitalLife.app",
     icon=APP_ICON,
-    bundle_identifier="com.togospace.app",
+    bundle_identifier="me.guofeng.digitallife",
     info_plist={
-        "CFBundleName":               "TogoSpace",
-        "CFBundleDisplayName":        "TogoSpace",
-        "CFBundleIdentifier":         "com.togospace.app",
+        "CFBundleName":               "DigitalLife",
+        "CFBundleDisplayName":        "DigitalLife",
+        "CFBundleIdentifier":         "me.guofeng.digitallife",
         "CFBundleVersion":            APP_VERSION,
         "CFBundleShortVersionString": APP_VERSION,
         "LSUIElement":                True,       # 无 Dock 图标，菜单栏常驻

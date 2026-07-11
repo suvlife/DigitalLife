@@ -328,7 +328,7 @@
     "llmServiceDisabled": "已停用",
     "llmServiceSaved": "LLM 服务已保存",
     "namePlaceholder": "例如：alpha-delivery",
-    "workDirPlaceholder": "例如：~/.togospace/workspace/team_name（一般不需要填写）",
+    "workDirPlaceholder": "例如：~/.digitallife/workspace/team_name（一般不需要填写）",
     "sloganPlaceholder": "例如：硅基动力，优秀实力",
     "responsibilityPlaceholder": "例如：1. 负责核心业务开发 2. 提升系统可用性"
   },

@@ -276,7 +276,7 @@ class TestClaudeSdkAgentDriver(ServiceTestCase):
 
         exported_names = [tool.function.name for tool in agent.task_consumer._turn_runner.tool_registry.export_openai_tools()]
         basic_tool_names = {name for name, cat in CATEGORY_CONFIG.items() if cat == ToolCategory.BASIC}
-        assert set(exported_names) == basic_tool_names
+        assert set(exported_names) == basic_tool_names | {"extract_office_file", "generate_office_file"}
         assert captured_options["allowed_tools"] == ["Read"]
 
     async def test_startup_with_local_tool_names_uses_subset_without_sdk_allowlist(self) -> None:

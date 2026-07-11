@@ -1,4 +1,4 @@
-# DigitalLife / TogoSpace multi-stage image.
+# DigitalLife multi-stage image.
 # Both the legacy console (/) and the immersive V2 UI (/v2/) are built here.
 
 FROM ubuntu:24.04 AS frontend-builder
@@ -24,16 +24,16 @@ FROM ubuntu:24.04
 
 LABEL maintainer="DigitalLife Team"
 LABEL description="DigitalLife multi-agent collaboration platform"
-ARG APP_VERSION=0.5.0
+ARG APP_VERSION=0.6.0
 LABEL version=${APP_VERSION}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TOGOSPACE_HOME=/opt/togospace \
+    DIGITALLIFE_HOME=/opt/digitallife \
     STORAGE_ROOT=/storage \
-    TOGOSPACE_RUN_ENV=docker
+    DIGITALLIFE_RUN_ENV=docker
 
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-venv curl wget ca-certificates git \
@@ -41,33 +41,33 @@ RUN apt-get update && apt-get install -y \
     file zip unzip sqlite3 iputils-ping tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p ${TOGOSPACE_HOME} ${STORAGE_ROOT}
-WORKDIR ${TOGOSPACE_HOME}
+RUN mkdir -p ${DIGITALLIFE_HOME} ${STORAGE_ROOT}
+WORKDIR ${DIGITALLIFE_HOME}
 
-COPY requirements.txt ${TOGOSPACE_HOME}/requirements.txt
+COPY requirements.txt ${DIGITALLIFE_HOME}/requirements.txt
 RUN python3 -m venv .venv \
     && .venv/bin/pip install --upgrade pip \
     && .venv/bin/pip install -r requirements.txt \
     && .venv/bin/pip install "markitdown[all]" \
     && rm -rf /root/.cache/pip
 
-COPY src/ ${TOGOSPACE_HOME}/src/
-COPY assets/ ${TOGOSPACE_HOME}/assets/
-COPY --from=frontend-builder /build/frontend/dist ${TOGOSPACE_HOME}/assets/frontend
-COPY --from=frontend-builder /build/frontend-v2/dist ${TOGOSPACE_HOME}/assets/frontend-v2
+COPY src/ ${DIGITALLIFE_HOME}/src/
+COPY assets/ ${DIGITALLIFE_HOME}/assets/
+COPY --from=frontend-builder /build/frontend/dist ${DIGITALLIFE_HOME}/assets/frontend
+COPY --from=frontend-builder /build/frontend-v2/dist ${DIGITALLIFE_HOME}/assets/frontend-v2
 
-RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 togospace \
+RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 digitallife \
     && mkdir -p ${STORAGE_ROOT} \
     && if [ ! -f ${STORAGE_ROOT}/setting.json ]; then \
-        cp ${TOGOSPACE_HOME}/assets/config_template.json ${STORAGE_ROOT}/setting.json; \
+        cp ${DIGITALLIFE_HOME}/assets/config_template.json ${STORAGE_ROOT}/setting.json; \
     fi \
-    && chown -R togospace:togospace ${TOGOSPACE_HOME} ${STORAGE_ROOT}
+    && chown -R digitallife:digitallife ${DIGITALLIFE_HOME} ${STORAGE_ROOT}
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/system/status.json || exit 1
 
-USER togospace
-WORKDIR ${TOGOSPACE_HOME}/src
+USER digitallife
+WORKDIR ${DIGITALLIFE_HOME}/src
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["../.venv/bin/python3", "backend_main.py", "--config-dir", "/storage"]

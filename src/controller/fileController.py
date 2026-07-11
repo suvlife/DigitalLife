@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 _ALLOWED_EXTENSIONS = {
-    "txt", "md", "json", "csv", "pdf", "docx", "xlsx", "xls",
+    "txt", "md", "markdown", "json", "csv", "pdf", "doc", "docx", "ppt", "pptx", "xlsx", "xls",
     "png", "jpg", "jpeg", "gif", "svg", "zip",
     "py", "js", "ts", "sql", "yaml", "yml",
 }
-_PREVIEW_TEXT_EXTENSIONS = {"txt", "md", "json", "csv", "py", "js", "ts", "sql", "yaml", "yml"}
+_PREVIEW_TEXT_EXTENSIONS = {"txt", "md", "markdown", "json", "csv", "py", "js", "ts", "sql", "yaml", "yml"}
 _PREVIEW_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "svg"}
 _MAX_PREVIEW_TEXT_LENGTH = 10000
 

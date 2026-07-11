@@ -32,9 +32,15 @@ if dockerfile_path.exists():
 compose_path = ROOT / "docker-compose.yml"
 if compose_path.exists():
     compose_text = compose_path.read_text(encoding="utf-8")
-    image_match = re.search(r"image:\s*togospace:([^\s]+)", compose_text)
+    image_match = re.search(r"image:\s*digitallife:([^\s]+)", compose_text)
     if image_match:
         checks.append(("docker-compose.yml", image_match.group(1)))
+readme_path = ROOT / "README.md"
+if readme_path.exists():
+    readme_text = readme_path.read_text(encoding="utf-8")
+    badge_match = re.search(r"version-([0-9]+\.[0-9]+\.[0-9]+)-blue", readme_text)
+    if badge_match:
+        checks.append(("README.md badge", badge_match.group(1)))
 
 errors = [(path, actual) for path, actual in checks if actual != expected]
 if errors:

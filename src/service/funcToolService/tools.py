@@ -1215,7 +1215,8 @@ async def load_skill(
     if agent is None:
         return {"success": False, "message": f"未找到 Agent（ID: {_context.agent_id}）"}
 
-    allow_skills = agent.allow_skills or []
+    product_skills = {"document-studio", "spreadsheet-studio", "guizang-ppt-skill"}
+    allow_skills = set(agent.allow_skills or []) | product_skills
 
     if skill_name not in allow_skills:
         return {"success": False, "message": f"技能 {skill_name} 未对当前 Agent 开放"}

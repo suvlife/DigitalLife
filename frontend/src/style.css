@@ -234,3 +234,5 @@ textarea {
   border: 1px solid var(--room-card-border-stroke);
   pointer-events: none;
 }
+
+html,body,#app,button,input,textarea,select{font-family:"LXGW WenKai","霞鹜文楷","KaiTi",serif!important}

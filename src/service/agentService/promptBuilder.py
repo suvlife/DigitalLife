@@ -215,10 +215,13 @@ async def build_agent_system_prompt(
         if is_root_leader:
             full_prompt += "\n\n" + ROOT_LEADER_GUIDE
 
-    # 注入已授权 Skill 概要
-    if allow_skills:
+    # 文档生产技能是产品内置能力；与团队为成员单独授权的技能合并展示。
+    effective_skills = list(dict.fromkeys((allow_skills or []) + [
+        "document-studio", "spreadsheet-studio", "guizang-ppt-skill",
+    ]))
+    if effective_skills:
         skill_lines = []
-        for skill_name in allow_skills:
+        for skill_name in effective_skills:
             skill_info = skillService.get_skill(skill_name)
             if skill_info is not None:
                 skill_lines.append(f"- {skill_info.name}: {skill_info.description}")
