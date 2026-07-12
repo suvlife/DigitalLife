@@ -1,12 +1,7 @@
 # DigitalLife multi-stage image.
 # Both web apps are built here: V2 is served at / and the classic console at /v1/.
 
-FROM ubuntu:24.04 AS frontend-builder
-
-RUN apt-get update && apt-get install -y curl ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+FROM node:20-bookworm-slim AS frontend-builder
 
 WORKDIR /build
 
@@ -24,7 +19,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="DigitalLife Team"
 LABEL description="DigitalLife multi-agent collaboration platform"
-ARG APP_VERSION=0.6.1
+ARG APP_VERSION=0.6.2
 LABEL version=${APP_VERSION}
 
 ENV PYTHONUNBUFFERED=1 \
@@ -33,12 +28,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DIGITALLIFE_HOME=/opt/digitallife \
     STORAGE_ROOT=/storage \
-    DIGITALLIFE_RUN_ENV=docker
+    DIGITALLIFE_RUN_ENV=docker \
+    BIND_HOST=0.0.0.0 \
+    BIND_PORT=8080
 
-RUN apt-get update && apt-get install -y \
-    python3 python3-pip python3-venv curl wget ca-certificates git \
-    tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
-    file zip unzip sqlite3 iputils-ping tini \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-venv curl wget ca-certificates git \
+      tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
+      file zip unzip sqlite3 iputils-ping tini \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p ${DIGITALLIFE_HOME} ${STORAGE_ROOT}

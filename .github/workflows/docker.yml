@@ -116,7 +116,11 @@ jobs:
         if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.push }}" = "true" ]; then
           docker pull "$IMAGE"
         fi
-        cid=$(docker run -d -p 127.0.0.1::8080 "$IMAGE")
+        cid=$(docker run -d \
+          -e BIND_HOST=0.0.0.0 \
+          -e BIND_PORT=8080 \
+          -p 127.0.0.1::8080 \
+          "$IMAGE")
         trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
         host_port=$(docker port "$cid" 8080/tcp | awk -F: '{print $NF}')
         for attempt in $(seq 1 60); do

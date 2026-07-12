@@ -67,9 +67,11 @@ async def test_different_services_do_not_block_each_other():
 
     task = asyncio.create_task(hold_a())
     await entered_a.wait()
-    async with asyncio.timeout(0.1):
+    async def enter_fast_gate() -> None:
         async with gate_b.slot():
             pass
+
+    await asyncio.wait_for(enter_fast_gate(), timeout=0.1)
     release_a.set()
     await task
 

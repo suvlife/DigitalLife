@@ -139,8 +139,20 @@ async def main(config_dir: str = None, port: int | None = None):
         logger.info("[启动] 演示模式已启用：freeze_data=true，系统将以只读浏览态启动")
 
     # 端口优先使用命令行参数，其次使用配置文件
-    bind_host = app_config.setting.bind_host
-    bind_port = port if port is not None else app_config.setting.bind_port
+    bind_host = os.environ.get("BIND_HOST", app_config.setting.bind_host).strip()
+    if port is not None:
+        bind_port = port
+    else:
+        raw_bind_port = os.environ.get("BIND_PORT")
+        if raw_bind_port is None or not raw_bind_port.strip():
+            bind_port = app_config.setting.bind_port
+        else:
+            try:
+                bind_port = int(raw_bind_port.strip())
+            except ValueError as exc:
+                raise ValueError("BIND_PORT 必须是 1-65535 之间的整数") from exc
+            if not 1 <= bind_port <= 65535:
+                raise ValueError("BIND_PORT 必须是 1-65535 之间的整数")
     logger.info("[启动] 监听地址：%s:%d", bind_host, bind_port)
 
     # 安全告警：绑定非回环地址但未启用鉴权，存在未授权访问风险

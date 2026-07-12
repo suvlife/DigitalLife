@@ -25,3 +25,26 @@ def test_environment_ghost_secret_is_not_persisted(monkeypatch, tmp_path) -> Non
     assert persisted["ghost"]["admin_api_key"] == "file-secret"
     assert persisted["ghost"]["content_api_key"] == "file-content"
     assert "env-secret" not in setting_path.read_text(encoding="utf-8")
+
+
+def test_environment_bind_settings_override_config_without_persisting(monkeypatch) -> None:
+    setting = SettingConfig(bind_host="127.0.0.1", bind_port=8180)
+    monkeypatch.setenv("BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("BIND_PORT", "8080")
+
+    configUtil.apply_secret_environment_overrides(setting)
+
+    assert setting.bind_host == "0.0.0.0"
+    assert setting.bind_port == 8080
+
+
+def test_invalid_environment_bind_port_is_rejected(monkeypatch) -> None:
+    setting = SettingConfig()
+    monkeypatch.setenv("BIND_PORT", "not-a-port")
+
+    try:
+        configUtil.apply_secret_environment_overrides(setting)
+    except ValueError as exc:
+        assert "BIND_PORT" in str(exc)
+    else:
+        raise AssertionError("invalid BIND_PORT should be rejected")

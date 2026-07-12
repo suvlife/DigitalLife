@@ -155,13 +155,15 @@ class TestWsTenantIsolationApi(ServiceTestCase):
                 assert resp.status == 200, await resp.text()
 
         async def receive_reload(ws: aiohttp.ClientWebSocketResponse) -> dict:
-            async with asyncio.timeout(3):
+            async def wait_for_reload() -> dict:
                 async for message in ws:
                     if message.type == aiohttp.WSMsgType.TEXT:
                         payload = json.loads(message.data)
                         if payload.get("event") == "team_reloaded":
                             return payload
-            raise AssertionError("team_reloaded not received")
+                raise AssertionError("team_reloaded not received")
+
+            return await asyncio.wait_for(wait_for_reload(), timeout=3)
 
         async with session_with_cookie(user_cookie) as user_client, session_with_cookie(other_cookie) as other_client, session_with_cookie(admin_cookie) as admin_client:
             async with user_client.ws_connect(ws_url) as ws:

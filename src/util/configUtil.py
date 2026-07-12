@@ -73,7 +73,26 @@ def get_builtin_ghost_config() -> dict:
 
 
 def apply_secret_environment_overrides(setting: SettingConfig) -> None:
-    """用进程环境变量覆盖敏感配置，且不把环境变量写回 setting.json。"""
+    """用进程环境变量覆盖运行时配置，且不把环境变量写回 setting.json。
+
+    Secrets and container bind settings are intentionally process-only.  This
+    keeps Docker/CI deployments configurable without mutating the user's
+    persistent ``setting.json``.
+    """
+    bind_host = os.environ.get("BIND_HOST")
+    if bind_host and bind_host.strip():
+        setting.bind_host = bind_host.strip()
+
+    bind_port = os.environ.get("BIND_PORT")
+    if bind_port and bind_port.strip():
+        try:
+            parsed_port = int(bind_port.strip())
+        except ValueError as exc:
+            raise ValueError("BIND_PORT 必须是 1-65535 之间的整数") from exc
+        if not 1 <= parsed_port <= 65535:
+            raise ValueError("BIND_PORT 必须是 1-65535 之间的整数")
+        setting.bind_port = parsed_port
+
     ghost_url = os.environ.get("GHOST_API_URL")
     ghost_admin_key = os.environ.get("GHOST_ADMIN_API_KEY")
     ghost_content_key = os.environ.get("GHOST_CONTENT_API_KEY")
