@@ -292,28 +292,16 @@ async def batch_save_agents(team_id: int, agents: list[GtAgent]) -> None:
         try:
             async with atomic_transaction():
                 max_num = await get_max_employee_number(team_id)
-                next_num = max_num + 1
+                next_num = max(max_num + 1, 1)
 
                 to_create = []
                 to_update = []
-
-                # Existing rows already own a stable employee number.  New
-                # rows must be assigned numbers that cannot collide with
-                # special/legacy rows whose number may be 0.
-                # New rows use the next positive employee numbers.  Existing
-                # special/legacy rows may use 0 or negative values, so never
-                # assign those values to a normal member.
-                used_numbers: set[int] = set()
-                next_num = max(next_num, 1)
 
                 for agent in agents:
                     if agent.id is not None:
                         to_update.append(agent)
                     else:
-                        while next_num in used_numbers:
-                            next_num += 1
                         agent.employee_number = next_num
-                        used_numbers.add(next_num)
                         to_create.append(agent)
                         next_num += 1
 
