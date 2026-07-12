@@ -447,7 +447,10 @@ async def overwrite_team_agents(team_id: int, agents_data: list[GtAgent]) -> lis
 
         agents_to_save.append(agent)
 
-    # 3. 批量保存
+    # 3. 批量保存。数据库模型对象由服务层构造，统一补齐 team_id，
+    # 避免控制器传入的临时对象在批量写入前触发跨团队校验失败。
+    for agent in agents_to_save:
+        agent.team_id = team_id
     try:
         await gtAgentManager.batch_save_agents(team_id, agents_to_save)
     except IntegrityError as e:
