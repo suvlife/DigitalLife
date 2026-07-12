@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.6.2-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.6.3-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -28,7 +28,7 @@
 ## 目录
 
 - [项目简介](#项目简介)
-- [v0.6.2 重点更新](#v062-重点更新)
+- [v0.6.3 重点更新](#v063-重点更新)
 - [核心能力](#核心能力)
 - [内置团队](#内置团队)
 - [系统架构](#系统架构)
@@ -71,7 +71,7 @@
 
 ---
 
-## v0.6.2 重点更新
+## v0.6.3 重点更新
 
 - **房间对话重新排版**：扩大讨论窗口，修复长内容逐字竖排和右侧大面积空白，Markdown、表格与代码块保持横向可读。
 - **发言时间轴**：在大师座次与堂内对话之间增加真实消息顺序时间轴，点击人物或时间可跳转并高亮对应发言。

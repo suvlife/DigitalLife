@@ -9,8 +9,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "0.6.2"
-    image: digitallife:0.6.2
+        APP_VERSION: "0.6.3"
+    image: digitallife:0.6.3
     container_name: digitallife
     restart: unless-stopped
     ports:
