@@ -72,9 +72,10 @@ async def _get_room_agent_names(team_id: int, agent_ids: list[int]) -> list[str]
     ]
 
 
-def _to_gt_agent(agent: "TeamAgentUpdateItem") -> GtAgent:
+def _to_gt_agent(team_id: int, agent: "TeamAgentUpdateItem") -> GtAgent:
     return GtAgent(
         id=agent.id,
+        team_id=team_id,
         name=agent.name,
         role_template_id=agent.role_template_id,
         model=agent.model,
@@ -298,10 +299,8 @@ class TeamModifyHandler(BaseHandler):
             _tpl_ids = list({agent.role_template_id for agent in request.agents})
             _fetched = await gtRoleTemplateManager.get_role_templates_by_ids(_tpl_ids)
             assertUtil.assertEqual(len(_fetched), len(_tpl_ids), error_message="部分角色模板不存在", error_code="role_template_not_found")
-            await agentService.overwrite_team_agents(
-                team_id,
-                [_to_gt_agent(agent) for agent in request.agents],
-            )
+            agents_to_update = [_to_gt_agent(team_id, agent) for agent in request.agents]
+            await agentService.overwrite_team_agents(team_id, agents_to_update)
         if request.preset_rooms is not None:
             await roomService.overwrite_team_rooms(
                 team_id,
