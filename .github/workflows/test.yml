@@ -40,7 +40,7 @@ jobs:
 
     - name: Run tests with coverage (parallel)
       run: |
-        PYTHONPATH=src python -m pytest tests/unit tests/api tests/integration -n auto --dist loadscope --timeout=60 \
+        PYTHONPATH=src python -m pytest tests/unit tests/api tests/integration -n 4 --dist loadscope --timeout=60 \
           --cov=src --cov-report=term-missing --cov-fail-under=60
 
     - name: Run mypy with legacy-debt baseline
