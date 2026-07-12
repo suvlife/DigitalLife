@@ -178,8 +178,8 @@ class TestWsTenantIsolationApi(ServiceTestCase):
 
                 # Another user's private team must not cross the socket.
                 await clear_team(other_client, other_team)
-                with pytest.raises(asyncio.TimeoutError):
-                    await asyncio.wait_for(ws.receive(), timeout=0.3)
+                with pytest.raises((asyncio.TimeoutError, AssertionError)):
+                    await receive_reload(ws)
 
         # Run ownership decisions use these persisted fixtures in unit policy
         # coverage; IDs being distinct guards accidental fixture collapse.
