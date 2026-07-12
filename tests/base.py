@@ -445,6 +445,10 @@ class ServiceTestCase:
         env["PYTHONPATH"] = _SRC_DIR
         env["TEAMAGENT_ENV"] = "test"
         env["TEAMAGENT_DB_PATH"] = cls._get_test_db_path()
+        # Keep subprocess backend defaults deterministic even when the parent
+        # shell/container exports production bind settings.
+        env.pop("BIND_HOST", None)
+        env.pop("BIND_PORT", None)
 
         if cls._backend_config_dir:
             env["TEAMAGENT_PRESET_DIR"] = cls._backend_config_dir
