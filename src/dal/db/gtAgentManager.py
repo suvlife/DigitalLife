@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
-from peewee import IntegrityError, fn
+from peewee import IntegrityError, OperationalError, fn
 
 from constants import EmployStatus, DriverType
 from model.dbModel.gtAgent import GtAgent
@@ -327,13 +328,17 @@ async def batch_save_agents(team_id: int, agents: list[GtAgent]) -> None:
 
                 affected_ids = [a.id for a in agents if a.id is not None]
             break
-        except IntegrityError:
+        except (IntegrityError, OperationalError) as exc:
+            is_locked = isinstance(exc, OperationalError) and "database" in str(exc).lower() and "locked" in str(exc).lower()
+            if isinstance(exc, OperationalError) and not is_locked:
+                raise
             if attempt >= max_retries:
                 raise
             logger.warning(
-                "batch_save_agents employee_number 冲突，重试 %d/%d: team_id=%s",
-                attempt, max_retries, team_id,
+                "batch_save_agents 写入冲突，重试 %d/%d: team_id=%s, error=%s",
+                attempt, max_retries, team_id, exc,
             )
+            await asyncio.sleep(0.05 * attempt)
 
     # 写入后失效缓存，避免读到陈旧数据
     for agent_id in affected_ids:

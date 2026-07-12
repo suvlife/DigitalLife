@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Sequence
 
+from peewee import OperationalError
+
 from dal.db import gtRoomManager, gtTeamManager, gtAgentManager, gtRoomMessageManager, atomic_transaction
 from service import messageBus
 from util import configUtil, assertUtil, i18nUtil
@@ -474,8 +476,19 @@ async def create_room(
         max_rounds=max_rounds,
         agent_ids=list(agent_ids),
     )
-    async with atomic_transaction():
-        saved = await gtRoomManager.save_room(new_room)
+    saved = None
+    for attempt in range(3):
+        try:
+            async with atomic_transaction():
+                saved = await gtRoomManager.save_room(new_room)
+            break
+        except OperationalError as exc:
+            message = str(exc).lower()
+            if "database" not in message or "locked" not in message or attempt >= 2:
+                raise
+            logger.warning("房间写入遇到 SQLite 锁，重试 %d/2: team_id=%s", attempt + 1, team_id)
+            await asyncio.sleep(0.05 * (attempt + 1))
+    assert saved is not None
 
     # 将新房间加载到内存并通知前端（不触发全量 team reload）。
     # 这一段必须位于事务之外，确保独立连接能看到已提交的数据。
