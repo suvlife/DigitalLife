@@ -18,14 +18,14 @@ class _ApiServiceCase(ServiceTestCase):
         """停用团队（修改 agents/dept_tree 前必须停用）。"""
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/set_enabled.json", json={"enabled": False}) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
 
 
 class TestTeamController(_ApiServiceCase):
     async def _get_team_id(self, team_name: str) -> int:
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
         team = next(team for team in data["teams"] if team["name"] == team_name)
         return team["id"]
@@ -33,7 +33,7 @@ class TestTeamController(_ApiServiceCase):
     async def _get_role_template_id(self, template_name: str) -> int:
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/role_templates/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
         template = next(item for item in data["role_templates"] if item["name"] == template_name)
         return template["id"]
@@ -42,7 +42,7 @@ class TestTeamController(_ApiServiceCase):
         team_id = await self._get_team_id("e2e")
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{team_id}.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
 
         assert data["name"] == "e2e"
@@ -73,7 +73,7 @@ class TestTeamController(_ApiServiceCase):
 
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/export_preset.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
 
         assert data["name"] == "e2e"
@@ -99,21 +99,21 @@ class TestTeamController(_ApiServiceCase):
 
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/create.json", json=payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "created"
                 assert isinstance(data["id"], int)
                 created_team_id = data["id"]
 
             async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 teams_data = await resp.json()
 
         assert any(team["name"] == "new_team" for team in teams_data["teams"])
 
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{created_team_id}.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 detail = await resp.json()
 
         assert detail["agents"] == []
@@ -129,7 +129,7 @@ class TestTeamController(_ApiServiceCase):
     async def test_team_list_returns_boolean_enabled(self):
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
 
         assert data["teams"]
@@ -146,7 +146,7 @@ class TestTeamController(_ApiServiceCase):
                 f"{self.backend_base_url}/teams/create.json",
                 json={"name": temp_team_name},
             ) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 create_data = await resp.json()
                 team_id = create_data["id"]
 
@@ -166,16 +166,16 @@ class TestTeamController(_ApiServiceCase):
                     ]
                 },
             ) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 modify_data = await resp.json()
                 assert modify_data["status"] == "updated"
 
             async with client.get(f"{self.backend_base_url}/agents/list.json?team_id={team_id}") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 agents_data = await resp.json()
 
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/delete.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
 
         tom = next(agent for agent in agents_data["agents"] if agent["name"] == "tom")
         assert tom["role_template_id"] == template_id
@@ -192,7 +192,7 @@ class TestTeamController(_ApiServiceCase):
                 f"{self.backend_base_url}/teams/create.json",
                 json={"name": temp_team_name},
             ) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 create_data = await resp.json()
                 team_id = create_data["id"]
 
@@ -217,7 +217,7 @@ class TestTeamController(_ApiServiceCase):
                 assert error_data["error_code"] == "role_template_not_found"
 
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/delete.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
 
     async def test_team_agents_by_team_id(self):
         """验证 GET /agents/list.json?team_id=<id> 返回团队成员。"""
@@ -225,7 +225,7 @@ class TestTeamController(_ApiServiceCase):
 
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/agents/list.json?team_id={team_id}") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 agents_data = await resp.json()
 
         assert len(agents_data["agents"]) == 2
@@ -242,7 +242,7 @@ class TestTeamController(_ApiServiceCase):
 
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/agents/alice.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
 
         assert data["name"] == "alice"
@@ -263,7 +263,7 @@ class TestTeamController(_ApiServiceCase):
                 f"{self.backend_base_url}/teams/{team_id}/set_enabled.json",
                 json={"enabled": False},
             ) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "ok"
                 assert data["enabled"] is False
@@ -285,7 +285,7 @@ class TestTeamController(_ApiServiceCase):
                 f"{self.backend_base_url}/teams/{team_id}/set_enabled.json",
                 json={"enabled": True},
             ) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "ok"
                 assert data["enabled"] is True

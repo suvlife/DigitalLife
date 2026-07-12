@@ -16,7 +16,7 @@ class TestConfigApi(ServiceTestCase):
     async def _get_team_id(self, team_name: str) -> int:
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
         team = next(team for team in data["teams"] if team["name"] == team_name)
         return team["id"]
@@ -24,7 +24,7 @@ class TestConfigApi(ServiceTestCase):
     async def _get_team_agents(self, team_id: int) -> list[dict]:
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/agents/list.json?team_id={team_id}") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
         return data["agents"]
 
@@ -36,7 +36,7 @@ class TestConfigApi(ServiceTestCase):
         }
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/create.json", json=payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 create_data = await resp.json()
                 team_id = create_data["id"]
 
@@ -50,7 +50,7 @@ class TestConfigApi(ServiceTestCase):
         }
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/modify.json", json=modify_payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "updated"
 
@@ -63,7 +63,7 @@ class TestConfigApi(ServiceTestCase):
         # 2. Delete Team
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/delete.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "deleted"
 
@@ -80,7 +80,7 @@ class TestConfigApi(ServiceTestCase):
         # 1. List Team Rooms
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert len(data["rooms"]) >= 1
 
@@ -98,7 +98,7 @@ class TestConfigApi(ServiceTestCase):
         }
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/create.json", json=create_payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "created"
 
@@ -112,7 +112,7 @@ class TestConfigApi(ServiceTestCase):
         # 3. Get Room Detail
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 detail = await resp.json()
                 assert detail["name"] == room_name
                 # 2人房间为 PRIVATE 类型，initial_topic 由系统按统一模板生成
@@ -127,7 +127,7 @@ class TestConfigApi(ServiceTestCase):
         }
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}/modify.json", json=modify_payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 
             # Verify modification
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}.json") as resp:
@@ -139,12 +139,12 @@ class TestConfigApi(ServiceTestCase):
         # List Agents
         async with aiohttp.ClientSession() as client:
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}/agents/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 
             # Modify Agents
             agents_payload = {"agent_ids": [alice["id"], -1]}
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}/agents/modify.json", json=agents_payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 
             # Verify agents
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}/agents/list.json") as resp:
@@ -156,7 +156,7 @@ class TestConfigApi(ServiceTestCase):
         # 6. Delete Room
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/{new_room_id}/delete.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 
             # Verify deletion
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/list.json") as resp:
@@ -179,23 +179,23 @@ class TestConfigApi(ServiceTestCase):
         }
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/create.json", json=create_payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "created"
 
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 rooms_data = await resp.json()
                 created_room = next(room for room in rooms_data["rooms"] if room["name"] == room_name)
                 room_id = created_room["id"]
 
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/{room_id}/agents/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 agents_data = await resp.json()
                 assert set(agents_data["agent_ids"]) == {alice["id"], bob["id"]}
 
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/{room_id}/delete.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
 
     async def test_team_room_create_auto_infers_private_type_for_agent_and_operator(self):
         team_id = await self._get_team_id("e2e")
@@ -212,24 +212,24 @@ class TestConfigApi(ServiceTestCase):
         }
         async with aiohttp.ClientSession() as client:
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/create.json", json=create_payload) as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 assert data["status"] == "created"
 
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/list.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 rooms_data = await resp.json()
                 created_room = next(room for room in rooms_data["rooms"] if room["name"] == room_name)
                 room_id = created_room["id"]
 
             async with client.get(f"{self.backend_base_url}/teams/{team_id}/rooms/{room_id}.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
                 detail = await resp.json()
                 assert RoomType.value_of(detail["type"]) == RoomType.PRIVATE
                 assert set(detail["agent_ids"]) == {alice["id"], int(SpecialAgent.OPERATOR.value)}
 
             async with client.post(f"{self.backend_base_url}/teams/{team_id}/rooms/{room_id}/delete.json") as resp:
-                assert resp.status == 200
+                assert resp.status == 200, await resp.text()
 
     async def test_team_room_create_with_invalid_agent_ids(self):
         team_id = await self._get_team_id("e2e")
