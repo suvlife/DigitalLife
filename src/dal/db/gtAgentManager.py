@@ -300,11 +300,10 @@ async def batch_save_agents(team_id: int, agents: list[GtAgent]) -> None:
                 # Existing rows already own a stable employee number.  New
                 # rows must be assigned numbers that cannot collide with
                 # special/legacy rows whose number may be 0.
-                used_numbers = {
-                    agent.employee_number
-                    for agent in await get_team_all_agents(team_id)
-                    if agent.employee_number is not None
-                }
+                # New rows use the next positive employee numbers.  Existing
+                # special/legacy rows may use 0 or negative values, so never
+                # assign those values to a normal member.
+                used_numbers: set[int] = set()
                 next_num = max(next_num, 1)
 
                 for agent in agents:
