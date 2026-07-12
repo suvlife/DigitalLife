@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from types import SimpleNamespace
@@ -51,27 +52,22 @@ def test_markdown_to_safe_html_blocks_javascript_links() -> None:
 async def test_publish_post_uses_source_html_and_never_sends_markdown_as_lexical(monkeypatch) -> None:
     captured = {}
 
-    class Response:
-        status = 201
-        async def text(self):
-            return json.dumps({"posts": [{"id": "post-1", "url": "https://blog.example/post/"}]})
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return False
+    async def request(method, url, *, headers, json_body, **kwargs):
+        captured.update(method=method, url=url, body=json_body, headers=headers)
+        return ghostService.safeHttpUtil.SafeHttpResponse(
+            status=201, headers={},
+            body=json.dumps({"posts": [{"id": "post-1", "url": "https://blog.example/post/"}]}).encode(),
+            url=url,
+        )
 
-    class Session:
-        def __init__(self, **kwargs): pass
-        def post(self, url, *, json, headers):
-            captured.update(url=url, body=json, headers=headers)
-            return Response()
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return False
-
-    monkeypatch.setattr(ghostService.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(ghostService.safeHttpUtil, "request", request)
+    monkeypatch.setattr(ghostService.safeHttpUtil, "assert_safe_http_url", lambda *args, **kwargs: None)
     result = await ghostService.publish_post(
         "报告", "# 完整结论", api_url="https://blog.example",
         admin_api_key="id:" + "ab" * 32,
     )
     assert result["success"] is True
+    assert captured["method"] == "POST"
     assert captured["url"].endswith("/ghost/api/admin/posts/?source=html")
     assert "html" in captured["body"]["posts"][0]
     assert "lexical" not in captured["body"]["posts"][0]
@@ -109,3 +105,64 @@ async def test_enqueue_final_conclusion_is_stable_and_wakes_worker(monkeypatch) 
     assert kwargs["publication_key"] == "final-conclusion:room:1"
     assert "完整结论" in kwargs["markdown_content"]
     assert len(kwargs["content_hash"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_publish_post_reconciles_existing_slug_with_update(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+
+    async def request(method, url, *, json_body=None, **kwargs):
+        calls.append((method, url, json_body))
+        if method == "GET":
+            body = {"posts": [{
+                "id": "post-1", "slug": "digitallife-stable",
+                "updated_at": "2026-07-12T00:00:00.000Z",
+                "url": "https://blog.example/stable/",
+            }]}
+        else:
+            body = {"posts": [{"id": "post-1", "url": "https://blog.example/stable/"}]}
+        return ghostService.safeHttpUtil.SafeHttpResponse(200, {}, json.dumps(body).encode(), url)
+
+    monkeypatch.setattr(ghostService.safeHttpUtil, "request", request)
+    monkeypatch.setattr(ghostService.safeHttpUtil, "assert_safe_http_url", lambda *args, **kwargs: None)
+    result = await ghostService.publish_post(
+        "报告", "# 新结论", api_url="https://blog.example",
+        admin_api_key="id:" + "ab" * 32, slug="digitallife-stable",
+    )
+
+    assert result["success"] is True
+    assert [method for method, _, _ in calls] == ["GET", "PUT"]
+    assert calls[1][2]["posts"][0]["updated_at"] == "2026-07-12T00:00:00.000Z"
+    assert calls[1][2]["posts"][0]["slug"] == "digitallife-stable"
+
+
+@pytest.mark.asyncio
+async def test_publish_post_timeout_then_retry_finds_remote_post(monkeypatch) -> None:
+    state = {"created": False, "post_calls": 0, "put_calls": 0}
+
+    async def request(method, url, *, json_body=None, **kwargs):
+        if method == "GET":
+            posts = []
+            if state["created"]:
+                posts = [{"id": "post-1", "updated_at": "2026-07-12T00:00:00.000Z", "url": "https://blog.example/stable/"}]
+            return ghostService.safeHttpUtil.SafeHttpResponse(200, {}, json.dumps({"posts": posts}).encode(), url)
+        if method == "POST":
+            state["post_calls"] += 1
+            state["created"] = True
+            raise asyncio.TimeoutError()
+        state["put_calls"] += 1
+        return ghostService.safeHttpUtil.SafeHttpResponse(200, {}, json.dumps({"posts": [{"id": "post-1", "url": "https://blog.example/stable/"}]}).encode(), url)
+
+    monkeypatch.setattr(ghostService.safeHttpUtil, "request", request)
+    monkeypatch.setattr(ghostService.safeHttpUtil, "assert_safe_http_url", lambda *args, **kwargs: None)
+    kwargs = dict(
+        api_url="https://blog.example", admin_api_key="id:" + "ab" * 32,
+        slug="digitallife-stable",
+    )
+    first = await ghostService.publish_post("报告", "# 结论", **kwargs)
+    second = await ghostService.publish_post("报告", "# 结论", **kwargs)
+
+    assert first["success"] is False and first["retryable"] is True
+    assert second["success"] is True
+    assert state["post_calls"] == 1
+    assert state["put_calls"] == 1

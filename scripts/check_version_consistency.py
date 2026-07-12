@@ -15,11 +15,14 @@ version_py = (ROOT / "src/version.py").read_text(encoding="utf-8")
 match = re.search(r'__version__\s*=\s*["\']([^"\']+)', version_py)
 checks.append(("src/version.py", match.group(1) if match else "<missing>"))
 
-for relative in ("frontend/package.json", "frontend-v2/package.json"):
+for relative in ("frontend/package.json", "frontend/package-lock.json", "frontend-v2/package.json", "frontend-v2/package-lock.json"):
     package_path = ROOT / relative
     if package_path.exists():
         package = json.loads(package_path.read_text(encoding="utf-8"))
         checks.append((relative, str(package.get("version", "<missing>"))))
+        packages = package.get("packages")
+        if isinstance(packages, dict) and isinstance(packages.get(""), dict):
+            checks.append((relative + ' root package', str(packages[""].get("version", "<missing>"))))
 
 
 dockerfile_path = ROOT / "Dockerfile"
@@ -34,7 +37,10 @@ if compose_path.exists():
     compose_text = compose_path.read_text(encoding="utf-8")
     image_match = re.search(r"image:\s*digitallife:([^\s]+)", compose_text)
     if image_match:
-        checks.append(("docker-compose.yml", image_match.group(1)))
+        checks.append(("docker-compose.yml image", image_match.group(1)))
+    compose_arg_match = re.search(r"APP_VERSION:\s*[\"]?([^\s\"]+)", compose_text)
+    if compose_arg_match:
+        checks.append(("docker-compose.yml APP_VERSION", compose_arg_match.group(1)))
 readme_path = ROOT / "README.md"
 if readme_path.exists():
     readme_text = readme_path.read_text(encoding="utf-8")

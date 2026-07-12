@@ -1,6 +1,4 @@
 from datetime import datetime, timedelta
-from typing import Any
-
 from controller.baseController import BaseHandler
 from service import usageService
 from util import configUtil
@@ -16,6 +14,14 @@ class UsageSummaryHandler(BaseHandler):
 
         team_id_int = int(team_id) if team_id is not None else None
         agent_ids_list = [int(x) for x in agent_ids.split(",") if x] if agent_ids else None
+        if team_id_int is None and not agent_ids_list:
+            self.set_status(400)
+            self.return_json({"error_code": "resource_required", "error_desc": "必须指定 team_id 或 agent_ids"})
+            return
+        if team_id_int is not None:
+            await self._assert_team_owned(team_id_int)
+        for agent_id in agent_ids_list or []:
+            await self._assert_agent_owned(agent_id)
 
         try:
             days_int = max(1, min(int(days), 90))
@@ -41,7 +47,12 @@ class UsageTotalHandler(BaseHandler):
         team_id = self.get_argument("team_id", None)
         days = self.get_argument("days", "7")
 
-        team_id_int = int(team_id) if team_id is not None else None
+        if team_id is None:
+            self.set_status(400)
+            self.return_json({"error_code": "resource_required", "error_desc": "必须指定 team_id"})
+            return
+        team_id_int = int(team_id)
+        await self._assert_team_owned(team_id_int)
 
         try:
             days_int = max(1, min(int(days), 90))
@@ -63,10 +74,17 @@ class UsageRealtimeHandler(BaseHandler):
     """GET /usage/realtime.json — 当前会话实时 Token 统计"""
 
     async def get(self) -> None:
+        team_id = self.get_argument("team_id", None)
+        team_id_int = int(team_id) if team_id is not None else None
+        if team_id_int is not None:
+            await self._assert_team_owned(team_id_int)
+        else:
+            self._assert_admin()
+
         # 最近 1 小时的 token 消耗
         until = datetime.now()
         since = until - timedelta(hours=1)
-        total = await usageService.get_usage_total(team_id=None, since=since, until=until)
+        total = await usageService.get_usage_total(team_id=team_id_int, since=since, until=until)
 
         # 当前模型
         setting = configUtil.get_app_config().setting

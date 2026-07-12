@@ -1,15 +1,13 @@
-import ipaddress
 import json
 import logging
 import time
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, ValidationError
 
 from constants import LlmServiceType
 from controller.baseController import BaseHandler
-from service import llmService, schedulerService
-from util import assertUtil, configUtil, llmApiUtil
+from service import ghostService, llmService, schedulerService
+from util import assertUtil, configUtil, safeHttpUtil
 from util.configTypes import GhostConfig, LlmServiceConfig
 
 logger = logging.getLogger(__name__)
@@ -22,41 +20,15 @@ _TYPE_TO_PROVIDER = {
     LlmServiceType.DEEPSEEK: "deepseek",
 }
 
-# 云元数据端点（SSRF 高危目标）
-_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
+def _assert_safe_service_url(url: str, *, field_name: str = "base_url") -> None:
+    try:
+        ghostService.assert_safe_http_url(url, field_name=field_name)
+    except ValueError as exc:
+        raise assertUtil.MakeSureException(str(exc), error_code="unsafe_url") from exc
 
 
 def _assert_safe_llm_url(base_url: str) -> None:
-    """校验 LLM base_url 不指向内网/回环/元数据端点，防止 SSRF。
-
-    仅允许 http/https scheme，拒绝 loopback/私有/链路本地/保留段 IP，
-    以及云元数据主机名。对域名做解析后再次校验（防 DNS rebinding 的
-    基础防护；完整防 rebinding 需在连接层 pin IP）。
-    """
-    if not base_url:
-        return
-    parsed = urlparse(base_url)
-    if parsed.scheme not in ("http", "https"):
-        raise assertUtil.TogoException(
-            error_code="unsafe_url",
-            error_message=f"base_url 仅允许 http/https scheme: {base_url}",
-        ) if hasattr(assertUtil, "TogoException") else ValueError(f"unsafe scheme: {base_url}")
-    hostname = parsed.hostname or ""
-    if not hostname:
-        raise ValueError(f"base_url 缺少 hostname: {base_url}")
-
-    if hostname in _METADATA_HOSTS:
-        raise ValueError(f"base_url 指向云元数据端点，已拒绝: {hostname}")
-
-    # IPv4/IPv6 直接校验
-    try:
-        ip = ipaddress.ip_address(hostname)
-        if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ValueError(f"base_url 指向内网/保留地址，已拒绝: {hostname}")
-    except ValueError:
-        # 非 IP 字面量，作为域名处理：拒绝 localhost 等已知内网域名
-        if hostname in ("localhost", "ip6-localhost", "ip6-loopback"):
-            raise ValueError(f"base_url 指向回环地址，已拒绝: {hostname}")
+    _assert_safe_service_url(base_url, field_name="base_url")
 
 
 class TestLlmServiceRequest(BaseModel):
@@ -156,6 +128,7 @@ class LlmServiceCreateHandler(BaseHandler):
     """POST /config/llm_services/create.json"""
 
     async def post(self) -> None:
+        self._assert_admin()
         try:
             new_service = self.parse_request(LlmServiceConfig)
         except ValidationError as e:
@@ -175,12 +148,7 @@ class LlmServiceCreateHandler(BaseHandler):
             error_code="name_duplicate",
         )
 
-        # 校验 base_url 格式
-        assertUtil.assertTrue(
-            new_service.base_url.startswith("http://") or new_service.base_url.startswith("https://"),
-            error_message="base_url 必须以 http:// 或 https:// 开头",
-            error_code="invalid_base_url",
-        )
+        _assert_safe_llm_url(new_service.base_url)
 
         def mutator(s):
             s.llm_services.append(new_service)
@@ -194,6 +162,7 @@ class LlmServiceModifyHandler(BaseHandler):
     """POST /config/llm_services/{index}/modify.json"""
 
     async def post(self, index_str: str) -> None:
+        self._assert_admin()
         index = _validate_index(index_str)
         setting = _get_setting()
         service = setting.llm_services[index]
@@ -216,14 +185,10 @@ class LlmServiceModifyHandler(BaseHandler):
                 error_code="cannot_disable_default",
             )
 
-        # 校验 base_url 格式
         if "base_url" in updates:
             url = updates["base_url"]
-            assertUtil.assertTrue(
-                isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")),
-                error_message="base_url 必须以 http:// 或 https:// 开头",
-                error_code="invalid_base_url",
-            )
+            assertUtil.assertTrue(isinstance(url, str), error_message="base_url 必须是字符串", error_code="invalid_base_url")
+            _assert_safe_llm_url(url)
 
         # dict 合并重建，Pydantic 自动校验
         current = service.model_dump(exclude_unset=True)
@@ -253,6 +218,7 @@ class LlmServiceDeleteHandler(BaseHandler):
     """POST /config/llm_services/{index}/delete.json"""
 
     async def post(self, index_str: str) -> None:
+        self._assert_admin()
         index = _validate_index(index_str)
         setting = _get_setting()
         service = setting.llm_services[index]
@@ -280,6 +246,7 @@ class LlmServiceSetDefaultHandler(BaseHandler):
     """POST /config/llm_services/{index}/set_default.json"""
 
     async def post(self, index_str: str) -> None:
+        self._assert_admin()
         index = _validate_index(index_str)
         setting = _get_setting()
         service = setting.llm_services[index]
@@ -301,6 +268,7 @@ class LlmServiceTestHandler(BaseHandler):
     """POST /config/llm_services/test.json"""
 
     async def post(self) -> None:
+        self._assert_admin()
         request = self.parse_request(TestLlmServiceRequest)
 
         assertUtil.assertTrue(
@@ -341,6 +309,9 @@ class LlmServiceTestHandler(BaseHandler):
                 provider_params=request.provider_params or {},
             )
 
+        # 已保存与临时配置走同一 SSRF 校验，避免旧配置绕过测试接口。
+        _assert_safe_llm_url(config.base_url)
+
         # 执行可用性测试
         try:
             result = await _test_llm_service(config)
@@ -362,30 +333,59 @@ class LlmServiceTestHandler(BaseHandler):
 
 
 async def _test_llm_service(config: LlmServiceConfig) -> dict:
-    """向目标 LLM 服务发送一个最小 Agent 风格请求，验证真实推理链路。"""
-    provider = _TYPE_TO_PROVIDER.get(config.type)
+    """Send a minimal provider probe through the shared SSRF-safe HTTP client.
 
-    request = llmApiUtil.build_agent_probe_request(
-        model=config.model,
-        provider_params=config.provider_params,
-    )
+    The normal LiteLLM path remains unchanged for Agent execution. Configuration
+    testing intentionally uses this small direct request so DNS pinning and manual
+    redirect validation cannot be bypassed inside a third-party HTTP stack.
+    """
+    base_url = config.base_url.rstrip("/")
+    headers = {str(k): str(v) for k, v in (config.extra_headers or {}).items()}
+    timeout = 30.0
+
+    if config.type == LlmServiceType.ANTHROPIC:
+        endpoint = base_url if base_url.endswith("/messages") else f"{base_url}/messages"
+        headers.update({
+            "x-api-key": config.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        })
+        payload = {
+            "model": config.model, "max_tokens": 8,
+            "messages": [{"role": "user", "content": "Reply OK"}],
+        }
+    elif config.type == LlmServiceType.GOOGLE:
+        from urllib.parse import quote
+        model = quote(config.model, safe="")
+        root = base_url[:-3] if base_url.endswith("/v1") else base_url
+        endpoint = f"{root}/v1beta/models/{model}:generateContent?key={quote(config.api_key, safe='')}"
+        headers.setdefault("content-type", "application/json")
+        payload = {"contents": [{"parts": [{"text": "Reply OK"}]}], "generationConfig": {"maxOutputTokens": 8}}
+    else:
+        endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        headers.update({
+            "Authorization": f"Bearer {config.api_key}",
+            "content-type": "application/json",
+        })
+        payload = {
+            "model": config.model, "messages": [{"role": "user", "content": "Reply OK"}],
+            "max_tokens": 8, "stream": False,
+        }
 
     start_time = time.monotonic()
-    response = await llmApiUtil.send_request_stream(
-        request,
-        config.base_url,
-        config.api_key,
-        custom_llm_provider=provider,
-        extra_headers=config.extra_headers,
+    response = await safeHttpUtil.request(
+        "POST", endpoint, headers=headers, json_body=payload, timeout=timeout,
+        field_name="base_url",
     )
     duration_ms = int((time.monotonic() - start_time) * 1000)
-
+    if response.status < 200 or response.status >= 300:
+        raise RuntimeError(f"upstream returned HTTP {response.status}")
+    data = response.json() if response.body else {}
     return {
         "model": config.model,
-        "response_text": response.choices[0].message.content if response.choices else "",
         "duration_ms": duration_ms,
-        "usage": response.usage.model_dump() if response.usage else None,
-        "test_mode": "agent_probe_stream_with_tools",
+        "usage": data.get("usage") or data.get("usageMetadata"),
+        "test_mode": "ssrf_safe_provider_probe",
     }
 
 
@@ -396,7 +396,8 @@ class LanguageHandler(BaseHandler):
     """POST /config/language.json — 设置界面语言偏好。"""
 
     async def post(self) -> None:
-        body = json.loads(self.request.body)
+        self._assert_admin()
+        body = self.parse_request_dict()
         lang = body.get("language", "")
         assertUtil.assertTrue(
             lang in _SUPPORTED_LANGUAGES,
@@ -430,6 +431,7 @@ class SkillImportHandler(BaseHandler):
     """POST /config/skills/import.json — 上传 zip 导入 Skill。"""
 
     async def post(self) -> None:
+        self._assert_admin()
         from pydantic import ValidationError
         from service import skillImportService
 
@@ -463,6 +465,7 @@ class SkillDeleteHandler(BaseHandler):
     """POST /config/skills/{name}/delete.json — 删除用户导入的 Skill。"""
 
     async def post(self, name: str) -> None:
+        self._assert_admin()
         from service import skillImportService
 
         try:
@@ -535,7 +538,12 @@ class GhostConfigHandler(BaseHandler):
         })
 
     async def post(self) -> None:
+        self._assert_admin()
         body = self.parse_request_dict()
+        if "api_url" in body:
+            api_url = str(body["api_url"]).strip()
+            if api_url:
+                _assert_safe_service_url(api_url, field_name="Ghost API URL")
 
         # 空 key 表示保留；只有显式 clear_* 才清空保存值。
         configUtil.update_setting(lambda setting: _apply_ghost_config_patch(setting.ghost, body))
@@ -551,6 +559,7 @@ class GhostTestHandler(BaseHandler):
     """POST /config/ghost/test.json — 测试 Ghost CMS 连接。"""
 
     async def post(self) -> None:
+        self._assert_admin()
         body = self.parse_request_dict()
         api_url = body.get("api_url", "").strip()
         admin_api_key = body.get("admin_api_key", "").strip()
@@ -561,6 +570,6 @@ class GhostTestHandler(BaseHandler):
             api_url = api_url or ghost.api_url
             admin_api_key = admin_api_key or ghost.admin_api_key
 
-        from service import ghostService
+        _assert_safe_service_url(api_url, field_name="Ghost API URL")
         result = await ghostService.test_ghost_connection(api_url, admin_api_key)
         self.return_json(result)

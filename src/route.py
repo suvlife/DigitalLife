@@ -46,6 +46,16 @@ class _SPAHandler(tornado.web.StaticFileHandler):
             self.clear_header("Last-Modified")
 
 
+class _V2CompatibilityRedirectHandler(tornado.web.RequestHandler):
+    """兼容旧 /v2 链接，永久跳转到默认 V2 根路径。"""
+
+    def get(self, path: str = "") -> None:
+        target = "/" + path.lstrip("/")
+        if self.request.query:
+            target += "?" + self.request.query
+        self.redirect(target, permanent=True)
+
+
 tornado_settings = {
     'debug': False,
     'compress_response': True,
@@ -169,8 +179,9 @@ application = tornado.web.Application([
     (r"/files/download.json",                        fileController.FileDownloadHandler),
     (r"/files/preview.json",                         fileController.FilePreviewHandler),
 
-    # 双前端静态文件（必须放最后；/v2 在旧版通配 fallback 之前）
-    (r"/v2/?(.*)", _SPAHandler, {"path": _FRONTEND_V2_DIST, "default_filename": "index.html"}),
-    (r"/(.*)", _SPAHandler, {"path": _FRONTEND_DIST, "default_filename": "index.html"}),
+    # 双前端静态文件（必须放最后）：V2 为默认入口，经典版固定在 /v1。
+    (r"/v2/?(.*)", _V2CompatibilityRedirectHandler),
+    (r"/v1/?(.*)", _SPAHandler, {"path": _FRONTEND_DIST, "default_filename": "index.html"}),
+    (r"/(.*)", _SPAHandler, {"path": _FRONTEND_V2_DIST, "default_filename": "index.html"}),
 
 ], **tornado_settings)  # type: ignore [arg-type]

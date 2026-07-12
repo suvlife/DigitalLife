@@ -1,5 +1,5 @@
 # DigitalLife multi-stage image.
-# Both the legacy console (/) and the immersive V2 UI (/v2/) are built here.
+# Both web apps are built here: V2 is served at / and the classic console at /v1/.
 
 FROM ubuntu:24.04 AS frontend-builder
 
@@ -24,7 +24,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="DigitalLife Team"
 LABEL description="DigitalLife multi-agent collaboration platform"
-ARG APP_VERSION=0.6.0
+ARG APP_VERSION=0.6.1
 LABEL version=${APP_VERSION}
 
 ENV PYTHONUNBUFFERED=1 \

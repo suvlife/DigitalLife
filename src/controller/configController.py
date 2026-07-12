@@ -60,6 +60,7 @@ class LlmServiceFromProviderHandler(BaseHandler):
     """POST /config/llm_services/from_provider.json — 根据厂商预设创建服务"""
 
     async def post(self) -> None:
+        self._assert_admin()
         from util.configTypes import LlmServiceConfig
         from pydantic import ValidationError
 

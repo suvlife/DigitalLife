@@ -56,6 +56,15 @@ async def get_current_run(team_id: int, owner_user_id: int | None = None) -> GtT
     return await latest_query.order_by(GtTaskRun.id.desc()).aio_first()
 
 
+async def list_active_runs_for_team(team_id: int) -> list[GtTaskRun]:
+    """返回团队全部活动 Run，不用“最新一条”掩盖并发歧义。"""
+    query = GtTaskRun.select().where(
+        GtTaskRun.team_id == team_id,
+        GtTaskRun.status.in_(_ACTIVE_STATUSES),  # type: ignore[attr-defined]
+    )
+    return list(await query.order_by(GtTaskRun.id).aio_execute())
+
+
 async def get_latest_run_for_room(room_id: int, *, include_terminal: bool = False) -> GtTaskRun | None:
     query = GtTaskRun.select().where(GtTaskRun.root_room_id == room_id)
     if not include_terminal:

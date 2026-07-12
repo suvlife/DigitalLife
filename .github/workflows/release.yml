@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v-prefixed tag to build (for example v0.6.1)
+        required: true
+        type: string
 
 jobs:
   build-macos:
@@ -21,6 +26,7 @@ jobs:
 
     env:
       TARGET_ARCH: ${{ matrix.arch }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
       # Apple 证书（用于签名）
       APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -33,6 +39,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
       with:
+        ref: ${{ env.RELEASE_TAG }}
         submodules: recursive
         lfs: true
 
@@ -125,6 +132,12 @@ jobs:
       with:
         node-version: '20'
 
+    - name: Verify tag matches repository version
+      run: |
+        VERSION=$(cat VERSION)
+        test "${RELEASE_TAG}" = "v${VERSION}"
+        python scripts/check_version_consistency.py
+
     - name: Cache pip dependencies
       if: matrix.arch == 'arm64'
       uses: actions/cache@v5
@@ -211,29 +224,70 @@ jobs:
           TARGET_ARCH=${{ matrix.arch }} $PYTHON scripts/build_mac.py
         fi
 
-    - name: Get zip path
+    - name: Package and verify release assets
+      shell: bash
       run: |
-        ZIP_PATH=$(ls dist/*.zip 2>/dev/null | head -1 || true)
-        if [ -z "$ZIP_PATH" ]; then
-          APP_PATH=$(ls -d dist/DigitalLife-*.app | head -1)
-          VERSION="${GITHUB_REF_NAME#v}"
-          ZIP_PATH="dist/digitallife-${VERSION}-macos-${{ matrix.arch }}.zip"
-          PACKAGE_DIR="dist/digitallife-${VERSION}-macos-${{ matrix.arch }}"
-          mkdir -p "$PACKAGE_DIR"
-          ditto "$APP_PATH" "$PACKAGE_DIR/DigitalLife.app"
-          cp scripts/macos-installer/安装数字人生.command scripts/macos-installer/README.txt "$PACKAGE_DIR/"
-          ditto -c -k --keepParent "$PACKAGE_DIR" "$ZIP_PATH"
-        fi
-        test -s "$ZIP_PATH"
-        echo "ZIP_PATH=$ZIP_PATH" >> $GITHUB_ENV
+        set -euo pipefail
+        VERSION="${RELEASE_TAG#v}"
+        ASSET_NAME="digitallife-${VERSION}-macos-${{ matrix.arch }}.zip"
+        ZIP_PATH="dist/${ASSET_NAME}"
+        PACKAGE_DIR="dist/digitallife-${VERSION}-macos-${{ matrix.arch }}"
 
-    - name: Create GitHub Release
+        # Always create the final named archive here.  The checksum is generated
+        # only after this archive is final, so a stale sidecar cannot survive.
+        rm -rf "$PACKAGE_DIR" "$ZIP_PATH" "${ZIP_PATH}.sha256"
+        APP_PATH=$(find dist -maxdepth 1 -type d \( -name 'DigitalLife-*.app' -o -name 'DigitalLife.app' \) | head -1)
+        test -n "$APP_PATH"
+        mkdir -p "$PACKAGE_DIR"
+        ditto "$APP_PATH" "$PACKAGE_DIR/DigitalLife.app"
+        cp scripts/macos-installer/安装数字人生.command scripts/macos-installer/README.txt "$PACKAGE_DIR/"
+        ditto -c -k --keepParent "$PACKAGE_DIR" "$ZIP_PATH"
+        test -s "$ZIP_PATH"
+
+        VERIFY_DIR=$(mktemp -d)
+        trap 'rm -rf "$VERIFY_DIR"' EXIT
+        ditto -x -k "$ZIP_PATH" "$VERIFY_DIR"
+        EXTRACTED_APP=$(find "$VERIFY_DIR" -type d -name DigitalLife.app -print -quit)
+        test -n "$EXTRACTED_APP"
+        codesign --verify --deep --strict --verbose=2 "$EXTRACTED_APP"
+        test -x "$(find "$VERIFY_DIR" -name '安装数字人生.command' -print -quit)"
+        if [ -n "$APPLE_CERTIFICATE_P12" ]; then
+          # Developer-ID builds must also carry a valid notarization ticket and
+          # pass Gatekeeper before any release asset is uploaded.
+          xcrun stapler validate "$EXTRACTED_APP"
+          spctl --assess --type execute --verbose=2 "$EXTRACTED_APP"
+        fi
+
+        (cd dist && shasum -a 256 "$ASSET_NAME" > "${ASSET_NAME}.sha256")
+        (cd dist && shasum -a 256 -c "${ASSET_NAME}.sha256")
+        echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
+        echo "SHA_PATH=${ZIP_PATH}.sha256" >> "$GITHUB_ENV"
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+
+    - name: Refuse to overwrite existing release assets
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        existing=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+        if printf '%s\n' "$existing" | grep -Fxq "$ASSET_NAME" || \
+           printf '%s\n' "$existing" | grep -Fxq "${ASSET_NAME}.sha256"; then
+          echo "Release assets already exist for $RELEASE_TAG; refusing a partial or inconsistent overwrite." >&2
+          exit 1
+        fi
+
+    - name: Create GitHub Release with paired assets
       uses: softprops/action-gh-release@v3
       with:
-        name: "digitallife ${{ github.ref_name }}"
-        tag_name: ${{ github.ref_name }}
+        name: "digitallife ${{ env.RELEASE_TAG }}"
+        tag_name: ${{ env.RELEASE_TAG }}
         draft: false
         prerelease: false
-        files: ${{ env.ZIP_PATH }}
+        fail_on_unmatched_files: true
+        overwrite_files: false
+        files: |
+          ${{ env.ZIP_PATH }}
+          ${{ env.SHA_PATH }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

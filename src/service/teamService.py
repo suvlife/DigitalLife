@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 
-from dal.db import gtTeamManager, gtAgentManager, gtScheculeTaskManager, gtAgentHistoryManager, gtRoomMessageManager, gtRoomManager, gtAgentTaskManager, gtAgentActivityManager, atomic_transaction
+from dal.db import gtTeamManager, gtAgentManager, gtScheculeTaskManager, gtAgentHistoryManager, gtRoomMessageManager, gtRoomManager, gtAgentTaskManager, gtAgentActivityManager, gtTaskRunManager, gtRoomRunManager, gtBlogPublicationManager, atomic_transaction
 from exception import TogoException
 from model.dbModel.gtAgent import GtAgent
 from model.dbModel.gtDept import GtDept
 from model.dbModel.gtRoom import GtRoom
 from model.dbModel.gtTeam import GtTeam
 from service import deptService, roomService, schedulerService, agentService
-from util import assertUtil, fileUtil
+from util import assertUtil, configUtil, fileUtil
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +227,10 @@ async def clear_team_data(team_id: int) -> dict[str, int]:
         histories_deleted = await gtAgentHistoryManager.delete_history_by_team(team_id)
         messages_deleted = await gtRoomMessageManager.delete_messages_by_team(team_id)
         activities_deleted = await gtAgentActivityManager.delete_activities_by_team(team_id)
+        # Run/RoomRun/Ghost outbox 属于运行数据，必须与消息一起清理。
+        room_runs_deleted = await gtRoomRunManager.delete_room_runs_by_team(team_id)
+        runs_deleted = await gtTaskRunManager.delete_runs_by_team(team_id)
+        publications_deleted = await gtBlogPublicationManager.delete_publications_by_team(team_id)
 
         # 3. 删除所有非 DEPT 房间（保留部门树管理的房间）
         all_rooms = await gtRoomManager.get_rooms_by_team(team_id)
@@ -244,6 +248,9 @@ async def clear_team_data(team_id: int) -> dict[str, int]:
         "messages": messages_deleted,
         "rooms": rooms_deleted,
         "activities": activities_deleted,
+        "runs": runs_deleted,
+        "room_runs": room_runs_deleted,
+        "publications": publications_deleted,
     }
 
     logger.info(f"Team ID={team_id} 数据已清空: {result}")

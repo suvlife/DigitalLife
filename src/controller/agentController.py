@@ -55,6 +55,7 @@ class AgentListHandler(BaseHandler):
             return
 
         team_id = int(team_id_raw)
+        await self._assert_team_readable(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 

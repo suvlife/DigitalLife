@@ -8,6 +8,7 @@ from dal.db import gtTeamManager, gtAgentManager, gtRoleTemplateManager
 from model.dbModel.gtTeam import GtTeam
 from model.dbModel.gtAgent import GtAgent
 from model.dbModel.gtRoleTemplate import GtRoleTemplate
+from model.dbModel.gtDept import GtDept
 from service import ormService, presetService, exportService
 from exception import TogoException
 from constants import DriverType
@@ -244,8 +245,10 @@ class TestDeptTreeValidation(ServiceTestCase):
         self._run_on_class_loop(self._async_teardown())
 
     async def _async_setup(self):
-        await GtTeam.delete().aio_execute()
+        # 外键启用后必须先清理子表，再删除 Team。
+        await GtDept.delete().aio_execute()
         await GtAgent.delete().aio_execute()
+        await GtTeam.delete().aio_execute()
         await GtRoleTemplate.delete().aio_execute()
         template = await gtRoleTemplateManager.save_role_template(
             GtRoleTemplate(name="dummy")
@@ -253,6 +256,7 @@ class TestDeptTreeValidation(ServiceTestCase):
         assert template is not None
 
     async def _async_teardown(self):
+        await GtDept.delete().aio_execute()
         await GtAgent.delete().aio_execute()
         await GtTeam.delete().aio_execute()
         await GtRoleTemplate.delete().aio_execute()

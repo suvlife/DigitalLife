@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { downloadFileUrl, previewFile, type FilePreviewInfo } from '../../api';
+import { downloadFile, filePreviewObjectUrl, previewFile, type FilePreviewInfo } from '../../api';
 import type { ParsedFileInfo } from '../../utils/fileTokens';
 
 const props = defineProps<{
   file: ParsedFileInfo;
+  teamId: number;
 }>();
 
 const { t } = useI18n();
@@ -14,6 +15,8 @@ const previewOpen = ref(false);
 const previewLoading = ref(false);
 const previewInfo = ref<FilePreviewInfo | null>(null);
 const previewError = ref('');
+const downloadError = ref('');
+const previewObjectUrl = ref('');
 
 const fileExtension = computed(() => {
   const dotIndex = props.file.fileName.lastIndexOf('.');
@@ -60,11 +63,14 @@ const formattedSize = computed(() => {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 });
 
-function handleDownload(): void {
-  if (!props.file.path) {
-    return;
+async function handleDownload(): Promise<void> {
+  if (!props.file.path) return;
+  downloadError.value = '';
+  try {
+    await downloadFile(props.file.path, props.teamId);
+  } catch (error) {
+    downloadError.value = error instanceof Error ? error.message : t('chat.filePreviewFailed');
   }
-  window.open(downloadFileUrl(props.file.path), '_blank');
 }
 
 async function handlePreview(): Promise<void> {
@@ -82,7 +88,11 @@ async function handlePreview(): Promise<void> {
   previewInfo.value = null;
 
   try {
-    previewInfo.value = await previewFile(props.file.path);
+    previewInfo.value = await previewFile(props.file.path, props.teamId);
+    if ((previewInfo.value.preview_type === 'image' || previewInfo.value.preview_type === 'pdf') && previewInfo.value.url) {
+      previewObjectUrl.value = await filePreviewObjectUrl(props.file.path, props.teamId);
+      previewInfo.value.url = previewObjectUrl.value;
+    }
   } catch (error) {
     previewError.value = t('chat.filePreviewFailed');
     console.error('File preview failed', error);
@@ -92,6 +102,8 @@ async function handlePreview(): Promise<void> {
 }
 
 function closePreview(): void {
+  if (previewObjectUrl.value) URL.revokeObjectURL(previewObjectUrl.value);
+  previewObjectUrl.value = '';
   previewOpen.value = false;
   previewError.value = '';
   previewInfo.value = null;
@@ -129,6 +141,7 @@ const previewType = computed(() => previewInfo.value?.preview_type ?? 'unsupport
         </button>
       </div>
     </div>
+    <div v-if="downloadError" class="file-preview-error" role="alert">{{ downloadError }}</div>
 
     <Teleport to="body">
       <div v-if="previewOpen" class="file-preview-modal" @click.self="closePreview">

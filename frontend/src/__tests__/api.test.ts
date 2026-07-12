@@ -262,3 +262,26 @@ describe('getTeamTasks', () => {
     expect(result[0]?.priority).toBe('HIGH');
   });
 });
+
+describe('authenticated file downloads', () => {
+  it('uses bearer and cookie credentials for blob downloads', async () => {
+    const { downloadFile } = await import('../api');
+    setToken('download-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['data']), { status: 200, headers: { 'Content-Disposition': "attachment; filename*=UTF-8''report.pdf" } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:v1'), revokeObjectURL: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await downloadFile('outputs/report.pdf', 4);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.credentials).toBe('include');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer download-token');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:v1');
+  });
+
+  it('opens the token dialog and exposes a useful 401 error', async () => {
+    const { downloadFile } = await import('../api');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error_desc: '登录后才能下载' }), { status: 401, headers: { 'Content-Type': 'application/json' } })));
+    await expect(downloadFile('outputs/report.pdf', 4)).rejects.toThrow('登录后才能下载');
+    expect(showTokenDialog.value).toBe(true);
+  });
+});

@@ -13,20 +13,28 @@ import datetime
 import hashlib
 import hmac
 import html
+import ipaddress
 import json
 import logging
+import os
 import re
+import socket
 import time
+import uuid
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
+
+from util import safeHttpUtil
 
 logger = logging.getLogger(__name__)
 _GHOST_API_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _RETRY_DELAYS_SECONDS = (10, 30, 120, 300, 900, 3600)
 _worker_task: asyncio.Task[None] | None = None
 _worker_wakeup: asyncio.Event | None = None
+_worker_token = uuid.uuid4().hex
+_GHOST_LEASE_SECONDS = 120
 
 
 def _generate_ghost_jwt(admin_api_key: str) -> str:
@@ -55,12 +63,14 @@ def _generate_ghost_jwt(admin_api_key: str) -> str:
     return f"{header_b64}.{payload_b64}.{_b64(signature)}"
 
 
+def assert_safe_http_url(url: str, *, field_name: str = "URL") -> None:
+    """Validate a configured upstream using the shared pinned-DNS policy."""
+    safeHttpUtil.assert_safe_http_url(url, field_name=field_name)
+
+
 def _safe_ghost_base_url(api_url: str) -> str:
+    assert_safe_http_url(api_url, field_name="Ghost API URL")
     parsed = urlparse(api_url.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Ghost API URL must be an absolute http(s) URL")
-    if parsed.username or parsed.password:
-        raise ValueError("Ghost API URL must not contain credentials")
     # Keep an explicitly configured subpath, but strip Admin API suffixes.
     path = parsed.path.rstrip("/")
     marker = "/ghost/api/admin"
@@ -250,8 +260,14 @@ async def publish_post(
     api_url: str,
     admin_api_key: str,
     status: str = "published",
+    slug: str | None = None,
 ) -> dict[str, Any]:
-    """Publish complete Markdown via Ghost Admin API ``source=html``."""
+    """Create or converge one Ghost post using a stable slug.
+
+    A retry first looks up ``slug``. If a previous POST reached Ghost but its
+    response was lost, the existing post is updated instead of creating a
+    duplicate. Ghost requires ``updated_at`` for optimistic update locking.
+    """
     if not api_url or not admin_api_key:
         return {"success": False, "message": "Ghost API URL 或 Admin Key 未配置", "retryable": False}
     if status not in {"published", "draft"}:
@@ -262,42 +278,93 @@ async def publish_post(
     except ValueError as exc:
         return {"success": False, "message": str(exc), "retryable": False}
 
-    endpoint = f"{base_url}/ghost/api/admin/posts/?source=html"
-    body = {"posts": [{
-        "title": title,
-        "html": markdown_to_safe_html(content),
-        "tags": [{"name": tag} for tag in (tags or _extract_tags_from_content(title, content))],
-        "status": status,
-    }]}
     headers = {
         "Authorization": f"Ghost {jwt_token}",
         "Accept-Version": "v5.0",
         "Content-Type": "application/json",
     }
+    post_body: dict[str, Any] = {
+        "title": title,
+        "html": markdown_to_safe_html(content),
+        "tags": [{"name": tag} for tag in (tags or _extract_tags_from_content(title, content))],
+        "status": status,
+    }
+    if slug:
+        post_body["slug"] = slug
+
     try:
-        async with aiohttp.ClientSession(timeout=_GHOST_API_TIMEOUT) as session:
-            async with session.post(endpoint, json=body, headers=headers) as response:
-                response_text = await response.text()
-                if response.status in {200, 201}:
-                    data = json.loads(response_text) if response_text else {}
-                    post = (data.get("posts") or [{}])[0]
-                    return {
-                        "success": True,
-                        "message": "发布成功",
-                        "post_url": post.get("url"),
-                        "post_id": post.get("id"),
-                        "retryable": False,
-                    }
-                retryable = response.status == 429 or response.status >= 500
-                logger.warning("Ghost publish failed: status=%s", response.status)
+        existing: dict[str, Any] | None = None
+        if slug:
+            query = urlencode({"filter": f"slug:{slug}", "limit": "1", "formats": "html"})
+            lookup_endpoint = f"{base_url}/ghost/api/admin/posts/?{query}"
+            response = await safeHttpUtil.request(
+                "GET", lookup_endpoint, headers=headers, timeout=_GHOST_API_TIMEOUT,
+                field_name="Ghost API URL",
+            )
+            text = response.text
+            if response.status == 200:
+                data = json.loads(text) if text else {}
+                posts = data.get("posts") or []
+                existing = posts[0] if posts else None
+            elif response.status == 429 or response.status >= 500:
                 return {
                     "success": False,
-                    "message": f"Ghost API 返回 HTTP {response.status}: {response_text[:500]}",
-                    "retryable": retryable,
+                    "message": f"Ghost 对账查询返回 HTTP {response.status}: {text[:500]}",
+                    "retryable": True,
                 }
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            else:
+                return {
+                    "success": False,
+                    "message": f"Ghost 对账查询返回 HTTP {response.status}: {text[:500]}",
+                    "retryable": False,
+                }
+
+        if existing is not None:
+            post_id = existing.get("id")
+            updated_at = existing.get("updated_at")
+            if not post_id or not updated_at:
+                return {"success": False, "message": "Ghost 对账结果缺少 id/updated_at", "retryable": True}
+            update_body = dict(post_body)
+            update_body["updated_at"] = updated_at
+            endpoint = f"{base_url}/ghost/api/admin/posts/{post_id}/?source=html"
+            method = "PUT"
+            payload = {"posts": [update_body]}
+        else:
+            endpoint = f"{base_url}/ghost/api/admin/posts/?source=html"
+            method = "POST"
+            payload = {"posts": [post_body]}
+
+        response = await safeHttpUtil.request(
+            method, endpoint, headers=headers, json_body=payload, timeout=_GHOST_API_TIMEOUT,
+            field_name="Ghost API URL",
+        )
+        response_text = response.text
+        if response.status in {200, 201}:
+            data = json.loads(response_text) if response_text else {}
+            post = (data.get("posts") or [{}])[0]
+            return {
+                "success": True,
+                "message": "发布成功",
+                "post_url": post.get("url") or (existing or {}).get("url"),
+                "post_id": post.get("id") or (existing or {}).get("id"),
+                "retryable": False,
+            }
+        retryable = response.status in {409, 429} or response.status >= 500
+        logger.warning("Ghost publish failed: status=%s", response.status)
+        return {
+            "success": False,
+            "message": f"Ghost API 返回 HTTP {response.status}: {response_text[:500]}",
+            "retryable": retryable,
+        }
+    except (aiohttp.ClientError, asyncio.TimeoutError, safeHttpUtil.UnsafeUrlError) as exc:
         logger.warning("Ghost publish transport error: %s", type(exc).__name__)
         return {"success": False, "message": f"发布请求异常: {type(exc).__name__}", "retryable": True}
+
+
+def _stable_ghost_slug(publication_key: str) -> str:
+    """Return a deterministic, Ghost-safe remote idempotency identifier."""
+    digest = hashlib.sha256(publication_key.encode("utf-8")).hexdigest()[:24]
+    return f"digitallife-{digest}"
 
 
 async def enqueue_final_conclusion(
@@ -333,6 +400,7 @@ async def enqueue_final_conclusion(
         markdown_content=markdown_content,
         content_hash=content_hash,
         tags=_extract_tags_from_content(title, markdown_content),
+        ghost_slug=_stable_ghost_slug(key),
         team_id=team_id,
         room_id=room_id,
         run_id=run_id,
@@ -378,6 +446,15 @@ async def _process_publication(row: Any) -> None:
     from dal.db import gtBlogPublicationManager
     from util import configUtil
 
+    claim_token = str(getattr(row, "worker_token", "") or "")
+    if not claim_token:
+        logger.error("Refusing to process Ghost publication %s without a claim token", row.id)
+        return
+    slug = getattr(row, "ghost_slug", None) or _stable_ghost_slug(row.publication_key)
+    if not getattr(row, "ghost_slug", None):
+        await gtBlogPublicationManager.ensure_ghost_slug(row.id, slug)
+        row.ghost_slug = slug
+
     ghost = configUtil.get_app_config().setting.ghost
     result = await publish_post(
         row.title,
@@ -386,13 +463,22 @@ async def _process_publication(row: Any) -> None:
         api_url=ghost.api_url,
         admin_api_key=ghost.admin_api_key,
         status=ghost.publish_status,
+        slug=slug,
     )
     if result.get("success"):
         post_id = result.get("post_id")
         post_url = result.get("post_url")
-        await gtBlogPublicationManager.mark_published(
-            row.id, ghost_post_id=post_id, post_url=post_url
+        persisted = await gtBlogPublicationManager.mark_published(
+            row.id,
+            worker_token=claim_token,
+            ghost_post_id=post_id,
+            post_url=post_url,
         )
+        # Losing the lease is not a remote failure. The current owner (or the
+        # next retry) will reconcile by slug and converge without another POST.
+        if not persisted:
+            logger.warning("Ghost post succeeded but publication claim was lost: row=%s", row.id)
+            return
         if getattr(row, "run_id", None) is not None:
             try:
                 from service import runService
@@ -407,12 +493,16 @@ async def _process_publication(row: Any) -> None:
     terminal = not bool(result.get("retryable")) or row.attempt_count >= max_attempts
     delay_index = min(max(row.attempt_count - 1, 0), len(_RETRY_DELAYS_SECONDS) - 1)
     error_message = str(result.get("message", "Ghost publish failed"))
-    await gtBlogPublicationManager.mark_retry(
+    persisted = await gtBlogPublicationManager.mark_retry(
         row.id,
+        worker_token=claim_token,
         error=error_message,
         next_retry_at=datetime.datetime.now() + datetime.timedelta(seconds=_RETRY_DELAYS_SECONDS[delay_index]),
         terminal=terminal,
     )
+    if not persisted:
+        logger.warning("Ghost retry result ignored after claim loss: row=%s", row.id)
+        return
     if getattr(row, "run_id", None) is not None:
         try:
             from service import runService
@@ -425,9 +515,14 @@ async def _process_publication(row: Any) -> None:
             logger.exception("Failed to update TaskRun blog publication failure status")
 
 
-async def process_pending_once(limit: int = 10) -> int:
+async def process_pending_once(
+    limit: int = 10, *, worker_token: str | None = None, lease_seconds: int = _GHOST_LEASE_SECONDS
+) -> int:
     from dal.db import gtBlogPublicationManager
-    rows = await gtBlogPublicationManager.claim_due(limit=limit)
+    token = worker_token or _worker_token
+    rows = await gtBlogPublicationManager.claim_due(
+        worker_token=token, limit=limit, lease_seconds=lease_seconds
+    )
     for row in rows:
         await _process_publication(row)
     return len(rows)
@@ -453,10 +548,12 @@ async def _worker_loop() -> None:
 
 
 async def startup() -> None:
-    global _worker_task, _worker_wakeup
+    global _worker_task, _worker_wakeup, _worker_token
     if _worker_task is not None and not _worker_task.done():
         return
     from dal.db import gtBlogPublicationManager
+    # Refresh after process start so pre-fork servers cannot share a token.
+    _worker_token = f"{os.getpid()}-{uuid.uuid4().hex}"
     await gtBlogPublicationManager.recover_interrupted()
     _worker_wakeup = asyncio.Event()
     _worker_task = asyncio.create_task(_worker_loop(), name="ghost-publication-worker")
@@ -487,12 +584,14 @@ async def test_ghost_connection(api_url: str, admin_api_key: str) -> dict[str, A
     endpoint = f"{base_url}/ghost/api/admin/site/"
     headers = {"Authorization": f"Ghost {token}", "Accept-Version": "v5.0"}
     try:
-        async with aiohttp.ClientSession(timeout=_GHOST_API_TIMEOUT) as session:
-            async with session.get(endpoint, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    site = data.get("site", {})
-                    return {"success": True, "message": "连接成功", "site_title": site.get("title", "")}
-                return {"success": False, "message": f"连接失败：HTTP {response.status}"}
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        response = await safeHttpUtil.request(
+            "GET", endpoint, headers=headers, timeout=_GHOST_API_TIMEOUT,
+            field_name="Ghost API URL",
+        )
+        if response.status == 200:
+            data = response.json()
+            site = data.get("site", {})
+            return {"success": True, "message": "连接成功", "site_title": site.get("title", "")}
+        return {"success": False, "message": f"连接失败：HTTP {response.status}"}
+    except (aiohttp.ClientError, asyncio.TimeoutError, safeHttpUtil.UnsafeUrlError) as exc:
         return {"success": False, "message": f"连接异常：{type(exc).__name__}"}

@@ -26,6 +26,7 @@ const props = defineProps<{
   errorMessage: string;
   reloadingMessages: boolean;
   teamEnabled: boolean;
+  teamId?: number;
 }>();
 
 const emit = defineEmits<{
@@ -254,6 +255,7 @@ onBeforeUnmount(() => {
       :draft="draft"
       :composer-notice="composerNotice"
       :escalating-message-ids="escalatingMessageIds"
+      :team-id="teamId || 0"
       @update-draft="draft = $event"
       @submit="handleSubmit"
       @click-agent="emit('clickAgent', $event)"

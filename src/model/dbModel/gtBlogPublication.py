@@ -26,7 +26,10 @@ class GtBlogPublication(DbModelBase):
     status: str = peewee.CharField(default="PENDING")
     attempt_count: int = peewee.IntegerField(default=0)
     next_retry_at: datetime.datetime | None = peewee.DateTimeField(null=True)
+    ghost_slug: str | None = peewee.CharField(null=True, index=True)
     ghost_post_id: str | None = peewee.CharField(null=True)
+    worker_token: str | None = peewee.CharField(null=True, index=True)
+    lease_expires_at: datetime.datetime | None = peewee.DateTimeField(null=True, index=True)
     post_url: str | None = peewee.TextField(null=True)
     last_error: str = peewee.TextField(default="")
 

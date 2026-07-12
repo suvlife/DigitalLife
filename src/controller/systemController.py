@@ -28,10 +28,11 @@ class SystemStatusHandler(BaseHandler):
             "initialized": initialized,
             "language": configUtil.get_language(),
             "version": __version__,
+            # 客户端必须知道是否需要认证，布尔值本身不属于敏感信息。
+            "auth_enabled": setting.auth.enabled,
         }
         if is_authed or not setting.auth.enabled:
             # 已鉴权或鉴权未启用时返回完整状态
-            response["auth_enabled"] = setting.auth.enabled
             response["schedule_state"] = schedule_state
             response["not_running_reason"] = not_running_reason
             response["demo_mode"] = demo_mode.enabled
@@ -52,6 +53,7 @@ class SystemScheduleResumeHandler(BaseHandler):
     """POST /system/schedule/resume.json — 尝试恢复调度。"""
 
     async def post(self):
+        self._assert_admin()
         await schedulerService.start_schedule()
         schedule_state = schedulerService.get_schedule_state()
         not_running_reason = schedulerService.get_schedule_not_running_reason()
@@ -70,6 +72,7 @@ class SystemDatabaseBackupHandler(BaseHandler):
     """POST /system/database/backup.json — 备份当前数据库文件。"""
 
     async def post(self):
+        self._assert_admin()
         # backup_database 执行同步 sqlite3.backup，会阻塞事件循环，
         # 丢到线程池执行以避免冻结所有并发请求与调度。
         backup_path = await asyncio.to_thread(ormService.backup_database)
@@ -92,8 +95,8 @@ class UpdateConfigHandler(BaseHandler):
     """POST /system/update_config.json — 修改自动检查更新等设置。"""
 
     async def post(self):
-        import json
-        body = json.loads(self.request.body)
+        self._assert_admin()
+        body = self.parse_request_dict()
         auto_check = body.get("auto_check_update")
         if auto_check is not None:
             configUtil.update_setting(lambda s: setattr(s, "auto_check_update", bool(auto_check)))

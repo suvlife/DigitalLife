@@ -125,6 +125,11 @@ class ChatRoom:
         return [aid for aid in self._agent_ids if aid != self.SYSTEM_MEMBER_ID]
 
     def can_post_message(self, sender_id: int) -> bool:
+        # 操作者是跨团队的虚拟成员。群聊是面向用户的研究入口，即使历史
+        # preset 没有把 -1 写入 agent_ids，也必须允许用户从 Web 端向任意
+        # 研究室递交问题；私聊仍要求 OPERATOR 显式存在于成员列表中。
+        if sender_id == self.OPERATOR_MEMBER_ID:
+            return self.room_type == RoomType.GROUP or sender_id in self._agent_ids
         return sender_id in self._agent_ids or sender_id == self.SYSTEM_MEMBER_ID
 
     # ─── 调度 delegation ─────────────────────────────────────
@@ -202,6 +207,11 @@ class ChatRoom:
         )
 
         agent = await gtAgentManager.get_agent_by_id(sender_id)
+        # OPERATOR/SYSTEM 是跨团队虚拟身份，正常启动时由 agentService 创建；
+        # 但用户入口不能因为服务刚启动或历史数据库缺少特殊 Agent 记录而失败。
+        if agent is None and sender_id == self.OPERATOR_MEMBER_ID:
+            agent = GtAgent(id=self.OPERATOR_MEMBER_ID, team_id=-1, name="OPERATOR")
+            agent.i18n = {"display_name": {"zh-CN": "问道之人", "en": "OPERATOR"}}
         assert agent, f"agent_id '{sender_id}' not found"
 
         message = GtRoomMessage(room_id=self.room_id, sender_id=sender_id,

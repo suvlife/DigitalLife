@@ -4,7 +4,6 @@ import logging
 from constants import AgentActivityType
 from controller.baseController import BaseHandler
 from dal.db import gtAgentActivityManager
-from service import agentService
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +12,8 @@ class AgentActivitiesHandler(BaseHandler):
     """GET /agents/{agent_id}/activities.json?exclude=AGENT_STATE&limit=50&before_id=123"""
 
     async def get(self, agent_id: str) -> None:
+        agent_id_int = int(agent_id)
+        await self._assert_agent_owned(agent_id_int)
         exclude_raw = self.get_arguments("exclude")
         exclude_types = [AgentActivityType[name.upper()] for name in exclude_raw]
         limit_raw = self.get_query_argument("limit", "100")
@@ -20,7 +21,7 @@ class AgentActivitiesHandler(BaseHandler):
         limit = max(1, min(int(limit_raw), 100))
         before_id = int(before_id_raw) if before_id_raw is not None else None
         activities, has_more = await gtAgentActivityManager.list_agent_activities_page(
-            int(agent_id),
+            agent_id_int,
             limit=limit,
             before_id=before_id,
             exclude_types=exclude_types or None,
@@ -39,17 +40,36 @@ class TeamActivitiesHandler(BaseHandler):
     """GET /teams/{team_id}/activities.json"""
 
     async def get(self, team_id: str) -> None:
-        activities = await gtAgentActivityManager.list_team_activities(int(team_id))
+        team_id_int = int(team_id)
+        await self._assert_team_owned(team_id_int)
+        activities = await gtAgentActivityManager.list_team_activities(team_id_int)
         self.return_json({"activities": [_serialize_activity(a) for a in activities]})
 
 
 class ActivitiesHandler(BaseHandler):
-    """GET /activities.json?room_id={room_id}"""
+    """GET /activities.json，必须按 room/team/agent 之一限定资源。"""
 
     async def get(self) -> None:
         room_id_str = self.get_argument("room_id", default=None)
+        team_id_str = self.get_argument("team_id", default=None)
+        agent_id_str = self.get_argument("agent_id", default=None)
+        if not any((room_id_str, team_id_str, agent_id_str)):
+            self.set_status(400)
+            self.return_json({"error_code": "resource_required", "error_desc": "必须指定 room_id、team_id 或 agent_id"})
+            return
+
         room_id = int(room_id_str) if room_id_str else None
-        activities = await gtAgentActivityManager.list_activities(room_id=room_id)
+        team_id = int(team_id_str) if team_id_str else None
+        agent_id = int(agent_id_str) if agent_id_str else None
+        if room_id is not None:
+            await self._assert_room_owned(room_id)
+        if team_id is not None:
+            await self._assert_team_owned(team_id)
+        if agent_id is not None:
+            await self._assert_agent_owned(agent_id)
+        activities = await gtAgentActivityManager.list_activities(
+            room_id=room_id, team_id=team_id, agent_id=agent_id
+        )
         self.return_json({"activities": [_serialize_activity(a) for a in activities]})
 
 
@@ -61,17 +81,19 @@ class AgentThinkingTimelineHandler(BaseHandler):
     """
 
     async def get(self, agent_id: str) -> None:
+        agent_id_int = int(agent_id)
+        await self._assert_agent_owned(agent_id_int)
         limit_raw = self.get_query_argument("limit", "100")
         limit = max(1, min(int(limit_raw), 200))
         activities = await gtAgentActivityManager.list_agent_activities(
-            int(agent_id),
+            agent_id_int,
             limit=limit,
             exclude_types=[AgentActivityType.AGENT_STATE],
         )
         # 按时间正序排列，方便时间线展示
         activities.reverse()
         self.return_json({
-            "agent_id": int(agent_id),
+            "agent_id": agent_id_int,
             "timeline": [_serialize_activity(a) for a in activities],
         })
 

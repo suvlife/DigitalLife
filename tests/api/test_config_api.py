@@ -40,9 +40,12 @@ class TestConfigApi(ServiceTestCase):
                 create_data = await resp.json()
                 team_id = create_data["id"]
 
-        # 1. Modify Team
+        # 1. Modify Team. 测试环境的 workspace_root 固定为 repo/test_data/workspace。
+        working_directory = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "../../test_data/workspace", temp_team_name
+        ))
         modify_payload = {
-            "working_directory": "/tmp/modified_temp",
+            "working_directory": working_directory,
             "config": {"note": "modified"}
         }
         async with aiohttp.ClientSession() as client:
@@ -54,7 +57,7 @@ class TestConfigApi(ServiceTestCase):
             # Verify modification
             async with client.get(f"{self.backend_base_url}/teams/{team_id}.json") as resp:
                 detail = await resp.json()
-                assert detail["working_directory"] == "/tmp/modified_temp"
+                assert detail["working_directory"] == working_directory
                 assert detail["config"] == {"note": "modified"}
 
         # 2. Delete Team

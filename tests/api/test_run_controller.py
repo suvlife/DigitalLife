@@ -71,3 +71,78 @@ class TestRunController(ServiceTestCase):
             ):
                 async with session.get(self.backend_base_url + path) as resp:
                     assert resp.status == 200, path
+
+
+class TestRunControllerTenantIsolation(ServiceTestCase):
+    requires_backend = True
+    use_custom_config = True
+
+    async def _register_and_login(self, username: str, password: str, *, admin_cookie: str | None = None):
+        from yarl import URL
+        headers = {"Cookie": f"dl_session={admin_cookie}"} if admin_cookie else {}
+        async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as client:
+            async with client.post(
+                f"{self.backend_base_url}/auth/register.json",
+                json={"username": username, "password": password}, headers=headers,
+            ) as resp:
+                assert resp.status == 200, await resp.text()
+                user = (await resp.json())["user"]
+            async with client.post(
+                f"{self.backend_base_url}/auth/login.json",
+                json={"username": username, "password": password},
+            ) as resp:
+                assert resp.status == 200, await resp.text()
+            cookie = client.cookie_jar.filter_cookies(URL(self.backend_base_url))["dl_session"].value
+            return user, cookie
+
+    def _insert_public_run(self, owner_user_id: int) -> int:
+        import sqlite3
+        from datetime import datetime
+
+        now = datetime.now().isoformat(sep=" ")
+        with sqlite3.connect(self.test_db_path) as db:
+            team_id = db.execute(
+                "INSERT INTO teams(name, uuid, config, i18n, enabled, deleted, owner_user_id, created_at, updated_at) "
+                "VALUES (?, NULL, '{}', '{}', 1, 0, NULL, ?, ?)",
+                (f"public-run-{owner_user_id}", now, now),
+            ).lastrowid
+            run_id = db.execute(
+                "INSERT INTO task_runs(team_id, root_room_id, owner_user_id, title, query, status, progress_percent, "
+                "total_rooms, active_rooms, completed_rooms, failed_rooms, total_agents, active_agents, final_answer, "
+                "blog_publish_status, error_message, metadata, created_at, updated_at) "
+                "VALUES (?, 1, ?, 'private run', 'secret query', 'QUEUED', 0, 0, 0, 0, 0, 0, 0, "
+                "'secret answer', 'NOT_STARTED', NULL, '{}', ?, ?)",
+                (team_id, owner_user_id, now, now),
+            ).lastrowid
+            db.commit()
+        return int(run_id)
+
+    async def test_public_team_run_rest_endpoints_reject_another_user(self):
+        from yarl import URL
+
+        admin, admin_cookie = await self._register_and_login("run-admin", "secret1")
+        owner, owner_cookie = await self._register_and_login("run-owner", "secret2", admin_cookie=admin_cookie)
+        _, other_cookie = await self._register_and_login("run-other", "secret3", admin_cookie=admin_cookie)
+        run_id = self._insert_public_run(owner["id"])
+
+        def session(cookie: str) -> aiohttp.ClientSession:
+            jar = aiohttp.CookieJar(unsafe=True)
+            jar.update_cookies({"dl_session": cookie}, response_url=URL(self.backend_base_url))
+            return aiohttp.ClientSession(cookie_jar=jar)
+
+        paths = (
+            f"/runs/{run_id}.json",
+            f"/runs/{run_id}/rooms.json",
+            f"/runs/{run_id}/timeline.json",
+            f"/runs/{run_id}/final_answer.json",
+        )
+        async with session(other_cookie) as other_client:
+            for path in paths:
+                async with other_client.get(self.backend_base_url + path) as resp:
+                    assert resp.status == 403, (path, await resp.text())
+
+        async with session(owner_cookie) as owner_client, session(admin_cookie) as admin_client:
+            for client in (owner_client, admin_client):
+                for path in paths:
+                    async with client.get(self.backend_base_url + path) as resp:
+                        assert resp.status == 200, (path, await resp.text())

@@ -65,6 +65,8 @@ class TestTeamController(_ApiServiceCase):
         assert len(rooms_by_name["测试组"]["agent_ids"]) == 2
         assert len(rooms_by_name["测试组"]["agents"]) == 2
         assert isinstance(data["enabled"], bool)
+        # The server, rather than V2 heuristics, owns the deterministic entry room.
+        assert data["question_room_id"] == rooms_by_name["general"]["id"]
 
     async def test_team_export_preset_returns_team_preset_json(self):
         team_id = await self._get_team_id("e2e")

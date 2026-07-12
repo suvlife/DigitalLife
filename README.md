@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.6.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.6.1-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -61,8 +61,8 @@
 
 | 入口 | 路径/目录 | 适用场景 |
 |---|---|---|
-| 经典 Web 控制台 | `/`、`frontend/` | 团队配置、聊天室、设置、用量与日常管理 |
-| 江湖书院 V2 | `/v2/`、`frontend-v2/` | 2.5D 沉浸式团队/房间视图、任务进度与最终答案 |
+| 江湖书院 V2 | `/`、`frontend-v2/` | 默认入口；2.5D 团队/房间视图、问策、卷宗与完整设置 |
+| 经典 Web 控制台 | `/v1/`、`frontend/` | 兼容入口；经典团队配置、聊天室、设置与用量管理 |
 | TUI | `tui/` | 终端环境、远程服务器与轻量操作 |
 
 ### 基于 TSP 的工具层
@@ -212,8 +212,9 @@ docker compose up -d --build
 
 访问：
 
-- 经典控制台：`http://localhost:8080/`
-- 江湖书院 V2：`http://localhost:8080/v2/`
+- 江湖书院 V2（默认）：`http://localhost:8080/`
+- 经典控制台：`http://localhost:8080/v1/`
+- 旧 V2 链接 `/v2/...` 会兼容重定向到新的根路径
 - 健康检查：`http://localhost:8080/system/status.json`
 
 查看日志或停止服务：
@@ -242,7 +243,7 @@ cd frontend-v2 && npm ci && cd ..
 .venv/bin/python src/backend_main.py
 ```
 
-默认访问地址为 `http://127.0.0.1:8180/`，V2 为 `http://127.0.0.1:8180/v2/`。
+默认访问 `http://127.0.0.1:8180/` 即进入江湖书院 V2；经典控制台位于 `http://127.0.0.1:8180/v1/`。旧 `/v2/...` 链接会保留路径与查询参数并重定向到 V2 根路由。
 
 如需指定配置目录或端口：
 
@@ -271,7 +272,7 @@ npm run dev
 ```bash
 cd frontend-v2
 npm run dev
-# http://localhost:8182/v2/
+# http://localhost:8182/
 ```
 
 ### TUI
@@ -315,7 +316,7 @@ cp assets/config_template.json /path/to/config/setting.json
 }
 ```
 
-也可在经典 Web 控制台的设置页添加、测试、启用和切换 LLM 服务。
+也可在默认的江湖书院 V2 设置页添加、测试、启用和切换 LLM 服务；经典控制台仍可从 `/v1/` 使用。
 
 ### 关键配置项
 
@@ -371,7 +372,7 @@ WebSocket 客户端连接后需要先发送认证消息；经典前端和 V2 前
 
 ### 首次使用
 
-1. 启动后打开经典控制台；
+1. 启动后打开默认的江湖书院 V2；
 2. 在设置页添加至少一个可用的 LLM 服务；
 3. 启用一个内置团队或创建自己的团队；
 4. 进入房间输入任务；
@@ -379,26 +380,19 @@ WebSocket 客户端连接后需要先发送认证消息；经典前端和 V2 前
 6. 等待汇总角色提交最终结论；
 7. 在 V2 运行页查看任务级、房间级进度与归档结果。
 
-### 经典控制台 `/`
+### 江湖书院 V2 `/`
 
-适合完整配置和管理：
+默认入口，适合完整配置、问策和运行观察：
 
-- 团队、部门树、房间和 Agent 编辑；
-- LLM 服务、语言、Skill 与 Ghost 设置；
-- 聊天、文件上传/预览、活动时间线；
-- Token 实时和历史统计；
-- 浅色、深色、跟随系统主题与移动端适配。
+- 首页、团队院落与明确的主问策房间；
+- 团队成员、部门树、研究室与团队默认模型配置；
+- LLM 服务、角色模板、Skill、Ghost 与系统维护设置；
+- 房间对话、文件交付、任务/房间进度与最终答案；
+- 当前运行与按 Run 隔离的历史卷宗。
 
-### 江湖书院 V2 `/v2/`
+### 经典控制台 `/v1/`
 
-V2 是独立应用，不替换经典控制台：
-
-- 首页与团队院落；
-- 房间建筑和 NPC 状态；
-- 对话时间线与 Markdown 最终答案；
-- 任务进度卷轴、房间进度和活动状态；
-- 当前运行、历史归档与结果详情；
-- reduced-motion 和移动端卡片降级。
+经典控制台作为独立兼容应用保留，继续提供原有控制台工作流。旧 `/v2/...` 地址会保留路径与查询参数并重定向到新的 V2 根路径。
 
 ---
 
@@ -611,7 +605,7 @@ npm run build
 <details>
 <summary><strong>V2 页面刷新后 404</strong></summary>
 
-生产构建由 Tornado `/v2/(.*)` SPA fallback 处理；使用外部反向代理时也要将 `/v2/` 及其子路径转发到后端，而不是当作普通磁盘目录。
+生产构建由 Tornado 根路径 SPA fallback 处理；经典控制台固定在 `/v1/`，旧 `/v2/...` 由后端兼容重定向。使用外部反向代理时应将 `/`、`/v1/` 和 `/v2/` 均转发到后端。
 </details>
 
 <details>
@@ -660,7 +654,7 @@ DigitalLife/
 │   ├── backend_main.py          # 后端入口
 │   └── route.py                 # API 与双前端路由
 ├── frontend/                    # 经典 Vue 3 控制台
-├── frontend-v2/                 # 江湖书院 V2（生产路径 /v2/）
+├── frontend-v2/                 # 江湖书院 V2（默认生产路径 /）
 ├── tui/                         # Textual 终端客户端
 ├── assets/
 │   ├── migrate/                 # SQLite 迁移
@@ -681,7 +675,7 @@ DigitalLife/
 
 ## 路线与已知边界
 
-- V2 当前聚焦任务观察、团队导航、进度和结果展示；完整设置与高级编辑继续使用经典控制台；
+- V2 是默认入口，覆盖任务观察、团队导航、问策、卷宗、模型、成员、组织树与研究室设置；经典控制台作为 `/v1/` 兼容界面保留；
 - Run API 当前以查询和恢复展示为主，取消、房间级重试等写操作仍可继续演进；
 - 本地限流器是单进程内存实现，多实例生产部署应在网关层增加统一限流；
 - SQLite 适合单机和中小规模部署，大规模多实例部署需要额外评估数据库与消息协调方案；

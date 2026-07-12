@@ -1,6 +1,7 @@
 import hmac
 import json
 import logging
+import re
 import time
 from typing import Any, TypeVar
 
@@ -42,11 +43,23 @@ _RATE_LIMITED_PATHS: dict[str, int] = {
     "/config/llm_services/test.json": 10,
     "/system/check_update.json": 5,
     "/config/skills/import.json": 10,
-    "/config/quick_init.json": 5,
+    "/config/quick_init.json": 30,
     "/auth/login.json": 10,        # 登录限流
     "/auth/register.json": 3,      # 注册限流
-    "/rooms/(\d+)/messages/upload.json": 20,  # 文件上传限流
 }
+_RATE_LIMITED_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
+    (re.compile(r"^/rooms/\d+/messages/upload\.json$"), 20),
+)
+
+
+def _path_rate_limit(path: str) -> int | None:
+    exact = _RATE_LIMITED_PATHS.get(path)
+    if exact is not None:
+        return exact
+    for pattern, quota in _RATE_LIMITED_PATTERNS:
+        if pattern.fullmatch(path):
+            return quota
+    return None
 
 # 全局默认限流（非敏感接口）：每 IP 每 60 秒最大请求数
 _GLOBAL_RATE_LIMIT = 120
@@ -84,7 +97,7 @@ class BaseHandler(tornado.web.RequestHandler):
         # 1.5 速率限制检查
         client_ip = self.request.remote_ip or "unknown"
         # 敏感接口特殊限流
-        max_req = _RATE_LIMITED_PATHS.get(self.request.path)
+        max_req = _path_rate_limit(self.request.path)
         if max_req is not None:
             if not _check_rate_limit(client_ip, self.request.path, max_req):
                 self.set_status(429)
@@ -173,26 +186,78 @@ class BaseHandler(tornado.web.RequestHandler):
         user = self.get_current_user()
         return user.id if user else None
 
-    async def _assert_team_owned(self, team_id: int) -> None:
-        """校验团队归属：owner_user_id 匹配当前用户，或当前用户是 admin，或团队是公共(NULL)。
-        不满足则返回 403。"""
-        from model.dbModel.gtTeam import GtTeam
+    def _assert_admin(self) -> None:
+        """要求管理员权限。
+
+        Cookie 用户必须具有 ADMIN 角色；兼容旧的单 Token/未启用多用户鉴权
+        部署时，合法的全局 Token（或关闭鉴权）视为管理员凭据。
+        """
         from model.dbModel.gtUser import UserRole
+
+        user = self.get_current_user()
+        if user is not None and user.role == UserRole.ADMIN:
+            return
+        if user is None and self._is_authed():
+            return
+        self.set_status(403)
+        self.return_json({"error_code": "admin_required", "error_desc": "仅管理员可执行此操作"})
+        raise tornado.web.Finish()
+
+    async def _get_accessible_team(self, team_id: int):
+        from model.dbModel.gtTeam import GtTeam
+
         team = await GtTeam.aio_get_or_none(GtTeam.id == team_id, GtTeam.deleted == 0)
         if team is None:
             self.set_status(404)
             self.return_json({"error_code": "team_not_found", "error_desc": "团队不存在"})
             raise tornado.web.Finish()
+        return team
+
+    async def _assert_team_readable(self, team_id: int) -> None:
+        """允许管理员、团队所有者以及任意已认证用户读取公共团队。"""
+        from model.dbModel.gtUser import UserRole
+
+        team = await self._get_accessible_team(team_id)
         user = self.get_current_user()
         if user is not None and user.role == UserRole.ADMIN:
-            return  # admin 跨租户
+            return
         if team.owner_user_id is None:
-            return  # 公共团队
+            return
         if user is not None and team.owner_user_id == user.id:
-            return  # 自己的团队
+            return
+        # 旧的全局 Token 部署没有用户归属概念，保持兼容。
+        if user is None and self._is_authed():
+            return
         self.set_status(403)
         self.return_json({"error_code": "forbidden", "error_desc": "无权访问该团队"})
         raise tornado.web.Finish()
+
+    async def _assert_team_writable(self, team_id: int) -> None:
+        """仅管理员或团队所有者可写；公共团队对普通用户只读。"""
+        from model.dbModel.gtUser import UserRole
+
+        team = await self._get_accessible_team(team_id)
+        user = self.get_current_user()
+        if user is not None and user.role == UserRole.ADMIN:
+            return
+        if user is not None and team.owner_user_id == user.id:
+            return
+        # 兼容关闭多用户鉴权或使用全局 Bearer Token 的旧部署。
+        if user is None and self._is_authed():
+            return
+        self.set_status(403)
+        self.return_json({"error_code": "forbidden", "error_desc": "无权修改该团队"})
+        raise tornado.web.Finish()
+
+    async def _assert_team_owned(self, team_id: int) -> None:
+        """兼容旧调用名：安全方法按可读校验，写方法按可写校验。
+
+        这样无需放宽公共团队写权限，也能让现有控制器的 GET 读取继续工作。
+        """
+        if self.request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+            await self._assert_team_readable(team_id)
+        else:
+            await self._assert_team_writable(team_id)
 
     async def _assert_room_owned(self, room_id: int) -> None:
         """校验房间归属：通过 room.team_id 链式校验。"""

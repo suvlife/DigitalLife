@@ -30,6 +30,7 @@ class RoleTemplateCreateHandler(BaseHandler):
     """POST /role_templates/create.json - 创建用户自定义 role template"""
 
     async def post(self) -> None:
+        self._assert_admin()
         request = self.parse_request(CreateRoleTemplateRequest)
 
         existing = await gtRoleTemplateManager.get_role_template_by_name(request.name)
@@ -67,6 +68,7 @@ class RoleTemplateModifyHandler(BaseHandler):
     """POST /role_templates/{id}/modify.json - 修改 role template"""
 
     async def post(self, template_id: str) -> None:
+        self._assert_admin()
         definition = await gtRoleTemplateManager.get_role_template_by_id(int(template_id))
         assertUtil.assertNotNull(
             definition,
@@ -103,6 +105,7 @@ class RoleTemplateDeleteHandler(BaseHandler):
     """POST /role_templates/{id}/delete.json - 删除 role template"""
 
     async def post(self, template_id: str) -> None:
+        self._assert_admin()
         definition = await gtRoleTemplateManager.get_role_template_by_id(int(template_id))
         assertUtil.assertNotNull(
             definition,

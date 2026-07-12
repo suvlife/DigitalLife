@@ -16,6 +16,7 @@ const props = defineProps<{
   hasMoreHistory?: boolean;
   loadingOlderMessages?: boolean;
   escalatingMessageIds?: number[];
+  teamId?: number;
 }>();
 
 const emit = defineEmits<{
@@ -327,6 +328,7 @@ onBeforeUnmount(() => {
             v-for="(file, fileIndex) in messageFiles(message)"
             :key="`file-${messageKey(message, index)}-${fileIndex}`"
             :file="file"
+            :team-id="teamId || 0"
           />
         </div>
       </template>
@@ -379,6 +381,7 @@ onBeforeUnmount(() => {
             v-for="(file, fileIndex) in messageFiles(message)"
             :key="`file-${messageKey(message, index)}-${fileIndex}`"
             :file="file"
+            :team-id="teamId || 0"
           />
         </div>
       </template>

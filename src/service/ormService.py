@@ -3,7 +3,8 @@ import logging
 import os
 import sqlite3
 from datetime import datetime
-from typing import Optional
+from collections.abc import Awaitable, Callable
+from typing import Optional, TypeVar
 
 import aiosqlite
 import aiosqlite.core as _aiosqlite_core
@@ -17,6 +18,46 @@ from db import check_database_initialized, migrate_database, resolve_db_path
 from model.dbModel.base import bind_database
 
 logger = logging.getLogger(__name__)
+
+_SQLITE_BUSY_TIMEOUT_MS = 5000
+_SQLITE_LOCK_RETRY_DELAYS = (0.05, 0.15, 0.35)
+_T = TypeVar("_T")
+
+
+def is_sqlite_locked_error(exc: BaseException) -> bool:
+    """Return whether an exception represents SQLite BUSY/LOCKED contention."""
+    current: BaseException | None = exc
+    while current is not None:
+        message = str(current).lower()
+        if "database is locked" in message or "database table is locked" in message:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+async def retry_sqlite_locked(
+    operation: Callable[[], Awaitable[_T]],
+    *,
+    delays: tuple[float, ...] = _SQLITE_LOCK_RETRY_DELAYS,
+) -> _T:
+    """Retry a database-only, re-entrant operation after bounded lock contention.
+
+    Callers must keep network, filesystem and event-bus side effects outside the
+    operation.  The bounded schedule prevents hidden infinite retries.
+    """
+    for attempt in range(len(delays) + 1):
+        try:
+            return await operation()
+        except Exception as exc:
+            if not is_sqlite_locked_error(exc) or attempt >= len(delays):
+                raise
+            delay = delays[attempt]
+            logger.warning(
+                "SQLite busy/locked; retrying database operation in %.2fs (%d/%d)",
+                delay, attempt + 1, len(delays),
+            )
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
 
 # aiosqlite.Connection 继承 Thread 且默认 daemon=False，
 # 若连接因 asyncio 任务取消等原因未被正常 close()，其工作线程会阻塞进程退出。
@@ -72,10 +113,31 @@ class SqlitePoolBackend(PoolBackend):
         # 无空闲连接，新建
         connect_params = dict(self.connect_params)
         connect_params.setdefault("isolation_level", None)
+        conn: ConnectionProtocol | None = None
         try:
-            conn: ConnectionProtocol = await aiosqlite.connect(self.database, **connect_params)
-        except Exception:
-            # 连接创建失败（含 CancelledError）：无 conn 需清理，直接传播
+            conn = await aiosqlite.connect(self.database, **connect_params)
+            # PRAGMAs are connection-local except journal_mode. Apply the full
+            # policy to every pooled connection instead of relying on the
+            # synchronous migration connection's side effects.
+            async def configure_connection() -> None:
+                assert conn is not None
+                async with conn.cursor() as cursor:
+                    # Set busy_timeout first so journal-mode negotiation itself
+                    # waits briefly for an existing writer.
+                    await cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+                    await cursor.execute("PRAGMA foreign_keys=ON")
+                    await cursor.execute("PRAGMA journal_mode=WAL")
+                    await cursor.execute("PRAGMA synchronous=NORMAL")
+
+            await retry_sqlite_locked(configure_connection)
+        except BaseException:
+            # PRAGMA negotiation can fail after the aiosqlite worker starts.
+            # Always close that partially initialized connection.
+            if conn is not None:
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
             raise
         self._acquired_count += 1
         self._connections[id(conn)] = conn
@@ -131,6 +193,18 @@ class SqlitePoolBackend(PoolBackend):
 
 class AioSqliteDatabase(AioDatabase, peewee.SqliteDatabase):
     pool_backend_cls = SqlitePoolBackend
+
+    async def aio_execute_sql(self, sql, params=None, fetch_results=None):
+        # A statement rejected with SQLITE_BUSY/LOCKED has not completed. It is
+        # therefore safe to retry the statement itself with a small bounded
+        # backoff. Higher-level multi-statement transitions still need their
+        # own transaction retry (see retry_sqlite_locked).
+        async def execute():
+            return await super(AioSqliteDatabase, self).aio_execute_sql(
+                sql, params, fetch_results=fetch_results
+            )
+
+        return await retry_sqlite_locked(execute)
 
 
 _db: Optional[AioSqliteDatabase] = None

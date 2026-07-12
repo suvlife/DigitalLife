@@ -54,6 +54,14 @@ The Settings page now has a "Usage" panel showing Prompt / Completion / Total to
 ### 10. Skills Import & Web Search (New)
 Supports uploading zip files to import custom Skills. Agents can call `web_search` / `web_fetch` tools to retrieve real-time web information for more comprehensive analysis.
 
+### Web routes
+
+- **Wuxia Academy V2 (default):** `/`
+- **Classic console:** `/v1/`
+- **Compatibility:** legacy `/v2/...` links redirect to the corresponding V2 root path while preserving the query string.
+
+V2 now covers team/member/department/room configuration, LLM and Ghost settings, live consultation, run progress, and archives. The classic console remains available as an independent compatibility interface.
+
 ---
 
 ## 🚀 Quick Start

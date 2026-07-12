@@ -38,3 +38,10 @@ assets/builtin_keys.local.json
 frontend-v2/node_modules/
 frontend-v2/dist/
 assets/frontend-v2/
+
+# Browser E2E local artifacts
+tests/e2e/node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+
+.DS_Store

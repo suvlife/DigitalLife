@@ -22,6 +22,7 @@ const props = defineProps<{
   draft: string;
   composerNotice: string;
   escalatingMessageIds?: number[];
+  teamId?: number;
 }>();
 
 const emit = defineEmits<{
@@ -409,6 +410,7 @@ onBeforeUnmount(() => {
         :has-more-history="hasMoreHistory"
         :loading-older-messages="loadingOlderMessages"
         :escalating-message-ids="escalatingMessageIds"
+        :team-id="teamId || 0"
         @click-agent="emit('clickAgent', $event)"
         @click-working-agent="emit('clickWorkingAgent', $event)"
         @load-older-messages="emit('loadOlderMessages')"

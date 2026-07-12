@@ -52,6 +52,12 @@ jobs:
         fi
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
+    - name: Verify tag matches repository version
+      if: github.event_name == 'push'
+      run: |
+        test "${{ steps.version.outputs.version }}" = "$(cat VERSION)"
+        python scripts/check_version_consistency.py
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
@@ -71,17 +77,57 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Determine image tags
+      id: image-tags
+      shell: bash
+      run: |
+        set -euo pipefail
+        ARCH="${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        {
+          echo 'tags<<EOF'
+          echo "ghcr.io/${{ github.repository_owner }}/digitallife:${VERSION}-${ARCH}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push }}" = "true" ]; then
+            test -n "${{ secrets.DOCKERHUB_USERNAME }}"
+            echo "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/digitallife:${VERSION}-${ARCH}"
+          fi
+          echo EOF
+        } >> "$GITHUB_OUTPUT"
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v7
       with:
         context: .
         push: ${{ github.event_name == 'push' || inputs.push }}
-        tags: |
-          ghcr.io/${{ github.repository_owner }}/digitallife:${{ steps.version.outputs.version }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+        load: ${{ github.event_name == 'workflow_dispatch' && !inputs.push }}
+        tags: ${{ steps.image-tags.outputs.tags }}
         platforms: ${{ matrix.platform }}
         provenance: false
+        build-args: |
+          APP_VERSION=${{ steps.version.outputs.version }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Smoke-test built container
+      shell: bash
+      run: |
+        set -euo pipefail
+        IMAGE=$(printf '%s\n' "${{ steps.image-tags.outputs.tags }}" | head -1)
+        if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.push }}" = "true" ]; then
+          docker pull "$IMAGE"
+        fi
+        cid=$(docker run -d -p 127.0.0.1::8080 "$IMAGE")
+        trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+        host_port=$(docker port "$cid" 8080/tcp | awk -F: '{print $NF}')
+        for attempt in $(seq 1 60); do
+          if curl -fsS "http://127.0.0.1:${host_port}/system/status.json" > /tmp/status.json; then
+            python -c 'import json; status=json.load(open("/tmp/status.json")); expected=open("VERSION").read().strip(); assert status["version"] == expected, status; assert status["initialized"] in (True, False), status; print(status)'
+            exit 0
+          fi
+          sleep 1
+        done
+        echo 'Container did not become healthy within 60 seconds' >&2
+        exit 1
 
   merge:
     needs: build

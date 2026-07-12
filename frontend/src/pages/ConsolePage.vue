@@ -223,9 +223,9 @@ function handleSelectAgent(agentId: number): void {
 }
 
 watch(
-  () => currentTeam.value?.name,
-  (teamName, previousTeamName) => {
-    if (!teamName || teamName === previousTeamName) {
+  () => currentTeam.value?.id,
+  (teamId, previousTeamId) => {
+    if (!teamId || teamId === previousTeamId) {
       return;
     }
     refreshAll().catch(console.error);
@@ -360,6 +360,7 @@ onBeforeUnmount(() => {
           :error-message="errorMessage"
           :reloading-messages="reloadingMessages"
           :team-enabled="currentTeam?.enabled ?? true"
+          :team-id="teamId"
           @update-error="errorMessage = $event"
           @click-agent="openAgent"
           @click-working-agent="openAgent"

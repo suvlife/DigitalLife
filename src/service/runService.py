@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from constants import (
@@ -15,14 +17,14 @@ from constants import (
     TaskRunStatus,
     TaskStatus,
 )
-from dal.db import gtRoomManager, gtRoomRunManager, gtTaskRunManager
+from dal.db import atomic_transaction, gtRoomManager, gtRoomRunManager, gtTaskRunManager
 from model.dbModel.gtAgentActivity import GtAgentActivity
 from model.dbModel.gtAgentTask import GtAgentTask
 from model.dbModel.gtRoom import GtRoom
 from model.dbModel.gtRoomMessage import GtRoomMessage
 from model.dbModel.gtRoomRun import GtRoomRun
 from model.dbModel.gtTaskRun import GtTaskRun
-from service import messageBus, progressService
+from service import messageBus, progressService, ormService
 from service.messageBus import EventBusMessage
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,61 @@ def _dept_id_from_room(room: GtRoom) -> int | None:
         except (ValueError, IndexError):
             return None
     return None
+
+
+def _fallback_conclusion(messages: list[GtRoomMessage], query: str) -> str:
+    """当 root leader 未调用 submit_conclusion 时，仍生成可交付的最低限度报告。
+
+    这不是替代 Agent 综合，而是防止调度已完成却把用户留在空白页面；原始
+    发言按时间保留，便于用户继续追问和人工复核。
+    """
+    substantive = [m for m in messages if m.sender_id > 0 and m.content.strip()]
+    if not substantive:
+        return ""
+    lines = ["# 综合分析报告", "", f"## 问题", query.strip() or "（未记录问题）", "", "## 讨论结论",
+             "本轮未收到规范化的综合结论工具调用，以下为各研究室已完成的有效研判记录：", ""]
+    for message in substantive:
+        speaker = message.sender_display_name or f"Agent {message.sender_id}"
+        lines.extend([f"### {speaker}", message.content.strip(), ""])
+    lines.extend(["## 后续建议", "请根据上述分组研判结果继续追问，或在下一轮要求首席负责人形成统一决策与行动清单。", ""])
+    return "\n".join(lines).strip()
+
+
+async def _fallback_conclusion_for_run(run: GtTaskRun, room_runs: list[GtRoomRun]) -> str:
+    messages: list[GtRoomMessage] = []
+    for room_run in room_runs:
+        rows, _ = await gtRoomMessageManager.get_room_messages(room_run.room_id)
+        messages.extend(rows)
+    messages.sort(key=lambda item: (item.send_time or datetime.min, item.id or 0))
+    return _fallback_conclusion(messages, run.query)
+
+
+async def _write_final_report_artifact(run: GtTaskRun, content: str) -> str | None:
+    """将最终 Markdown 报告保存到团队 outputs，供 V2/旧版下载。"""
+    try:
+        from util import configUtil, fileUtil
+        team = await gtTeamManager.get_team_by_id(run.team_id)
+        if team is None:
+            return None
+        root = configUtil.get_app_config().setting.workspace_root
+        if not root:
+            return None
+        workdir = Path((team.config or {}).get("working_directory") or os.path.join(root, team.name)).resolve()
+        output_dir = (workdir / "outputs").resolve()
+        fileUtil.assert_path_within_sandbox(str(output_dir), str(workdir))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"综合分析报告-run-{run.id}.md"
+        target = (output_dir / filename).resolve()
+        fileUtil.assert_path_within_sandbox(str(target), str(workdir))
+        # Deterministic path + atomic replace makes retries safe and prevents
+        # readers from observing a partially written report.
+        temp_target = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        temp_target.write_text(content.rstrip() + "\n", encoding="utf-8")
+        os.replace(temp_target, target)
+        return f"outputs/{filename}"
+    except Exception:
+        logger.exception("Failed to write final report artifact: run_id=%s", run.id)
+        return None
 
 
 async def startup() -> None:
@@ -116,8 +173,25 @@ async def create_run_for_user_message(
         progress_percent=0,
         started_at=now,
     )
+    created_room_runs: list[GtRoomRun] = []
     try:
-        run = await gtTaskRunManager.create_run(run)
+        async with atomic_transaction():
+            run = await gtTaskRunManager.create_run(run)
+            # 初始只绑定真实根房间。周边房间在被该 Run 明确调度/产生带
+            # run_id 的事件时再建立关联，避免同团队并发 Run 预先共享全部房间。
+            root_room = await gtRoomManager.get_room_by_id(root_room_id)
+            if root_room is None or root_room.team_id != team_id:
+                raise ValueError(f"root room {root_room_id} does not belong to team {team_id}")
+            created_room_runs.append(await gtRoomRunManager.upsert_room_run(
+                run_id=run.id,
+                team_id=team_id,
+                room_id=root_room.id,
+                dept_id=_dept_id_from_room(root_room),
+                expected_contributors=len([
+                    aid for aid in (root_room.agent_ids or []) if SpecialAgent.value_of(aid) is None
+                ]),
+                status=RoomRunStatus.QUEUED,
+            ))
     except Exception:
         # user_message_id 唯一索引保证重复请求幂等。
         existing = await gtTaskRunManager.get_run_by_user_message_id(user_message_id)
@@ -125,21 +199,9 @@ async def create_run_for_user_message(
             return existing
         raise
 
-    # 预建团队所有可见房间快照，断线恢复时院落能立即展示 WAITING；
-    # 根房间进入 QUEUED，其余房间在收到真实消息/状态/活动前保持 WAITING。
-    team_rooms = await gtRoomManager.get_rooms_by_team(team_id)
-    for team_room in team_rooms:
-        room_status = RoomRunStatus.QUEUED if team_room.id == root_room_id else RoomRunStatus.WAITING
-        room_run = await gtRoomRunManager.upsert_room_run(
-            run_id=run.id,
-            team_id=team_id,
-            room_id=team_room.id,
-            dept_id=_dept_id_from_room(team_room),
-            expected_contributors=len([aid for aid in (team_room.agent_ids or []) if SpecialAgent.value_of(aid) is None]),
-            status=room_status,
-        )
+    # 事务提交后再广播，订阅方永远只能看到完整快照。
+    for room_run in created_room_runs:
         messageBus.publish(MessageBusTopic.ROOM_RUN_CHANGED, run_id=run.id, room_run=_room_run_payload(room_run))
-
     messageBus.publish(MessageBusTopic.RUN_CREATED, run=_run_payload(run))
     return await refresh_run_progress(run.id)
 
@@ -198,6 +260,9 @@ async def refresh_run_progress(run_id: int, *, publish: bool = True) -> GtTaskRu
     run = await gtTaskRunManager.get_run(run_id)
     if run is None:
         raise RuntimeError(f"TaskRun not found: {run_id}")
+    if run.status in _TERMINAL_RUN_STATUSES and run.final_answer:
+        # 同一 Run 的最终结论是幂等终态；重复消息/迟到回调不能再次入队发布。
+        return run
     room_runs = await gtRoomRunManager.list_room_runs(run_id)
     snapshot = progressService.calculate_run_snapshot(run, room_runs)
     changed = any(getattr(run, key) != value for key, value in snapshot.items())
@@ -281,20 +346,67 @@ async def complete_final_answer(
     final_answer: str,
     final_message_id: int | None = None,
 ) -> GtTaskRun:
+    """Persist a final answer as a recoverable, re-entrant transition.
+
+    The report file has a deterministic name and is atomically replaced. All
+    TaskRun/RoomRun mutations commit in one SQLite transaction and the bounded
+    retry contains database work only. Event delivery is at-least-once snapshot
+    delivery; Ghost enqueue is idempotent through the stable publication key.
+    """
     run = await gtTaskRunManager.get_run(run_id)
     if run is None:
         raise RuntimeError(f"TaskRun not found: {run_id}")
-    room_runs = await gtRoomRunManager.list_room_runs(run_id)
-    failed_rooms = sum(1 for room in room_runs if room.status == RoomRunStatus.FAILED)
-    final_status = TaskRunStatus.PARTIAL_FAILED if failed_rooms else TaskRunStatus.COMPLETED
-    run = await gtTaskRunManager.update_run(
-        run_id,
-        final_answer=final_answer,
-        final_message_id=final_message_id,
-        status=final_status,
-        progress_percent=100,
-        finished_at=datetime.now(),
-    )
+
+    artifact_path = await _write_final_report_artifact(run, final_answer)
+
+    async def persist_terminal_snapshot() -> tuple[GtTaskRun, list[GtRoomRun]]:
+        async with atomic_transaction():
+            current = await gtTaskRunManager.get_run(run_id)
+            if current is None:
+                raise RuntimeError(f"TaskRun not found: {run_id}")
+            room_runs = await gtRoomRunManager.list_room_runs(run_id)
+            metadata = dict(current.metadata or {})
+            if artifact_path:
+                metadata["final_report_path"] = artifact_path
+            failed_rooms = sum(1 for room in room_runs if room.status == RoomRunStatus.FAILED)
+            final_status = TaskRunStatus.PARTIAL_FAILED if failed_rooms else TaskRunStatus.COMPLETED
+            finished_at = current.finished_at or datetime.now()
+            updated_run = await gtTaskRunManager.update_run(
+                run_id,
+                final_answer=final_answer,
+                final_message_id=final_message_id if final_message_id is not None else current.final_message_id,
+                status=final_status,
+                progress_percent=100,
+                finished_at=finished_at,
+                metadata=metadata,
+            )
+            completed_room_runs: list[GtRoomRun] = []
+            for room_run in room_runs:
+                if room_run.status in (
+                    RoomRunStatus.QUEUED, RoomRunStatus.DISCUSSING, RoomRunStatus.SYNTHESIZING
+                ):
+                    room_run = await gtRoomRunManager.update_room_run(
+                        room_run.id,
+                        status=RoomRunStatus.COMPLETED,
+                        progress_percent=100,
+                        current_agent_id=None,
+                        current_activity=None,
+                        finished_at=room_run.finished_at or finished_at,
+                    )
+                    completed_room_runs.append(room_run)
+            return updated_run, completed_room_runs
+
+    run, completed_room_runs = await ormService.retry_sqlite_locked(persist_terminal_snapshot)
+
+    # Publish only after commit. Consumers receive complete snapshots. Re-entry
+    # may deliver the final snapshot again, which is intentional at-least-once
+    # delivery and cannot expose a partially committed terminal state.
+    for completed_room_run in completed_room_runs:
+        messageBus.publish(
+            MessageBusTopic.ROOM_RUN_CHANGED,
+            run_id=run.id,
+            room_run=_room_run_payload(completed_room_run),
+        )
     messageBus.publish(
         MessageBusTopic.FINAL_ANSWER_COMPLETED,
         run=_run_payload(run),
@@ -302,8 +414,8 @@ async def complete_final_answer(
     )
     messageBus.publish(MessageBusTopic.RUN_PROGRESS_CHANGED, run=_run_payload(run))
 
-    # Final answer is the only blog publication trigger. Persisting the answer
-    # happens before enqueue, so a publish failure never hides or loses it.
+    # The stable publication key makes enqueue re-entrant if the process dies
+    # after the database commit but before or during this side effect.
     try:
         from service import ghostService
         queued = await ghostService.enqueue_final_conclusion(
@@ -318,8 +430,14 @@ async def complete_final_answer(
         )
         if queued.get("success"):
             run = await update_blog_publish_status(run_id=run.id, status="PENDING")
-    except Exception:
+        else:
+            run = await update_blog_publish_status(
+                run_id=run.id, status="FAILED",
+                error_message=str(queued.get("message") or "Ghost 未进入发布队列"),
+            )
+    except Exception as exc:
         logger.exception("Failed to enqueue final answer for Ghost publication: run_id=%s", run.id)
+        run = await update_blog_publish_status(run_id=run.id, status="FAILED", error_message=str(exc))
     return run
 
 
@@ -328,13 +446,19 @@ async def update_blog_publish_status(
     post_url: str | None = None, error_message: str | None = None,
 ) -> GtTaskRun:
     """Ghost worker 可调用的薄接口；本模块不实现 Ghost 逻辑。"""
-    fields: dict[str, Any] = {"blog_publish_status": status}
+    current = await gtTaskRunManager.get_run(run_id)
+    if current is None:
+        raise RuntimeError(f"TaskRun not found: {run_id}")
+    metadata = dict(current.metadata or {})
+    if error_message is not None:
+        metadata["blog_publish_error"] = error_message
+    elif status == "PUBLISHED":
+        metadata.pop("blog_publish_error", None)
+    fields: dict[str, Any] = {"blog_publish_status": status, "metadata": metadata}
     if post_id is not None:
         fields["blog_post_id"] = post_id
     if post_url is not None:
         fields["blog_post_url"] = post_url
-    if error_message is not None:
-        fields["error_message"] = error_message
     run = await gtTaskRunManager.update_run(run_id, **fields)
     messageBus.publish(
         MessageBusTopic.BLOG_PUBLISH_CHANGED,
@@ -347,18 +471,55 @@ async def update_blog_publish_status(
     return run
 
 
-async def _find_active_run_for_room(room: GtRoom) -> GtTaskRun | None:
-    # 根房间直接匹配；周边房间使用同团队最新活动 Run，支持 Agent 跨房间协作。
-    run = await gtTaskRunManager.get_latest_run_for_room(room.id)
-    if run is not None:
+async def _find_active_run_for_room(room: GtRoom, *, run_id: int | None = None) -> GtTaskRun | None:
+    """按明确 run-room 关联定位 Run，绝不按团队“最新 Run”猜测。
+
+    新事件应携带 run_id。为兼容旧的单 Run 事件源：若房间已有且仅有一个
+    活动关联，或团队当前只有一个活动 Run，允许确定性绑定；出现两个及以上
+    候选时返回 None，宁可忽略无法归属的事件，也不能把数据串入另一 Run。
+    """
+    if run_id is not None:
+        run = await gtTaskRunManager.get_run(int(run_id))
+        if run is None or run.team_id != room.team_id or run.status in _TERMINAL_RUN_STATUSES:
+            return None
+        await gtRoomRunManager.upsert_room_run(
+            run_id=run.id, team_id=room.team_id, room_id=room.id,
+            dept_id=_dept_id_from_room(room),
+            expected_contributors=len([
+                aid for aid in (room.agent_ids or []) if SpecialAgent.value_of(aid) is None
+            ]),
+            status=RoomRunStatus.WAITING,
+        )
         return run
-    return await gtTaskRunManager.get_current_run(room.team_id)
+
+    associations = await gtRoomRunManager.list_active_runs_for_room(room.id)
+    if len(associations) == 1:
+        return await gtTaskRunManager.get_run(associations[0].run_id)
+    if len(associations) > 1:
+        logger.warning("Ambiguous active Run for room_id=%s; event ignored", room.id)
+        return None
+
+    active_runs = await gtTaskRunManager.list_active_runs_for_team(room.team_id)
+    if len(active_runs) != 1:
+        if active_runs:
+            logger.warning("Missing explicit run_id for room_id=%s with %s active Runs", room.id, len(active_runs))
+        return None
+    run = active_runs[0]
+    await gtRoomRunManager.upsert_room_run(
+        run_id=run.id, team_id=room.team_id, room_id=room.id,
+        dept_id=_dept_id_from_room(room),
+        expected_contributors=len([
+            aid for aid in (room.agent_ids or []) if SpecialAgent.value_of(aid) is None
+        ]),
+        status=RoomRunStatus.WAITING,
+    )
+    return run
 
 
 async def _on_room_status_changed(msg: EventBusMessage) -> None:
     room: GtRoom = msg.payload["gt_room"]
-    run = await _find_active_run_for_room(room)
-    if run is None:
+    run = await _find_active_run_for_room(room, run_id=msg.payload.get("run_id"))
+    if run is None or run.status in _TERMINAL_RUN_STATUSES:
         return
     state = msg.payload.get("state")
     current_agent_id = msg.payload.get("current_turn_agent_id")
@@ -379,14 +540,27 @@ async def _on_room_status_changed(msg: EventBusMessage) -> None:
             status = RoomRunStatus.SYNTHESIZING if room.id == run.root_room_id and not run.final_answer else RoomRunStatus.COMPLETED
             await update_room_status(run_id=run.id, room=room, status=status)
             if room.id == run.root_room_id and not run.final_answer:
+                # 根房间已经完成用户提问的接收，但尚未产生最终报告。先进入
+                # 合议态；若 Agent 没有调用 submit_conclusion，则用实际发言生成
+                # 最低限度可交付报告，避免任务永远停在“完成但无输出”。
                 await set_run_status(run.id, TaskRunStatus.SYNTHESIZING)
+                latest_room_runs = await gtRoomRunManager.list_room_runs(run.id)
+                other_active = any(
+                    item.room_id != run.root_room_id
+                    and item.status in (RoomRunStatus.QUEUED, RoomRunStatus.DISCUSSING, RoomRunStatus.SYNTHESIZING)
+                    for item in latest_room_runs
+                )
+                if not other_active:
+                    fallback = await _fallback_conclusion_for_run(run, latest_room_runs)
+                    if fallback:
+                        await complete_final_answer(run_id=run.id, final_answer=fallback)
 
 
 async def _on_room_message_added(msg: EventBusMessage) -> None:
     room: GtRoom = msg.payload["gt_room"]
     message: GtRoomMessage = msg.payload["gt_message"]
-    run = await _find_active_run_for_room(room)
-    if run is None or message.send_time < (run.started_at or run.created_at):
+    run = await _find_active_run_for_room(room, run_id=msg.payload.get("run_id"))
+    if run is None or run.status in _TERMINAL_RUN_STATUSES or message.send_time < (run.started_at or run.created_at):
         return
     room_run = await gtRoomRunManager.upsert_room_run(
         run_id=run.id,
@@ -437,8 +611,8 @@ async def _on_agent_activity_changed(msg: EventBusMessage) -> None:
     room = await gtRoomManager.get_room_by_id(int(room_id))
     if room is None:
         return
-    run = await _find_active_run_for_room(room)
-    if run is None:
+    run = await _find_active_run_for_room(room, run_id=msg.payload.get("run_id"))
+    if run is None or run.status in _TERMINAL_RUN_STATUSES:
         return
     if run.status in (TaskRunStatus.QUEUED, TaskRunStatus.PLANNING, TaskRunStatus.DISPATCHING):
         run = await set_run_status(run.id, TaskRunStatus.DISCUSSING)
@@ -494,8 +668,8 @@ async def _on_collaboration_task_changed(msg: EventBusMessage) -> None:
     room = await gtRoomManager.get_room_by_id(task.room_id)
     if room is None:
         return
-    run = await _find_active_run_for_room(room)
-    if run is None or task.created_at < (run.started_at or run.created_at):
+    run = await _find_active_run_for_room(room, run_id=msg.payload.get("run_id"))
+    if run is None or run.status in _TERMINAL_RUN_STATUSES or task.created_at < (run.started_at or run.created_at):
         return
     room_run = await gtRoomRunManager.upsert_room_run(
         run_id=run.id, team_id=room.team_id, room_id=room.id,

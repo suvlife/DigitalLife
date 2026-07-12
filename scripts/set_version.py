@@ -16,11 +16,13 @@ if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version):
     raise SystemExit("invalid semantic version")
 (ROOT / "VERSION").write_text(version + "\n", encoding="utf-8")
 (ROOT / "src/version.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
-for relative in ("frontend/package.json", "frontend-v2/package.json"):
+for relative in ("frontend/package.json", "frontend/package-lock.json", "frontend-v2/package.json", "frontend-v2/package-lock.json"):
     path = ROOT / relative
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
         data["version"] = version
+        if isinstance(data.get("packages"), dict) and isinstance(data["packages"].get(""), dict):
+            data["packages"][""]["version"] = version
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 for relative, pattern, replacement in (

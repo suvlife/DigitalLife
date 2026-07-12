@@ -33,6 +33,24 @@ async def list_room_runs(run_id: int) -> list[GtRoomRun]:
     return list(await GtRoomRun.select().where(GtRoomRun.run_id == run_id).order_by(GtRoomRun.id).aio_execute())
 
 
+async def list_active_runs_for_room(room_id: int) -> list[GtRoomRun]:
+    """返回仍活跃的 run-room 关联；调用方必须处理 0/多条歧义。"""
+    from constants import TaskRunStatus
+    from model.dbModel.gtTaskRun import GtTaskRun
+
+    active_statuses = (
+        TaskRunStatus.QUEUED, TaskRunStatus.PLANNING, TaskRunStatus.DISPATCHING,
+        TaskRunStatus.DISCUSSING, TaskRunStatus.SYNTHESIZING, TaskRunStatus.PUBLISHING,
+    )
+    query = (
+        GtRoomRun.select(GtRoomRun)
+        .join(GtTaskRun, on=(GtRoomRun.run_id == GtTaskRun.id))
+        .where(GtRoomRun.room_id == room_id, GtTaskRun.status.in_(active_statuses))
+        .order_by(GtRoomRun.run_id)
+    )
+    return list(await query.aio_execute())
+
+
 async def upsert_room_run(
     *, run_id: int, team_id: int, room_id: int, dept_id: int | None = None,
     expected_contributors: int = 0, status: RoomRunStatus = RoomRunStatus.WAITING,
@@ -74,3 +92,7 @@ async def update_room_run(room_run_id: int, **fields: Any) -> GtRoomRun:
 
 async def delete_room_runs_by_run(run_id: int) -> int:
     return await GtRoomRun.delete().where(GtRoomRun.run_id == run_id).aio_execute()
+
+
+async def delete_room_runs_by_team(team_id: int) -> int:
+    return await GtRoomRun.delete().where(GtRoomRun.team_id == team_id).aio_execute()

@@ -6,8 +6,10 @@ from typing import Any
 
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 from constants import OpenaiApiRole
+from util.safeHttpUtil import create_pinned_client_session
 from .OpenAiModels import (
     OpenAIFunction,
     OpenAIFunctionParameter,
@@ -358,6 +360,33 @@ _ALLOWED_PROVIDER_PARAM_KEYS = frozenset({
 })
 
 
+_SECURE_SESSION_PROVIDERS = frozenset({"openai", "deepseek", "anthropic", "gemini"})
+
+
+def _build_secure_litellm_client(
+    base_url: str,
+    custom_llm_provider: str | None,
+) -> tuple[Any, AsyncHTTPHandler | None]:
+    """Build the pinned transport used by every normal Agent inference request.
+
+    LiteLLM 1.84 routes OpenAI-compatible providers through ``shared_session``.
+    Anthropic and Gemini accept an ``AsyncHTTPHandler`` instead, so both forms
+    are supplied from the same pinned aiohttp session. Unknown provider adapters
+    are rejected because they may silently ignore both hooks and resolve DNS again.
+    """
+    provider = (custom_llm_provider or "").strip().lower()
+    if provider not in _SECURE_SESSION_PROVIDERS:
+        raise ValueError(f"不支持安全固定 DNS 的 LLM provider: {provider or '未指定'}")
+    session = create_pinned_client_session(
+        base_url, field_name="LLM base URL", allow_test_loopback=True
+    )
+    # OpenAI-compatible adapters expect ``client`` to be an AsyncOpenAI object;
+    # passing LiteLLM's HTTP handler there breaks the SDK path. They consume
+    # ``shared_session`` directly. Anthropic/Gemini adapters accept the handler.
+    safe_client = None if provider in {"openai", "deepseek"} else AsyncHTTPHandler(shared_session=session)
+    return session, safe_client
+
+
 def _build_litellm_extra_params(request: OpenAIRequest) -> dict[str, Any]:
     extra_params: dict[str, Any] = {}
     if request.prompt_cache:
@@ -392,9 +421,11 @@ async def send_request_stream(
         _to_log_json(_request_payload_for_log(request, stream=True)),
     )
 
+    safe_session, safe_client = _build_secure_litellm_client(base_url, custom_llm_provider)
+    stream_resp: ModelResponse | CustomStreamWrapper | None = None
     try:
         extra_params = _build_litellm_extra_params(request)
-        stream_resp: ModelResponse | CustomStreamWrapper = await litellm.acompletion(
+        stream_resp = await litellm.acompletion(
             model=model_name,
             custom_llm_provider=custom_llm_provider,
             messages=messages,
@@ -406,6 +437,8 @@ async def send_request_stream(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=True,
+            shared_session=safe_session,
+            **({"client": safe_client} if safe_client is not None else {}),
             **extra_params,
         )
         if not isinstance(stream_resp, CustomStreamWrapper):
@@ -452,6 +485,8 @@ async def send_request_stream(
         _log_raw_response(e, request_id, stream=True)
         logger.exception("LLM upstream request failed: request_id=%s, stream=%s", request_id, True)
         raise
+    finally:
+        await safe_session.close()
 
 
 async def send_request_non_stream(
@@ -472,6 +507,7 @@ async def send_request_non_stream(
         _to_log_json(_request_payload_for_log(request, stream=False)),
     )
 
+    safe_session, safe_client = _build_secure_litellm_client(base_url, custom_llm_provider)
     try:
         extra_params = _build_litellm_extra_params(request)
         response: ModelResponse | CustomStreamWrapper = await litellm.acompletion(
@@ -486,6 +522,8 @@ async def send_request_non_stream(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=False,
+            shared_session=safe_session,
+            **({"client": safe_client} if safe_client is not None else {}),
             **extra_params,
         )
         if not isinstance(response, ModelResponse):
@@ -499,3 +537,5 @@ async def send_request_non_stream(
         _log_raw_response(e, request_id, stream=False)
         logger.exception("LLM upstream request failed: request_id=%s, stream=%s", request_id, False)
         raise
+    finally:
+        await safe_session.close()

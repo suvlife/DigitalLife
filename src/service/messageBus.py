@@ -76,7 +76,7 @@ def publish(topic: MessageBusTopic, **payload: Any) -> None:
     """
     msg = EventBusMessage(topic=topic, payload=payload)
     msg.event_id = _next_event_id()
-    logger.info(f"[messageBus] publish event_id={msg.event_id} topic={topic.name}, payload={payload}")
+    logger.debug("[messageBus] publish event_id=%s topic=%s keys=%s", msg.event_id, topic.name, sorted(payload.keys()))
     callbacks = list(_subscribers.get(topic, []))
 
     try:

@@ -113,7 +113,7 @@ class TestLlmServiceController(_ApiServiceCase):
         mock_svc = data["llm_services"][0]
         assert mock_svc["name"] == "mock"
         assert mock_svc["has_api_key"] is True
-        assert mock_svc["api_key"] == "mock-api-key"
+        assert mock_svc["api_key"] == ""
 
     async def test_create_llm_service(self):
         """新增服务并验证列表更新"""
@@ -123,7 +123,7 @@ class TestLlmServiceController(_ApiServiceCase):
 
             status, data = await self._create(client, {
                 "name": "test-new",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "test-key",
                 "type": "openai-compatible",
                 "model": "test-model",
@@ -143,7 +143,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             status, data = await self._create(client, {
                 "name": "mock",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "test-key",
                 "type": "openai-compatible",
                 "model": "test-model",
@@ -179,7 +179,7 @@ class TestLlmServiceController(_ApiServiceCase):
             # 先创建一个可修改的服务
             await self._create(client, {
                 "name": "to-modify",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "old-key",
                 "type": "openai-compatible",
                 "model": "old-model",
@@ -199,7 +199,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             await self._create(client, {
                 "name": "with-provider-params",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "old-key",
                 "type": "openai-compatible",
                 "model": "old-model",
@@ -227,7 +227,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             status, data = await self._create(client, {
                 "name": "bad-provider-params",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "test-key",
                 "type": "openai-compatible",
                 "model": "test-model",
@@ -250,7 +250,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             await self._create(client, {
                 "name": "to-delete",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "key",
                 "type": "openai-compatible",
                 "model": "model",
@@ -284,7 +284,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             await self._create(client, {
                 "name": "new-default",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "key",
                 "type": "openai-compatible",
                 "model": "model",
@@ -306,7 +306,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             await self._create(client, {
                 "name": "disabled-svc",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "key",
                 "type": "openai-compatible",
                 "model": "model",
@@ -338,7 +338,7 @@ class TestLlmServiceController(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             await self._create(client, {
                 "name": "toggle-svc",
-                "base_url": "http://127.0.0.1:19876/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "key",
                 "type": "openai-compatible",
                 "model": "model",
@@ -360,73 +360,30 @@ class TestLlmServiceController(_ApiServiceCase):
             after = await self._list(client)
             assert after["llm_services"][idx]["enable"] is True
 
-    async def test_connectivity_by_index(self):
-        """按序号测试已保存服务（使用 mock LLM）"""
+    async def test_connectivity_by_index_rejects_saved_private_url(self):
+        """已保存配置测试也必须执行 SSRF 校验。"""
         async with aiohttp.ClientSession() as client:
-            data = await self._test_connectivity(client, {
-                "mode": "saved",
-                "index": 0,
-            })
-            assert data["status"] == "ok"
-            assert "detail" in data
-            assert "duration_ms" in data["detail"]
-            assert data["detail"]["test_mode"] == "agent_probe_stream_with_tools"
+            async with client.post(
+                f"{self.backend_base_url}/config/llm_services/test.json",
+                json={"mode": "saved", "index": 0},
+            ) as resp:
+                data = await resp.json()
+        assert resp.status == 400
+        assert data["error_code"] == "unsafe_url"
 
-    async def test_connectivity_by_config(self):
-        """按临时配置测试（使用 mock LLM）"""
+    async def test_connectivity_by_config_rejects_private_url(self):
+        """临时配置测试拒绝回环地址。"""
         async with aiohttp.ClientSession() as client:
-            data = await self._test_connectivity(client, {
-                "mode": "temp",
-                "base_url": self._mock_api_url(),
-                "api_key": "mock-api-key",
-                "type": "openai-compatible",
-                "model": "mock-model",
-            })
-            assert data["status"] == "ok"
-            assert "detail" in data
-            assert data["detail"]["test_mode"] == "agent_probe_stream_with_tools"
-
-    async def test_connectivity_by_config_with_provider_params(self):
-        """临时可用性测试支持 provider_params 透传"""
-        async with aiohttp.ClientSession() as client:
-            data = await self._test_connectivity(client, {
-                "mode": "temp",
-                "base_url": self._mock_api_url(),
-                "api_key": "mock-api-key",
-                "type": "openai-compatible",
-                "model": "mock-model",
-                "provider_params": {
-                    "parallel_tool_calls": False,
+            async with client.post(
+                f"{self.backend_base_url}/config/llm_services/test.json",
+                json={
+                    "mode": "temp",
+                    "base_url": self._mock_api_url(),
+                    "api_key": "mock-api-key",
+                    "type": "openai-compatible",
+                    "model": "mock-model",
                 },
-            })
-            assert data["status"] == "ok"
-
-    async def test_connectivity_detects_responses_endpoint_mismatch(self):
-        """当 reasoning 触发 Responses API 且上游不支持时，测试接口应直接暴露失败"""
-        async with aiohttp.ClientSession() as client:
-            data = await self._test_connectivity(client, {
-                "mode": "temp",
-                "base_url": self._mock_api_url(),
-                "api_key": "mock-api-key",
-                "type": "openai-compatible",
-                "model": "azure_openai/gpt-5.4",
-                "provider_params": {
-                    "reasoning_effort": "high",
-                },
-            })
-            assert data["status"] == "error"
-            assert "404" in data["message"]
-
-    async def test_connectivity_failure(self):
-        """测试不可达服务返回错误详情"""
-        async with aiohttp.ClientSession() as client:
-            data = await self._test_connectivity(client, {
-                "mode": "temp",
-                "base_url": "http://127.0.0.1:1/v1",
-                "api_key": "bad-key",
-                "type": "openai-compatible",
-                "model": "nonexistent-model",
-            })
-            assert data["status"] == "error"
-            assert "detail" in data
-            assert "error_type" in data["detail"]
+            ) as resp:
+                data = await resp.json()
+        assert resp.status == 400
+        assert data["error_code"] == "unsafe_url"

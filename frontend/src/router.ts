@@ -3,7 +3,7 @@ import ConsolePage from './pages/ConsolePage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory('/v1/'),
   routes: [
     {
       path: '/',
@@ -29,6 +29,7 @@ const router = createRouter({
       name: 'settings',
       component: SettingsPage,
     },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 });
 

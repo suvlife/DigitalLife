@@ -14,8 +14,24 @@ class _RunOwnedHandler(BaseHandler):
             self.set_status(404)
             self.return_json({"error_code": "run_not_found", "error_desc": "运行实例不存在"})
             raise Finish()
-        await self._assert_team_owned(run.team_id)
-        return run
+        await self._assert_team_readable(run.team_id)
+
+        # Run 是用户级资源：公共团队可读不代表其中每个用户的运行实例
+        # 都可互相读取。管理员和旧全局 Bearer Token 保持兼容；历史上没有
+        # owner 的 Run 仍按团队可读规则处理。
+        from model.dbModel.gtUser import UserRole
+
+        user = self.get_current_user()
+        if user is not None and user.role == UserRole.ADMIN:
+            return run
+        if user is None and self._is_authed():
+            return run
+        if run.owner_user_id is None or (user is not None and run.owner_user_id == user.id):
+            return run
+
+        self.set_status(403)
+        self.return_json({"error_code": "forbidden", "error_desc": "无权访问该运行实例"})
+        raise Finish()
 
 
 class CurrentRunHandler(BaseHandler):

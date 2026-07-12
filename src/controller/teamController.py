@@ -164,7 +164,7 @@ class TeamDetailHandler(BaseHandler):
 
     async def get(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
-        await self._assert_team_owned(team_id)
+        await self._assert_team_readable(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
 
@@ -181,6 +181,32 @@ class TeamDetailHandler(BaseHandler):
             }
             for agent in agents
         ]
+        # The API owns the choice of the team entry room.  Clients must not
+        # guess from localized names, tags, or member counts.  Administrators
+        # may pin it in team config; legacy teams receive a stable ID-ordered
+        # choice preferring operator-enabled, non-department group rooms.
+        configured_question_room_id = (team.config or {}).get("question_room_id")
+        group_rooms = [room for room in rooms if room.type == RoomType.GROUP]
+        valid_group_ids = {room.id for room in group_rooms}
+        question_room_id = (
+            int(configured_question_room_id)
+            if configured_question_room_id is not None
+            and str(configured_question_room_id).isdigit()
+            and int(configured_question_room_id) in valid_group_ids
+            else None
+        )
+        if question_room_id is None:
+            candidates = [
+                room for room in group_rooms
+                if SpecialAgent.OPERATOR.value in (room.agent_ids or [])
+                and "DEPT" not in (room.tags or [])
+            ]
+            if not candidates:
+                candidates = [room for room in group_rooms if "DEPT" not in (room.tags or [])]
+            if not candidates:
+                candidates = group_rooms
+            question_room_id = min((room.id for room in candidates), default=None)
+
         room_items = []
         for room in rooms:
             agent_ids = list(room.agent_ids or [])
@@ -221,6 +247,7 @@ class TeamDetailHandler(BaseHandler):
                 "updated_at": team.updated_at,
                 "agents": agents_data,
                 "rooms": room_items,
+                "question_room_id": question_room_id,
             }
         )
 
@@ -229,7 +256,9 @@ class TeamPresetExportHandler(BaseHandler):
     """GET /teams/{id}/export_preset.json - 导出单个 Team 为 preset JSON。"""
 
     async def get(self, team_id_str: str) -> None:
-        self.return_json(await exportService.export_team_preset(int(team_id_str)))
+        team_id = int(team_id_str)
+        await self._assert_team_readable(team_id)
+        self.return_json(await exportService.export_team_preset(team_id))
 
 
 class TeamModifyHandler(BaseHandler):
@@ -308,7 +337,9 @@ class TeamSetEnabledHandler(BaseHandler):
 
     async def post(self, team_id_str: str) -> None:
         body = self.parse_request(SetEnabledRequest)
-        await teamService.set_team_enabled(int(team_id_str), body.enabled)
+        team_id = int(team_id_str)
+        await self._assert_team_writable(team_id)
+        await teamService.set_team_enabled(team_id, body.enabled)
 
         self.return_json({"status": "ok", "enabled": body.enabled})
 

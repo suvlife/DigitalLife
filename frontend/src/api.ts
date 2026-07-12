@@ -1275,12 +1275,46 @@ export async function uploadFile(
   }
 }
 
-export function downloadFileUrl(path: string): string {
-  return makeUrl(withSearch('/files/download.json', { path }));
+export function downloadFileUrl(path: string, teamId: number): string {
+  return makeUrl(withSearch('/files/download.json', { path, team_id: teamId }));
 }
 
-export async function previewFile(path: string): Promise<FilePreviewInfo> {
-  return requestJson<FilePreviewInfo>(withSearch('/files/preview.json', { path }));
+function downloadFilename(response: Response, fallbackPath: string): string {
+  const value = response.headers.get('Content-Disposition') || '';
+  const utf8 = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8) {
+    try { return decodeURIComponent(utf8[1]); } catch { /* use fallback */ }
+  }
+  const plain = value.match(/filename="?([^";]+)"?/i);
+  return plain?.[1] || fallbackPath.split('/').pop() || 'download';
+}
+
+async function fetchFileBlob(path: string, teamId: number): Promise<{ response: Response; blob: Blob }> {
+  const response = await fetch(downloadFileUrl(path, teamId), { credentials: 'include', headers: buildAuthHeaders() });
+  if (!response.ok) {
+    let detail = `Download failed (${response.status})`;
+    try { const body = await response.json() as { error_desc?: unknown; message?: unknown }; detail = String(body.error_desc ?? body.message ?? detail); } catch { /* keep status */ }
+    if (response.status === 401) showTokenDialog.value = true;
+    throw new Error(detail);
+  }
+  return { response, blob: await response.blob() };
+}
+
+export async function filePreviewObjectUrl(path: string, teamId: number): Promise<string> {
+  const { blob } = await fetchFileBlob(path, teamId);
+  return URL.createObjectURL(blob);
+}
+
+export async function downloadFile(path: string, teamId: number): Promise<void> {
+  const { response, blob } = await fetchFileBlob(path, teamId);
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl; anchor.download = downloadFilename(response, path); anchor.style.display = 'none';
+  document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(objectUrl);
+}
+
+export async function previewFile(path: string, teamId: number): Promise<FilePreviewInfo> {
+  return requestJson<FilePreviewInfo>(withSearch('/files/preview.json', { path, team_id: teamId }));
 }
 
 // ─── Auth API ─────────────────────────────────────────────
