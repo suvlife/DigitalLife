@@ -297,11 +297,24 @@ async def batch_save_agents(team_id: int, agents: list[GtAgent]) -> None:
                 to_create = []
                 to_update = []
 
+                # Existing rows already own a stable employee number.  New
+                # rows must be assigned numbers that cannot collide with
+                # special/legacy rows whose number may be 0.
+                used_numbers = {
+                    agent.employee_number
+                    for agent in await get_team_all_agents(team_id)
+                    if agent.employee_number is not None
+                }
+                next_num = max(next_num, 1)
+
                 for agent in agents:
                     if agent.id is not None:
                         to_update.append(agent)
                     else:
+                        while next_num in used_numbers:
+                            next_num += 1
                         agent.employee_number = next_num
+                        used_numbers.add(next_num)
                         to_create.append(agent)
                         next_num += 1
 

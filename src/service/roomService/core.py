@@ -441,7 +441,9 @@ async def create_room(
     team = await gtTeamManager.get_team_by_id(team_id)
     assert team is not None, f"Team ID '{team_id}' not found"
 
-    # 同名检查 + 落库在事务中执行，防止并发创建同名房间（TOCTOU）
+    # 同名检查 + 落库在事务中执行，防止并发创建同名房间（TOCTOU）。
+    # ``load_and_activate_room`` 等运行时操作必须在事务提交后进行，
+    # 否则它们可能通过另一条连接读取不到未提交的房间，造成 500。
     async with atomic_transaction():
         existing_rooms = await gtRoomManager.get_rooms_by_team(team_id)
         if any(r.name == name for r in existing_rooms):
@@ -476,7 +478,8 @@ async def create_room(
         )
         saved = await gtRoomManager.save_room(new_room)
 
-    # 将新房间加载到内存并通知前端（不触发全量 team reload）
+    # 将新房间加载到内存并通知前端（不触发全量 team reload）。
+    # 这一段必须位于事务之外，确保独立连接能看到已提交的数据。
     await load_and_activate_room(saved.id)
     messageBus.publish(MessageBusTopic.ROOM_ADDED, gt_room=saved, team_id=team_id)
 
