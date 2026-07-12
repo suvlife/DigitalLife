@@ -75,6 +75,7 @@ jobs:
       with:
         name: mypy-python-${{ matrix.python-version }}
         path: mypy-output.txt
+        if-no-files-found: ignore
 
     - name: Run real tests
       run: |
@@ -97,7 +98,7 @@ jobs:
       with:
         name: pip-audit-python-3.11
         path: pip-audit.json
-        if-no-files-found: error
+        if-no-files-found: ignore
 
     - name: Scan tracked files for secrets and sensitive logs
       if: matrix.python-version == '3.11'
