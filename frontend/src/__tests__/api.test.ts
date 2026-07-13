@@ -5,7 +5,7 @@ import {
   showTokenDialog,
 } from '../appUiState';
 import { clearToken, setToken } from '../authStore';
-import { getAgentActivities, getAgentActivitiesPage, getSystemStatus, getTeamPresetExport, getTeamTasks, getTeams } from '../api';
+import { deleteTeam, getAgentActivities, getAgentActivitiesPage, getSystemStatus, getTeamPresetExport, getTeamTasks, getTeams } from '../api';
 
 describe('api request handling', () => {
   beforeEach(() => {
@@ -283,5 +283,44 @@ describe('authenticated file downloads', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error_desc: '登录后才能下载' }), { status: 401, headers: { 'Content-Type': 'application/json' } })));
     await expect(downloadFile('outputs/report.pdf', 4)).rejects.toThrow('登录后才能下载');
     expect(showTokenDialog.value).toBe(true);
+  });
+});
+
+describe('XSRF token header', () => {
+  beforeEach(() => {
+    document.cookie = '_xsrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    vi.restoreAllMocks();
+  });
+
+  it('sends X-Xsrftoken on POST requests when _xsrf cookie is present', async () => {
+    document.cookie = '_xsrf=xsrf-v1-token';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'ok' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await deleteTeam(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['X-Xsrftoken']).toBe('xsrf-v1-token');
+  });
+
+  it('does not send X-Xsrftoken on GET requests', async () => {
+    document.cookie = '_xsrf=xsrf-v1-token';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ teams: [] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getTeams();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['X-Xsrftoken']).toBeUndefined();
+  });
+
+  it('omits X-Xsrftoken when no _xsrf cookie is set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'ok' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await deleteTeam(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['X-Xsrftoken']).toBeUndefined();
   });
 });

@@ -5,6 +5,8 @@ import tornado.web
 
 from controller import roleTemplateController, agentController, roomController, wsController, teamController, deptController, configController, activityController, settingController, systemController, initController, superviseController, usageController, fileController, authController, runController
 
+from controller.baseController import set_security_headers
+
 import sys as _sys
 if getattr(_sys, "frozen", False):
     _FRONTEND_DIST = os.path.join(_sys._MEIPASS, "assets/frontend")
@@ -16,6 +18,9 @@ else:
 
 class _SPAHandler(tornado.web.StaticFileHandler):
     """Vue SPA fallback：文件不存在时回退到 index.html。"""
+
+    def set_default_headers(self) -> None:
+        set_security_headers(self)
 
     @staticmethod
     def _is_shell_path(path: str) -> bool:
@@ -49,6 +54,9 @@ class _SPAHandler(tornado.web.StaticFileHandler):
 class _V2CompatibilityRedirectHandler(tornado.web.RequestHandler):
     """兼容旧 /v2 链接，永久跳转到默认 V2 根路径。"""
 
+    def set_default_headers(self) -> None:
+        set_security_headers(self)
+
     def get(self, path: str = "") -> None:
         target = "/" + path.lstrip("/")
         if self.request.query:
@@ -63,6 +71,7 @@ tornado_settings = {
     'websocket_ping_interval': 30,
     'websocket_ping_timeout': 30,
     # Cookie 安全
+    'xsrf_cookies': True,  # 启用 XSRF 防护（BaseHandler.check_xsrf_cookie 按需豁免）
     'cookie_secret': __import__('secrets').token_hex(32),
 }
 

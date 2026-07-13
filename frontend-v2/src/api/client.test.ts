@@ -191,3 +191,26 @@ describe('authenticated file downloads', () => {
     expect(auth.state.required).toBe(true);
   });
 });
+
+describe('XSRF token header', () => {
+  it('sends X-Xsrftoken on POST requests when _xsrf cookie is present', async () => {
+    document.cookie = '_xsrf=xsrf-test-token';
+    const fetchMock = mockJson({ status: 'ok' });
+    await api.deleteTeam(1);
+    expect(new Headers(requestAt(fetchMock).init.headers).get('X-Xsrftoken')).toBe('xsrf-test-token');
+  });
+
+  it('does not send X-Xsrftoken on GET requests', async () => {
+    document.cookie = '_xsrf=xsrf-test-token';
+    const fetchMock = mockJson({ initialized: true });
+    await api.getSystemStatus();
+    expect(new Headers(requestAt(fetchMock).init.headers).get('X-Xsrftoken')).toBeNull();
+  });
+
+  it('omits X-Xsrftoken when no _xsrf cookie is set', async () => {
+    document.cookie = '_xsrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    const fetchMock = mockJson({ status: 'ok' });
+    await api.deleteTeam(1);
+    expect(new Headers(requestAt(fetchMock).init.headers).get('X-Xsrftoken')).toBeNull();
+  });
+});

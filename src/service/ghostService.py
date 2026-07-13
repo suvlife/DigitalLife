@@ -261,6 +261,7 @@ async def publish_post(
     admin_api_key: str,
     status: str = "published",
     slug: str | None = None,
+    skip_ssl_verify: bool = False,
 ) -> dict[str, Any]:
     """Create or converge one Ghost post using a stable slug.
 
@@ -299,7 +300,7 @@ async def publish_post(
             lookup_endpoint = f"{base_url}/ghost/api/admin/posts/?{query}"
             response = await safeHttpUtil.request(
                 "GET", lookup_endpoint, headers=headers, timeout=_GHOST_API_TIMEOUT,
-                field_name="Ghost API URL",
+                field_name="Ghost API URL", ssl=False if skip_ssl_verify else None,
             )
             text = response.text
             if response.status == 200:
@@ -336,7 +337,7 @@ async def publish_post(
 
         response = await safeHttpUtil.request(
             method, endpoint, headers=headers, json_body=payload, timeout=_GHOST_API_TIMEOUT,
-            field_name="Ghost API URL",
+            field_name="Ghost API URL", ssl=False if skip_ssl_verify else None,
         )
         response_text = response.text
         if response.status in {200, 201}:
@@ -464,6 +465,7 @@ async def _process_publication(row: Any) -> None:
         admin_api_key=ghost.admin_api_key,
         status=ghost.publish_status,
         slug=slug,
+        skip_ssl_verify=ghost.skip_ssl_verify,
     )
     if result.get("success"):
         post_id = result.get("post_id")
@@ -572,7 +574,7 @@ async def shutdown() -> None:
             pass
 
 
-async def test_ghost_connection(api_url: str, admin_api_key: str) -> dict[str, Any]:
+async def test_ghost_connection(api_url: str, admin_api_key: str, *, skip_ssl_verify: bool = False) -> dict[str, Any]:
     """Test server-side Admin API authentication without publishing content."""
     if not api_url or not admin_api_key:
         return {"success": False, "message": "请填写 Ghost API URL 和 Admin API Key"}
@@ -586,12 +588,16 @@ async def test_ghost_connection(api_url: str, admin_api_key: str) -> dict[str, A
     try:
         response = await safeHttpUtil.request(
             "GET", endpoint, headers=headers, timeout=_GHOST_API_TIMEOUT,
-            field_name="Ghost API URL",
+            field_name="Ghost API URL", ssl=False if skip_ssl_verify else None,
         )
         if response.status == 200:
             data = response.json()
             site = data.get("site", {})
             return {"success": True, "message": "连接成功", "site_title": site.get("title", "")}
         return {"success": False, "message": f"连接失败：HTTP {response.status}"}
+    except aiohttp.ClientConnectorCertificateError as exc:
+        cert_err = getattr(exc, "certificate_error", None)
+        detail = getattr(cert_err, "verify_message", "") or str(cert_err) or str(exc)
+        return {"success": False, "message": f"SSL 证书验证失败：{detail}。请检查 Ghost 地址的 HTTPS 证书是否有效且证书链完整。"}
     except (aiohttp.ClientError, asyncio.TimeoutError, safeHttpUtil.UnsafeUrlError) as exc:
         return {"success": False, "message": f"连接异常：{type(exc).__name__}"}

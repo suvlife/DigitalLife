@@ -231,6 +231,11 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (token && !isAuthExemptPath(path)) {
     (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
   }
+  const xsrfMethod = (init?.method || 'GET').toUpperCase();
+  if (xsrfMethod !== 'GET') {
+    const xsrf = getXsrfToken();
+    if (xsrf) (headers as Record<string, string>)['X-Xsrftoken'] = xsrf;
+  }
 
   try {
     const response = await fetch(requestUrl, {
@@ -1190,6 +1195,11 @@ export interface FilePreviewInfo {
   url?: string;
 }
 
+function getXsrfToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)_xsrf=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function buildAuthHeaders(): HeadersInit {
   const token = getToken();
   const headers: HeadersInit = {};
@@ -1213,10 +1223,14 @@ export async function uploadFile(
   const displayUrl = makeDisplayUrl(`/rooms/${roomId}/messages/upload.json`);
   const requestUrl = makeUrl(`/rooms/${roomId}/messages/upload.json`);
 
+  const uploadHeaders = buildAuthHeaders();
+  const xsrf = getXsrfToken();
+  if (xsrf) (uploadHeaders as Record<string, string>)['X-Xsrftoken'] = xsrf;
+
   try {
     const response = await fetch(requestUrl, {
       method: 'POST',
-      headers: buildAuthHeaders(),
+      headers: uploadHeaders,
       body: formData,
     });
 
@@ -1356,4 +1370,3 @@ export async function register(username: string, password: string, display_name?
     body: JSON.stringify({ username, password, display_name }),
   });
 }
-

@@ -6,7 +6,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 from constants import LlmServiceType
 from controller.baseController import BaseHandler
 from service import schedulerService
-from util import configUtil
+from util import configUtil, safeHttpUtil
 from util.configTypes import LlmServiceConfig
 
 logger = logging.getLogger(__name__)
@@ -48,14 +48,26 @@ class QuickInitRequest(BaseModel):
 
 
 class QuickInitHandler(BaseHandler):
-    """POST /config/quick_init.json — 快速初始化保存配置。"""
+    """POST /config/quick_init.json - 快速初始化保存配置。"""
 
     async def post(self):
+        # 鉴权：未启用多用户鉴权时（初始部署）允许访问；启用后仅管理员可操作
+        self._assert_admin()
         try:
             req = self.parse_request(QuickInitRequest)
         except (ValidationError, Exception) as e:
             self.return_with_error(
                 error_code="validation_error",
+                error_desc=str(e),
+            )
+            return
+
+        # SSRF 防护：校验 base_url 不指向内网/回环/元数据端点
+        try:
+            safeHttpUtil.assert_safe_http_url(req.base_url, field_name="base_url")
+        except safeHttpUtil.UnsafeUrlError as e:
+            self.return_with_error(
+                error_code="unsafe_url",
                 error_desc=str(e),
             )
             return

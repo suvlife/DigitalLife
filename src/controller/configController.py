@@ -2,7 +2,7 @@ import os
 from constants import DriverType
 from controller.baseController import BaseHandler
 from service import llmProviderService
-from util import configUtil, assertUtil
+from util import configUtil, assertUtil, safeHttpUtil
 import appPaths
 
 
@@ -98,6 +98,16 @@ class LlmServiceFromProviderHandler(BaseHandler):
         except ValidationError as e:
             self.return_with_error(
                 error_code="validation_error",
+                error_desc=str(e),
+            )
+            return
+
+        # SSRF 防护：校验 base_url 不指向内网/回环/元数据端点
+        try:
+            safeHttpUtil.assert_safe_http_url(new_service.base_url, field_name="base_url")
+        except safeHttpUtil.UnsafeUrlError as e:
+            self.return_with_error(
+                error_code="unsafe_url",
                 error_desc=str(e),
             )
             return

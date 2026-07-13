@@ -16,6 +16,34 @@ from util import jsonUtil, configUtil
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
+_CSP_HEADER = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self' ws: wss:; "
+    "frame-ancestors 'none'; "
+    "object-src 'none'; "
+    "base-uri 'self'"
+)
+
+
+def set_security_headers(handler: tornado.web.RequestHandler) -> None:
+    """为任意 RequestHandler 设置统一安全响应头。"""
+    handler.set_header("X-Content-Type-Options", "nosniff")
+    handler.set_header("X-Frame-Options", "DENY")
+    handler.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+    handler.set_header("Content-Security-Policy", _CSP_HEADER)
+    if handler.request.protocol == "https":
+        handler.set_header(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    # 确保每个响应都携带 _xsrf Cookie，供前端读取后在 POST 请求中回传
+    if handler.application.settings.get("xsrf_cookies"):
+        _ = handler.xsrf_token
+
 # 简易内存速率限制器：按 IP + 路径 维护滑动窗口
 # _rate_limit_store: dict[(ip, path), list[float]] -> 最近请求时间戳列表
 _rate_limit_store: dict[tuple[str, str], list[float]] = {}
@@ -70,9 +98,24 @@ class BaseHandler(tornado.web.RequestHandler):
 
     # 安全头（所有响应自动携带）
     def set_default_headers(self) -> None:
-        self.set_header("X-Content-Type-Options", "nosniff")
-        self.set_header("X-Frame-Options", "DENY")
-        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        set_security_headers(self)
+
+    def check_xsrf_cookie(self) -> None:
+        """XSRF 检查：仅对 Cookie 会话鉴权生效。
+
+        - 鉴权未启用时无 Cookie，跳过（无 CSRF 风险）
+        - 登录/注册端点豁免（首次 POST，尚未获取 _xsrf Cookie）
+        - Bearer Token 请求不依赖 Cookie，不受 CSRF 攻击影响
+        - 其余 Cookie 会话请求强制校验 XSRF Token
+        """
+        if not configUtil.get_app_config().setting.auth.enabled:
+            return
+        if self.request.path in {"/auth/login.json", "/auth/register.json"}:
+            return
+        auth_header = self.request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return
+        super().check_xsrf_cookie()
 
     _READONLY_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
     _AUTH_EXEMPT_PATHS = {

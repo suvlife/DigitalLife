@@ -516,6 +516,8 @@ def _apply_ghost_config_patch(ghost: GhostConfig, body: dict[str, object]) -> No
         if status not in {"published", "draft"}:
             raise assertUtil.TogoException("publish_status 必须为 published 或 draft")
         ghost.publish_status = status
+    if "skip_ssl_verify" in body:
+        ghost.skip_ssl_verify = bool(body["skip_ssl_verify"])
 
 
 class GhostConfigHandler(BaseHandler):
@@ -534,6 +536,7 @@ class GhostConfigHandler(BaseHandler):
             "has_admin_key": bool(ghost.admin_api_key),
             "has_content_key": bool(ghost.content_api_key),
             "has_key": bool(ghost.admin_api_key),  # 兼容旧前端
+            "skip_ssl_verify": ghost.skip_ssl_verify,
             "is_builtin": False,
         })
 
@@ -571,5 +574,6 @@ class GhostTestHandler(BaseHandler):
             admin_api_key = admin_api_key or ghost.admin_api_key
 
         _assert_safe_service_url(api_url, field_name="Ghost API URL")
-        result = await ghostService.test_ghost_connection(api_url, admin_api_key)
+        skip_ssl_verify = bool(body.get("skip_ssl_verify", _get_setting().ghost.skip_ssl_verify))
+        result = await ghostService.test_ghost_connection(api_url, admin_api_key, skip_ssl_verify=skip_ssl_verify)
         self.return_json(result)

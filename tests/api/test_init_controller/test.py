@@ -82,7 +82,7 @@ class TestQuickInit(_ApiServiceCase):
         """快速初始化成功保存配置。"""
         async with aiohttp.ClientSession() as client:
             status_code, data = await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-test-key-123",
                 "model": "test-model",
             })
@@ -98,7 +98,7 @@ class TestQuickInit(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             # 执行初始化
             await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-test-key-456",
                 "model": "test-model-2",
             })
@@ -111,7 +111,7 @@ class TestQuickInit(_ApiServiceCase):
         assert "default" in names
 
         default_svc = next(s for s in services if s["name"] == "default")
-        assert default_svc["base_url"] == "https://api.example.com/v1"
+        assert default_svc["base_url"] == "https://93.184.216.34/v1"
         assert default_svc["model"] == "test-model-2"
         assert default_svc["type"] == "openai-compatible"
         assert default_svc["enable"] is True
@@ -120,7 +120,7 @@ class TestQuickInit(_ApiServiceCase):
         """快速初始化支持保存 provider_params。"""
         async with aiohttp.ClientSession() as client:
             await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-test-key-provider",
                 "model": "test-model-provider",
                 "provider_params": {
@@ -139,7 +139,7 @@ class TestQuickInit(_ApiServiceCase):
         """快速初始化后 default_llm_server 设为 'default'。"""
         async with aiohttp.ClientSession() as client:
             await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-test-key-789",
                 "model": "test-model-3",
             })
@@ -153,7 +153,7 @@ class TestQuickInit(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             # 执行初始化
             await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-init-test",
                 "model": "init-model",
             })
@@ -193,7 +193,7 @@ class TestQuickInit(_ApiServiceCase):
         """空 API Key 返回 400。"""
         async with aiohttp.ClientSession() as client:
             status_code, data = await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "",
                 "model": "model",
             }, expect_ok=False)
@@ -205,7 +205,7 @@ class TestQuickInit(_ApiServiceCase):
         """空模型名称返回 400。"""
         async with aiohttp.ClientSession() as client:
             status_code, data = await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-test",
                 "model": "",
             }, expect_ok=False)
@@ -218,7 +218,7 @@ class TestQuickInit(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             # 缺少 model
             status_code, data = await self._quick_init(client, {
-                "base_url": "https://api.example.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-test",
             }, expect_ok=False)
 
@@ -230,14 +230,14 @@ class TestQuickInit(_ApiServiceCase):
         async with aiohttp.ClientSession() as client:
             # 第一次初始化
             await self._quick_init(client, {
-                "base_url": "https://api.first.com/v1",
+                "base_url": "https://93.184.216.34/v1",
                 "api_key": "sk-first",
                 "model": "first-model",
             })
 
             # 第二次初始化（覆盖）
             await self._quick_init(client, {
-                "base_url": "https://api.second.com/v1",
+                "base_url": "https://93.184.216.34/v2",
                 "api_key": "sk-second",
                 "model": "second-model",
             })
@@ -247,5 +247,17 @@ class TestQuickInit(_ApiServiceCase):
         # 应只有一个 default 服务
         defaults = [s for s in list_data["llm_services"] if s["name"] == "default"]
         assert len(defaults) == 1
-        assert defaults[0]["base_url"] == "https://api.second.com/v1"
+        assert defaults[0]["base_url"] == "https://93.184.216.34/v2"
         assert defaults[0]["model"] == "second-model"
+
+    async def test_quick_init_rejects_private_url(self):
+        """SSRF 防护：回环地址 base_url 应被拦截，返回 unsafe_url。"""
+        async with aiohttp.ClientSession() as client:
+            status_code, data = await self._quick_init(client, {
+                "base_url": "http://127.0.0.1:9999/v1",
+                "api_key": "sk-test",
+                "model": "model",
+            }, expect_ok=False)
+
+        assert status_code == 400
+        assert data["error_code"] == "unsafe_url"

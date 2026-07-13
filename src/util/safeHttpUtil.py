@@ -185,6 +185,7 @@ async def request(
     timeout: aiohttp.ClientTimeout | float | None = None,
     max_redirects: int = 5,
     field_name: str = "URL",
+    ssl: Any = None,
 ) -> SafeHttpResponse:
     """Perform a request with DNS pinning and manually validated redirects."""
     current_url = url.strip()
@@ -212,6 +213,7 @@ async def request(
                 json=current_json,
                 data=current_data,
                 allow_redirects=False,
+                ssl=ssl,
             ) as response:
                 body = await response.read()
                 response_headers = dict(response.headers)

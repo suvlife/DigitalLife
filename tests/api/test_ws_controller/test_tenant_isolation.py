@@ -150,8 +150,21 @@ class TestWsTenantIsolationApi(ServiceTestCase):
             jar.update_cookies({"dl_session": cookie}, response_url=URL(self.backend_base_url))
             return aiohttp.ClientSession(cookie_jar=jar)
 
+        async def _xsrf_headers(client: aiohttp.ClientSession) -> dict:
+            cookies = client.cookie_jar.filter_cookies(URL(self.backend_base_url))
+            xsrf = cookies.get("_xsrf")
+            if xsrf is None:
+                async with client.get(f"{self.backend_base_url}/system/status.json"):
+                    pass
+                cookies = client.cookie_jar.filter_cookies(URL(self.backend_base_url))
+                xsrf = cookies.get("_xsrf")
+            return {"X-Xsrftoken": xsrf.value} if xsrf else {}
+
         async def clear_team(client: aiohttp.ClientSession, team_id: int) -> None:
-            async with client.post(f"{self.backend_base_url}/teams/{team_id}/clear_data.json") as resp:
+            headers = await _xsrf_headers(client)
+            async with client.post(
+                f"{self.backend_base_url}/teams/{team_id}/clear_data.json", headers=headers
+            ) as resp:
                 assert resp.status == 200, await resp.text()
 
         async def receive_reload(ws: aiohttp.ClientWebSocketResponse) -> dict:

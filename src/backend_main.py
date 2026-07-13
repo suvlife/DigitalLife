@@ -163,6 +163,24 @@ async def main(config_dir: str = None, port: int | None = None):
             "局域网/公网任何人均可访问全部 API。请尽快在 setting.json 中启用 auth 并设置 token，"
             "或将 bind_host 改为 127.0.0.1。", bind_host,
         )
+        _SECURITY_BANNER = (
+            "\n"
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║  ⚠  安全警告：鉴权未启用但监听非回环地址                       ║\n"
+            f"║  监听地址: {bind_host}:{bind_port:<44} ║\n"
+            "║  局域网/公网任何人均可访问全部 API，包括配置 LLM Key、         ║\n"
+            "║  读取团队数据、触发 Agent 任务。                              ║\n"
+            "║                                                              ║\n"
+            "║  请采取以下措施之一：                                         ║\n"
+            "║  1. 在 setting.json 中启用 auth.enabled 并设置 token         ║\n"
+            "║  2. 将 bind_host 改为 127.0.0.1（仅本机访问）                ║\n"
+            "║  3. 在前置反向代理（Nginx 等）层启用鉴权                     ║\n"
+            "╚══════════════════════════════════════════════════════════════╝\n"
+        )
+        print(_SECURITY_BANNER, file=sys.stderr, flush=True)
+        logger.warning(_SECURITY_BANNER.strip())
+        # 给用户时间看到警告
+        await asyncio.sleep(5)
 
     # ── 阶段 1：基础启动 ──────────────────────────────────────────────────────
     logger.info("[启动] 阶段 1/4：基础 service 启动")

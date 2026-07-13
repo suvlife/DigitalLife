@@ -3,6 +3,7 @@ import { localized, masterName } from '../domain/presentation';
 import { getToken, requireAuthentication } from './auth';
 const BASE=(import.meta.env.VITE_API_BASE_URL||'').replace(/\/$/,'');
 const fileBase=()=>BASE || '';
+function getXsrfToken():string|null{const m=document.cookie.match(/(?:^|;\s*)_xsrf=([^;]+)/);return m?decodeURIComponent(m[1]):null;}
 export function fileDownloadUrl(path:string,teamId:number):string{return `${fileBase()}/files/download.json?team_id=${encodeURIComponent(teamId)}&path=${encodeURIComponent(path)}`;}
 function downloadName(response:Response,fallback:string):string{
  const value=response.headers.get('Content-Disposition')||'';
@@ -22,6 +23,7 @@ export class ApiError extends Error { constructor(message:string, public readonl
 async function json<T>(path:string, init:RequestInit={}):Promise<T>{
  const token=getToken(); const headers=new Headers(init.headers);
  if(!headers.has('Content-Type')) headers.set('Content-Type','application/json'); if(token&&!headers.has('Authorization')) headers.set('Authorization',`Bearer ${token}`);
+ const method=(init.method||'GET').toUpperCase(); if(method!=='GET'){const xsrf=getXsrfToken(); if(xsrf&&!headers.has('X-Xsrftoken')) headers.set('X-Xsrftoken',xsrf);}
  const response=await fetch(url(path),{credentials:'include',...init,headers});
  if(!response.ok){let message=`请求失败 (${response.status})`;try{const body=await response.json();message=body.error_desc||body.message||message;}catch{}if(response.status===401)requireAuthentication(message);throw new ApiError(message,response.status);} return response.json() as Promise<T>;
 }
@@ -51,10 +53,10 @@ export interface AgentClearResult{status:string;agent_id:number;deleted:{histori
 export interface RoleTemplate{id:number;name:string;i18n:I18n;soul:string;type:string|null;}
 export interface RoleTemplatePayload{name:string;soul:string;}
 
-export interface GhostConfig{enabled:boolean;api_url:string;admin_api_key:string;content_api_key:string;auto_publish:boolean;publish_status:'published'|'draft';has_admin_key:boolean;has_content_key:boolean;has_key?:boolean;is_builtin?:boolean;}
-export interface GhostConfigPatch{enabled?:boolean;api_url?:string;admin_api_key?:string;content_api_key?:string;clear_admin_api_key?:boolean;clear_content_api_key?:boolean;auto_publish?:boolean;publish_status?:'published'|'draft';}
+export interface GhostConfig{enabled:boolean;api_url:string;admin_api_key:string;content_api_key:string;auto_publish:boolean;publish_status:'published'|'draft';has_admin_key:boolean;has_content_key:boolean;skip_ssl_verify:boolean;has_key?:boolean;is_builtin?:boolean;}
+export interface GhostConfigPatch{enabled?:boolean;api_url?:string;admin_api_key?:string;content_api_key?:string;clear_admin_api_key?:boolean;clear_content_api_key?:boolean;auto_publish?:boolean;publish_status?:'published'|'draft';skip_ssl_verify?:boolean;}
 export interface GhostSaveResult{success:boolean;has_admin_key:boolean;has_content_key:boolean;}
-export interface GhostTestPayload{api_url?:string;admin_api_key?:string;}
+export interface GhostTestPayload{api_url?:string;admin_api_key?:string;skip_ssl_verify?:boolean;}
 export interface GhostTestResult{success:boolean;message:string;site_title?:string;}
 
 export interface SystemStatus{initialized:boolean;language?:string;version?:string;auth_enabled?:boolean;default_llm_server?:string;message?:string;schedule_state?:string;not_running_reason?:string;demo_mode?:boolean;freeze_data?:boolean;read_only?:boolean;hide_sensitive_info?:boolean;development_mode?:boolean;auto_check_update?:boolean;}
@@ -137,5 +139,5 @@ function normalizedRunPhase(raw:unknown):RunPhase{const value=String(raw||'queue
 export function normalizeRunArchiveEntry(x:any):RunArchiveEntry{return{id:String(x.id),teamId:Number(x.team_id??x.teamId),title:String(x.title||''),question:String((x.query??x.question)||''),phase:normalizedRunPhase(x.status??x.phase),progress:Math.max(0,Math.min(100,Number(x.progress_percent??x.progress??0)||0)),publication:{status:normalizePublicationStatus(x.blog_publish_status??x.publication?.status),url:x.blog_post_url??x.publication?.url??undefined,error:x.metadata?.blog_publish_error??x.publication?.error??undefined},createdAt:x.created_at??x.createdAt,updatedAt:x.updated_at??x.updatedAt,startedAt:x.started_at??x.startedAt,finishedAt:x.finished_at??x.finishedAt};}
 export async function getRuns(teamId:number,limit=200):Promise<RunArchiveEntry[]>{const d=await json<{runs?:any[]}>(`/runs/list.json?team_id=${teamId}&limit=${Math.max(1,Math.min(200,Math.trunc(limit)))}`);return(d.runs||[]).map(normalizeRunArchiveEntry);}
 
-export async function uploadFile(roomId:number,file:File,message=''):Promise<{filename:string;saved_path:string;size:number}>{const form=new FormData();form.append('file',file);if(message)form.append('message',message);const token=getToken();const headers=new Headers();if(token)headers.set('Authorization',`Bearer ${token}`);const response=await fetch(url(`/rooms/${roomId}/messages/upload.json`),{method:'POST',headers,body:form,credentials:'include'});let body:any={};try{body=await response.json();}catch{}if(!response.ok){const detail=body.error_desc||`卷宗上传失败 (${response.status})`;if(response.status===401)requireAuthentication(detail);throw new ApiError(detail,response.status);}return body;}
+export async function uploadFile(roomId:number,file:File,message=''):Promise<{filename:string;saved_path:string;size:number}>{const form=new FormData();form.append('file',file);if(message)form.append('message',message);const token=getToken();const headers=new Headers();if(token)headers.set('Authorization',`Bearer ${token}`);const xsrf=getXsrfToken();if(xsrf)headers.set('X-Xsrftoken',xsrf);const response=await fetch(url(`/rooms/${roomId}/messages/upload.json`),{method:'POST',headers,body:form,credentials:'include'});let body:any={};try{body=await response.json();}catch{}if(!response.ok){const detail=body.error_desc||`卷宗上传失败 (${response.status})`;if(response.status===401)requireAuthentication(detail);throw new ApiError(detail,response.status);}return body;}
 export function wsUrl():string{if(BASE){const u=new URL(BASE);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname='/ws/events.json';u.search='';return u.toString();}return `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws/events.json`;}

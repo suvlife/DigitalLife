@@ -184,6 +184,7 @@ class GhostConfig(BaseModel):
     auto_publish: bool = True
     publish_status: str = "published"  # published / draft
     max_retry_attempts: int = 6
+    skip_ssl_verify: bool = False
 
 
 class DriverFallbackConfig(BaseModel):

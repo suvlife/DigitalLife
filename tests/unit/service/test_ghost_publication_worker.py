@@ -13,7 +13,7 @@ async def test_worker_marks_publication_and_run_published(monkeypatch) -> None:
     monkeypatch.setattr(dal.db, "gtBlogPublicationManager", manager, raising=False)
     config = SimpleNamespace(setting=SimpleNamespace(ghost=SimpleNamespace(
         api_url="https://blog.example", admin_api_key="secret",
-        publish_status="published", max_retry_attempts=3,
+        publish_status="published", max_retry_attempts=3, skip_ssl_verify=False,
     )))
     import util.configUtil as configUtil
     monkeypatch.setattr(configUtil, "get_app_config", lambda: config)
@@ -46,7 +46,7 @@ async def test_worker_persists_retry_and_run_status(monkeypatch) -> None:
     monkeypatch.setattr(dal.db, "gtBlogPublicationManager", manager, raising=False)
     config = SimpleNamespace(setting=SimpleNamespace(ghost=SimpleNamespace(
         api_url="https://blog.example", admin_api_key="secret",
-        publish_status="published", max_retry_attempts=3,
+        publish_status="published", max_retry_attempts=3, skip_ssl_verify=False,
     )))
     import util.configUtil as configUtil
     monkeypatch.setattr(configUtil, "get_app_config", lambda: config)
@@ -81,7 +81,7 @@ async def test_worker_lost_local_mark_converges_on_retry_without_second_create(m
     monkeypatch.setattr(dal.db, "gtBlogPublicationManager", manager, raising=False)
     config = SimpleNamespace(setting=SimpleNamespace(ghost=SimpleNamespace(
         api_url="https://blog.example", admin_api_key="secret",
-        publish_status="published", max_retry_attempts=3,
+        publish_status="published", max_retry_attempts=3, skip_ssl_verify=False,
     )))
     import util.configUtil as configUtil
     monkeypatch.setattr(configUtil, "get_app_config", lambda: config)

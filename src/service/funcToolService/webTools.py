@@ -17,6 +17,8 @@ import aiohttp
 
 from service.roomService import ToolCallContext
 
+from util import safeHttpUtil
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -322,6 +324,13 @@ async def web_fetch(
     if not url or not url.startswith(("http://", "https://")):
         return {"success": False, "message": "URL 格式不正确，必须以 http:// 或 https:// 开头"}
 
+    # SSRF 防护：校验 URL 不指向内网/元数据地址，防止 Agent 访问内部服务
+    try:
+        safeHttpUtil.assert_safe_http_url(url, field_name="网页 URL")
+    except safeHttpUtil.UnsafeUrlError as e:
+        logger.warning("web_fetch SSRF 拦截: url=%s, error=%s", url, e)
+        return {"success": False, "message": f"网页 URL 不安全，已拦截: {e}"}
+
     # 检查是否有 Tavily Key（用于 Extract API）
     all_keys = _get_all_search_keys()
     tavily_key = all_keys.get("tavily")
@@ -358,21 +367,29 @@ async def web_fetch(
             logger.warning("Tavily Extract 异常，回退到直接抓取: %s", e)
 
     # 直接 HTTP GET + HTML 清洗（适用于 Brave 或无 Tavily 的场景）
+    # 使用 safeHttpUtil 进行 SSRF 防护：DNS pinning、内网/元数据地址拦截、重定向逐跳验证
     try:
-        session = _get_session()
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; DigitalLifeBot/1.0)",
             "Accept": "text/html,application/xhtml+xml",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                return {
-                    "success": False,
-                    "message": f"网页抓取失败 (HTTP {resp.status}): {text[:200]}",
-                }
-            html = await resp.text(errors="replace")
+        response = await safeHttpUtil.request(
+            "GET",
+            url,
+            headers=headers,
+            timeout=30,
+            field_name="网页 URL",
+        )
+        if response.status != 200:
+            return {
+                "success": False,
+                "message": f"网页抓取失败 (HTTP {response.status}): {response.text[:200]}",
+            }
+        html = response.text
+    except safeHttpUtil.UnsafeUrlError as e:
+        logger.warning("web_fetch SSRF 拦截（直接抓取）: url=%s, error=%s", url, e)
+        return {"success": False, "message": f"网页 URL 不安全，已拦截: {e}"}
     except Exception as e:
         logger.warning("直接抓取网页异常: %s", e)
         return {"success": False, "message": f"网页抓取请求异常: {e}"}
