@@ -6,7 +6,7 @@
       "en": "Kimi (Moonshot)"
     },
     "type": "openai-compatible",
-    "base_url": "https://api.moonshot.cn/v1",
+    "base_url": "https://api.moonshot.ai/v1",
     "default_model": "kimi-latest",
     "context_window_tokens": 128000,
     "reserve_output_tokens": 16384,
@@ -14,29 +14,8 @@
     "signup_url": "https://platform.moonshot.cn/",
     "models": [
       "kimi-latest",
-      "moonshot-v1-8k",
-      "moonshot-v1-32k",
+      "kimi-k2.6",
       "moonshot-v1-128k"
-    ]
-  },
-  {
-    "id": "xiaomi",
-    "display_name": {
-      "zh-CN": "小米 (MiMo)",
-      "en": "Xiaomi MiMo"
-    },
-    "type": "openai-compatible",
-    "base_url": "https://api.xiaomi.com/v1",
-    "default_model": "mimo-7b",
-    "context_window_tokens": 32768,
-    "reserve_output_tokens": 8192,
-    "compact_trigger_ratio": 0.8,
-    "signup_url": "https://ai.xiaomi.com/",
-    "models": [
-      "mimo-7b",
-      "mimo-32b",
-      "mimo-v2-7b",
-      "mimo-v2-32b"
     ]
   },
   {
@@ -46,58 +25,34 @@
       "en": "Volcengine AgentPlan"
     },
     "type": "openai-compatible",
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "default_model": "doubao-1-5-pro-32k",
-    "context_window_tokens": 32768,
-    "reserve_output_tokens": 8192,
-    "compact_trigger_ratio": 0.8,
-    "signup_url": "https://console.volcengine.com/ark/",
-    "models": [
-      "doubao-1-5-pro-32k",
-      "doubao-1-5-pro-256k",
-      "doubao-1-5-lite-32k",
-      "deepseek-v3-250324",
-      "deepseek-r1-250120"
-    ]
-  },
-  {
-    "id": "volcengine_codingplan",
-    "display_name": {
-      "zh-CN": "火山方舟 CodingPlan",
-      "en": "Volcengine CodingPlan"
-    },
-    "type": "openai-compatible",
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "default_model": "doubao-seed-coder",
+    "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3",
+    "default_model": "ark-code-latest",
     "context_window_tokens": 131072,
     "reserve_output_tokens": 16384,
     "compact_trigger_ratio": 0.85,
     "signup_url": "https://console.volcengine.com/ark/",
     "models": [
-      "doubao-seed-coder",
-      "doubao-1-5-pro-256k",
-      "deepseek-v3-250324",
-      "deepseek-r1-250120"
+      "ark-code-latest"
     ]
   },
   {
-    "id": "apinebula",
+    "id": "volcengine_ark",
     "display_name": {
-      "zh-CN": "API 星云 (Nebula)",
-      "en": "API Nebula"
+      "zh-CN": "火山方舟 (豆包)",
+      "en": "Volcengine Ark (Doubao)"
     },
     "type": "openai-compatible",
-    "base_url": "https://api.apinebula.com/v1",
-    "default_model": "gpt-4o",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "default_model": "doubao-seed-evolving",
     "context_window_tokens": 131072,
     "reserve_output_tokens": 16384,
     "compact_trigger_ratio": 0.85,
-    "signup_url": "https://apinebula.com/",
+    "signup_url": "https://console.volcengine.com/ark/",
     "models": [
-      "gpt-4o",
-      "claude-3-5-sonnet-20241022",
-      "deepseek-chat",
-      "qwen-plus"
+      "doubao-seed-evolving",
+      "doubao-seed-2.1-pro",
+      "doubao-seed-2.1-turbo",
+      "doubao-1-5-pro-256k"
     ]
   },
   {
@@ -115,8 +70,9 @@
     "signup_url": "https://platform.deepseek.com/",
     "models": [
       "deepseek-chat",
-      "deepseek-coder",
-      "deepseek-reasoner"
+      "deepseek-reasoner",
+      "deepseek-v3.2",
+      "deepseek-r1"
     ]
   },
   {
@@ -133,10 +89,33 @@
     "compact_trigger_ratio": 0.85,
     "signup_url": "https://dashscope.aliyun.com/",
     "models": [
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-flash",
       "qwen-plus",
       "qwen-max",
-      "qwen-turbo",
-      "qwen-coder-plus"
+      "qwen-turbo"
+    ]
+  },
+  {
+    "id": "zhipu",
+    "display_name": {
+      "zh-CN": "智谱 GLM",
+      "en": "Zhipu GLM"
+    },
+    "type": "openai-compatible",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "default_model": "glm-4.6",
+    "context_window_tokens": 128000,
+    "reserve_output_tokens": 16384,
+    "compact_trigger_ratio": 0.85,
+    "signup_url": "https://open.bigmodel.cn/",
+    "models": [
+      "glm-4.6",
+      "glm-4.7-flash",
+      "glm-4-plus",
+      "glm-4-air",
+      "glm-4-flash"
     ]
   },
   {
@@ -147,16 +126,17 @@
     },
     "type": "openai-compatible",
     "base_url": "https://api.openai.com/v1",
-    "default_model": "gpt-4o",
+    "default_model": "gpt-5.6",
     "context_window_tokens": 128000,
     "reserve_output_tokens": 16384,
     "compact_trigger_ratio": 0.85,
     "signup_url": "https://platform.openai.com/",
     "models": [
+      "gpt-5.6",
+      "gpt-5.5",
       "gpt-4o",
-      "gpt-4o-mini",
-      "gpt-4-turbo",
-      "o3-mini"
+      "o3",
+      "o4-mini"
     ]
   },
   {
@@ -167,16 +147,55 @@
     },
     "type": "anthropic",
     "base_url": "https://api.anthropic.com/v1",
-    "default_model": "claude-3-5-sonnet-20241022",
+    "default_model": "claude-sonnet-4-5",
     "context_window_tokens": 200000,
     "reserve_output_tokens": 16384,
     "compact_trigger_ratio": 0.9,
     "signup_url": "https://console.anthropic.com/",
     "models": [
-      "claude-3-5-sonnet-20241022",
-      "claude-3-5-sonnet-latest",
-      "claude-3-opus-latest",
-      "claude-sonnet-4-20250514"
+      "claude-opus-4-5",
+      "claude-sonnet-4-5",
+      "claude-haiku-4-5",
+      "claude-3-5-sonnet-latest"
+    ]
+  },
+  {
+    "id": "google",
+    "display_name": {
+      "zh-CN": "Google Gemini",
+      "en": "Google Gemini"
+    },
+    "type": "google",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "default_model": "gemini-2.5-pro",
+    "context_window_tokens": 131072,
+    "reserve_output_tokens": 16384,
+    "compact_trigger_ratio": 0.85,
+    "signup_url": "https://aistudio.google.com/",
+    "models": [
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.0-flash"
+    ]
+  },
+  {
+    "id": "apinebula",
+    "display_name": {
+      "zh-CN": "API 星云 (Nebula)",
+      "en": "API Nebula"
+    },
+    "type": "openai-compatible",
+    "base_url": "https://api.apinebula.com/v1",
+    "default_model": "gpt-5.6",
+    "context_window_tokens": 131072,
+    "reserve_output_tokens": 16384,
+    "compact_trigger_ratio": 0.85,
+    "signup_url": "https://apinebula.com/",
+    "models": [
+      "gpt-5.6",
+      "claude-sonnet-4-5",
+      "deepseek-chat",
+      "qwen-plus"
     ]
   },
   {

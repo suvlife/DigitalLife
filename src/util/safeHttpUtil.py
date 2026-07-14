@@ -67,7 +67,12 @@ def _parse_target(url: str, *, field_name: str = "URL") -> tuple[str, int]:
 def resolve_public_addresses(
     url: str, *, field_name: str = "URL", allow_test_loopback: bool = False
 ) -> tuple[str, int, tuple[str, ...]]:
-    """Resolve one URL once and reject it unless every address is globally routable."""
+    """Resolve one URL once and keep only globally routable addresses.
+
+    A domain is accepted as long as it resolves to at least one global IP; only
+    those global IPs are returned so the pinned resolver never reaches a private
+    target. A purely private/loopback domain (no global IP) is still rejected.
+    """
     hostname, port = _parse_target(url, field_name=field_name)
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
@@ -77,14 +82,20 @@ def resolve_public_addresses(
     if not addresses:
         raise UnsafeUrlError(f"{field_name} hostname could not be resolved")
     test_mode = os.environ.get("TEAMAGENT_ENV") == "test" or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    # 只要存在至少一个 global IP 即视为公网域名；返回集合只保留可用（global/测试回环）IP，
+    # pinned resolver 只会连接这些 IP，实际请求不会打到内网；纯内网域名（无任何 global IP）仍被拒绝。
+    # 此前要求"所有 IP 必须 global"会误杀同时解析出公网+保留/ULA 地址的合法域名（DNS 拦截、双栈等场景）。
+    safe_addresses: list[str] = []
     for address in addresses:
         try:
             ip = ipaddress.ip_address(address)
         except ValueError as exc:
             raise UnsafeUrlError(f"{field_name} resolved to an invalid address") from exc
-        if not ip.is_global and not (allow_test_loopback and test_mode and ip.is_loopback):
-            raise UnsafeUrlError(f"{field_name} points to a non-public address")
-    return hostname, port, addresses
+        if ip.is_global or (allow_test_loopback and test_mode and ip.is_loopback):
+            safe_addresses.append(address)
+    if not safe_addresses:
+        raise UnsafeUrlError(f"{field_name} points to a non-public address")
+    return hostname, port, tuple(safe_addresses)
 
 
 def assert_safe_http_url(url: str, *, field_name: str = "URL") -> None:

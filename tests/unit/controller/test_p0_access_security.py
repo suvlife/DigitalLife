@@ -77,7 +77,8 @@ def test_shared_ssrf_validator_rejects_unsafe_targets(url: str) -> None:
     assert getattr(ghost_error.value, "error_code", None) == "unsafe_url"
 
 
-def test_shared_ssrf_validator_checks_all_resolved_addresses(monkeypatch) -> None:
+def test_shared_ssrf_validator_keeps_only_public_addresses(monkeypatch) -> None:
+    """混合解析（公网+私有）时通过校验，但只保留公网 IP 供 pinned resolver 使用。"""
     monkeypatch.setattr(
         ghostService.socket,
         "getaddrinfo",
@@ -87,8 +88,25 @@ def test_shared_ssrf_validator_checks_all_resolved_addresses(monkeypatch) -> Non
         ],
     )
 
+    from util import safeHttpUtil
+    _, _, addresses = safeHttpUtil.resolve_public_addresses("https://mixed.example/api")
+    assert "93.184.216.34" in addresses
+    assert "10.0.0.5" not in addresses
+
+
+def test_shared_ssrf_validator_rejects_all_private_addresses(monkeypatch) -> None:
+    """所有解析地址均为私有/回环时仍拒绝（SSRF 防护不降级）。"""
+    monkeypatch.setattr(
+        ghostService.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("10.0.0.5", 443)),
+            (2, 1, 6, "", ("172.16.0.2", 443)),
+        ],
+    )
+
     with pytest.raises(ValueError, match="non-public"):
-        ghostService.assert_safe_http_url("https://mixed.example/api")
+        ghostService.assert_safe_http_url("https://private.example/api")
 
 
 def test_shared_ssrf_validator_accepts_public_resolution(monkeypatch) -> None:

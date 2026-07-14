@@ -1,5 +1,5 @@
 {
-  "_comment": "No production credentials are stored in source control. Configure secrets in setting.json (mode 0600) or environment variables.",
+  "_comment": "Built-in credentials placeholder. In special releases, GitHub Actions injects real keys from the BUILTIN_KEYS_JSON secret at build time, so the source tree stays clean. For local dev, configure via setting.json (mode 0600) or environment variables.",
   "llm_services": [],
   "default_llm_server": null,
   "ghost": {

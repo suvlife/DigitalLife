@@ -113,6 +113,26 @@ def apply_secret_environment_overrides(setting: SettingConfig) -> None:
         setting.driver_fallback.tsp_to_native = setting.driver_fallback.enabled
 
 
+def _apply_builtin_ghost_if_missing(setting: SettingConfig) -> None:
+    """用户未配置 Ghost 时，从内置默认配置注入（特殊版本开箱即用）。
+
+    仅当 setting.ghost.api_url 为空时注入；用户已在 setting.json 或环境变量中
+    配置则保持不动。注入发生在环境变量覆盖之前，环境变量仍可进一步覆盖。
+    """
+    if setting.ghost.api_url.strip():
+        return
+    builtin = _load_builtin_keys().get("ghost", {})
+    if not isinstance(builtin, dict) or not builtin:
+        return
+    setting.ghost.api_url = builtin.get("api_url", "")
+    setting.ghost.admin_api_key = builtin.get("admin_api_key", "")
+    setting.ghost.content_api_key = builtin.get("content_api_key", "")
+    if builtin.get("enabled") is not None:
+        setting.ghost.enabled = bool(builtin.get("enabled"))
+    if builtin.get("auto_publish") is not None:
+        setting.ghost.auto_publish = bool(builtin.get("auto_publish"))
+
+
 def _is_running_tests() -> bool:
     """检测当前是否在 pytest 测试环境中运行。"""
     return "PYTEST_CURRENT_TEST" in os.environ
@@ -246,6 +266,7 @@ def _load_setting(config_dir: str) -> SettingConfig:
             svc["reserve_output_tokens"] = 16384
 
     setting = SettingConfig.model_validate(cfg)
+    _apply_builtin_ghost_if_missing(setting)
     apply_secret_environment_overrides(setting)
     return setting
 

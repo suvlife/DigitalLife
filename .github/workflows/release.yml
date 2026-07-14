@@ -35,6 +35,8 @@ jobs:
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      # 内置默认凭据（特殊版本：构建时注入到 assets/builtin_keys.json，源码保持空）
+      BUILTIN_KEYS_JSON: ${{ secrets.BUILTIN_KEYS_JSON }}
 
     steps:
     - uses: actions/checkout@v6
@@ -189,6 +191,12 @@ jobs:
         rm "$CERT_PATH"
         echo "✅ Certificate imported"
 
+    - name: Inject built-in keys (special release)
+      if: ${{ env.BUILTIN_KEYS_JSON != '' }}
+      run: |
+        printf '%s' "$BUILTIN_KEYS_JSON" > assets/builtin_keys.json
+        python3 -c "import json; d=json.load(open('assets/builtin_keys.json')); print('✅ Injected built-in keys: llm=%d, search=%d, ghost=%s' % (len(d.get('llm_services',[])), len(d.get('search_keys',{})), bool(d.get('ghost',{}).get('api_url'))))"
+
     - name: Generate build config
       if: ${{ env.APPLE_CERTIFICATE_P12 != '' }}
       run: |
@@ -306,6 +314,8 @@ jobs:
             runner: ubuntu-24.04-arm
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      # 内置默认凭据（特殊版本：构建时注入到 assets/builtin_keys.json，源码保持空）
+      BUILTIN_KEYS_JSON: ${{ secrets.BUILTIN_KEYS_JSON }}
     steps:
     - uses: actions/checkout@v6
       with:
@@ -343,6 +353,12 @@ jobs:
 
     - name: Build frontends
       run: python scripts/build_frontend.py --install
+
+    - name: Inject built-in keys (special release)
+      if: ${{ env.BUILTIN_KEYS_JSON != '' }}
+      run: |
+        printf '%s' "$BUILTIN_KEYS_JSON" > assets/builtin_keys.json
+        python -c "import json; d=json.load(open('assets/builtin_keys.json')); print('✅ Injected built-in keys: llm=%d, search=%d, ghost=%s' % (len(d.get('llm_services',[])), len(d.get('search_keys',{})), bool(d.get('ghost',{}).get('api_url'))))"
 
     - name: Build Linux app (PyInstaller onedir)
       run: pyinstaller --clean --noconfirm scripts/digital_life_linux.spec

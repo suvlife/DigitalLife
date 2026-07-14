@@ -126,6 +126,8 @@ class LlmServiceConfig(BaseModel):
     name: str
     base_url: str
     api_key: str
+    # 多 key 轮询：配置多个 key 时按轮询方式使用（负载均衡），失败仍走现有 failover 链；为空时回退到 api_key。
+    api_keys: List[str] = Field(default_factory=list)
     type: LlmServiceType
     model: str = "qwen-plus"
     enable: bool = True

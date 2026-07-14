@@ -59,5 +59,7 @@ def test_chain_empty_when_no_service_available(monkeypatch):
     monkeypatch.setattr(configUtil, "get_app_config", lambda: _config(
         default=None, services=[], fallback=["whatever"],
     ))
+    # 模拟无内置默认服务（特殊版本内置 key 不应影响此用例）
+    monkeypatch.setattr(llm_core, "_get_builtin_llm_service", lambda: None)
     chain = llm_core._resolve_llm_service_chain(team_config=None)
     assert chain == []

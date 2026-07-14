@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.8.1-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.8.2-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -28,7 +28,7 @@
 ## 目录
 
 - [项目简介](#项目简介)
-- [v0.8.1 重点更新](#v081-重点更新)
+- [v0.8.2 重点更新](#v082-重点更新)
 - [核心能力](#核心能力)
 - [内置团队](#内置团队)
 - [系统架构](#系统架构)
@@ -70,6 +70,14 @@
 工具执行层支持 [TSP（Tool Service Protocol）](https://github.com/alexazhou/TSP)，也保留原生 Function Calling 驱动。通过 `driver_fallback.tsp_to_native` 可以在外部 TSP/GTSP 不可用时回退到原生工具调用，避免单一工具驱动阻塞整个任务。
 
 ---
+
+## v0.8.2 重点更新
+
+- **大模型预设全面更新**：厂商预设目录（`catalog.json`）更新为 2026 最新模型列表，新增智谱 GLM、Google Gemini、火山引擎 AgentPlan（`ark-code-latest`）；Kimi 接入地址更新为 `api.moonshot.ai`。
+- **SSRF 校验修复**：放宽 `resolve_public_addresses` 为"存在公网 IP 即允许"（仅保留公网 IP 供 pinned resolver），修复手动添加大模型与 Ghost 博客地址被误杀为 non-public 的问题；纯内网域名仍被拒绝，SSRF 防护不降级。
+- **LLM 多 Key 轮询**：`LlmServiceConfig` 新增 `api_keys` 字段，支持同一服务配置多个 Key 按轮询方式负载均衡，失败仍走兜底链。
+- **特殊版本开箱即用**：release 构建时从 GitHub Secrets 注入内置默认凭据（LLM/搜索/Ghost）到 `builtin_keys.json`，产物自带配置，源码不暴露密钥。
+- 以下为 v0.8.1 起的核心能力（本版本一并包含）：
 
 ## v0.8.1 重点更新
 

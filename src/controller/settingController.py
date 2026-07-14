@@ -55,7 +55,7 @@ def _serialize_llm_service(service: LlmServiceConfig, *, is_admin: bool = True) 
     """
     item = service.model_dump(exclude_unset=True, mode="json")
     item.setdefault("provider_params", {})
-    item["has_api_key"] = bool(service.api_key)
+    item["has_api_key"] = bool(service.api_key) or bool(service.api_keys)
     # 始终脱敏 api_key：前端仅需 has_api_key 布尔值
     item["api_key"] = ""
     # 脱敏 extra_headers 中的凭据

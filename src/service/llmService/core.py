@@ -223,6 +223,26 @@ def get_llm_service_for_team(team_config: dict | None) -> "LlmServiceConfig | No
     return _get_builtin_llm_service()
 
 
+# 多 key 轮询：按服务名记录轮询游标，每次调用推进一位，实现多 key 负载均衡。
+_API_KEY_ROTATION: dict[str, int] = {}
+
+
+def _pick_api_key(llm_config: "LlmServiceConfig") -> str:
+    """选择本次调用使用的 API Key。
+
+    配置了 api_keys（多个）时按轮询方式选一个，分散请求到不同 key；
+    否则回退到单 api_key。空 key 由上层调用报错，此处不做拦截。
+    """
+    keys = list(llm_config.api_keys or [])
+    if len(keys) == 0:
+        return llm_config.api_key
+    if len(keys) == 1:
+        return keys[0]
+    idx = _API_KEY_ROTATION.get(llm_config.name, 0) % len(keys)
+    _API_KEY_ROTATION[llm_config.name] = (idx + 1) % len(keys)
+    return keys[idx]
+
+
 def _get_builtin_llm_service() -> "LlmServiceConfig | None":
     """获取内置默认 LLM 服务（用户未配置时使用）。"""
     from util.configTypes import LlmServiceConfig, LlmServiceType
@@ -235,6 +255,7 @@ def _get_builtin_llm_service() -> "LlmServiceConfig | None":
                 enable=True,
                 base_url=svc.get("base_url", ""),
                 api_key=svc.get("api_key", ""),
+                api_keys=list(svc.get("api_keys", []) or []),
                 type=LlmServiceType(svc.get("type", "openai-compatible")),
                 model=svc.get("model", ""),
                 context_window_tokens=svc.get("context_window_tokens", 131072),
@@ -251,6 +272,7 @@ def _get_builtin_llm_service() -> "LlmServiceConfig | None":
                 enable=True,
                 base_url=svc.get("base_url", ""),
                 api_key=svc.get("api_key", ""),
+                api_keys=list(svc.get("api_keys", []) or []),
                 type=LlmServiceType(svc.get("type", "openai-compatible")),
                 model=svc.get("model", ""),
                 context_window_tokens=svc.get("context_window_tokens", 131072),
@@ -470,7 +492,7 @@ async def infer(
                     kwargs={
                         "request": request,
                         "url": llm_config.base_url,
-                        "api_key": llm_config.api_key,
+                        "api_key": _pick_api_key(llm_config),
                         "custom_llm_provider": resolved_provider,
                         "extra_headers": llm_config.extra_headers,
                         "request_id": request_id,
@@ -610,7 +632,7 @@ async def infer_stream(
                     kwargs={
                         "request": request,
                         "url": llm_config.base_url,
-                        "api_key": llm_config.api_key,
+                        "api_key": _pick_api_key(llm_config),
                         "custom_llm_provider": resolved_provider,
                         "extra_headers": llm_config.extra_headers,
                         "on_chunk": _on_chunk,
