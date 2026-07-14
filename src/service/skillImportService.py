@@ -78,7 +78,37 @@ def _safe_extract_zip(zf: zipfile.ZipFile, extract_dir: str) -> None:
                 f"zip 压缩比异常({file_size / compress_size:.0f}:1): {member_name}"
             )
 
-    zf.extractall(extract_dir)
+    # 审计 M8：不信任 zip 元数据 file_size（可伪造），流式解压并按“真实解压字节”强制上限，
+    # 防止元数据谎报小尺寸绕过预检后 extractall 写入超大数据导致磁盘耗尽。
+    _CHUNK = 1024 * 1024
+    real_total = 0
+    for member in members:
+        member_name = member.filename
+        target_path = os.path.realpath(os.path.join(extract_dir_real, member_name))
+        # 防御性复验路径穿越（与上方一致）
+        if target_path != extract_dir_real and not target_path.startswith(extract_dir_real + os.sep):
+            raise SkillImportError(f"zip 包含路径穿越条目: {member_name}")
+        if member.is_dir():
+            os.makedirs(target_path, exist_ok=True)
+            continue
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        real_file = 0
+        with zf.open(member, "r") as src, open(target_path, "wb") as dst:
+            while True:
+                chunk = src.read(_CHUNK)
+                if not chunk:
+                    break
+                real_file += len(chunk)
+                real_total += len(chunk)
+                if real_file > _MAX_SINGLE_FILE:
+                    raise SkillImportError(
+                        f"zip 单文件解压超限: {member_name}，上限 {_MAX_SINGLE_FILE} bytes"
+                    )
+                if real_total > _MAX_TOTAL_SIZE:
+                    raise SkillImportError(
+                        f"zip 总解压大小超限，上限 {_MAX_TOTAL_SIZE} bytes"
+                    )
+                dst.write(chunk)
 
 
 def _validate_skill_directory(skill_dir: str) -> dict[str, Any]:

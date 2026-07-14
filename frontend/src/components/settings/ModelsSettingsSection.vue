@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getLlmServices } from '../../api';
-import { showQuickInit } from '../../appUiState';
+import { getLlmFallback, getLlmServices, setLlmFallback } from '../../api';
+import { showGlobalSuccessToast, showQuickInit } from '../../appUiState';
 import type { LlmServiceInfo } from '../../types';
 import ModelServiceEditorDialog from './ModelServiceEditorDialog.vue';
 import SettingsBreadcrumb from './SettingsBreadcrumb.vue';
@@ -24,6 +24,68 @@ const activeIndex = ref<number | null>(null);
 const isLoading = ref(false);
 const statusText = ref('');
 const editorDialogRef = ref<InstanceType<typeof ModelServiceEditorDialog> | null>(null);
+
+// 兜底链（#3）：首选服务不可用时按顺序尝试的候选服务名。
+const fallbackChain = ref<string[]>([]);
+const fallbackAddSelection = ref('');
+const isSavingFallback = ref(false);
+
+// 可加入兜底链的候选：已启用、非默认、且不在链中的服务。
+const fallbackCandidates = computed(() => services.value
+  .filter((service) => service.enable
+    && service.name !== defaultServer.value
+    && !fallbackChain.value.includes(service.name))
+  .map((service) => service.name));
+
+function moveFallback(index: number, delta: number): void {
+  const target = index + delta;
+  if (target < 0 || target >= fallbackChain.value.length) {
+    return;
+  }
+  const next = [...fallbackChain.value];
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item);
+  fallbackChain.value = next;
+}
+
+function removeFallback(index: number): void {
+  fallbackChain.value = fallbackChain.value.filter((_, i) => i !== index);
+}
+
+function addFallback(): void {
+  const name = fallbackAddSelection.value;
+  if (!name || fallbackChain.value.includes(name)) {
+    return;
+  }
+  fallbackChain.value = [...fallbackChain.value, name];
+  fallbackAddSelection.value = '';
+}
+
+async function saveFallback(): Promise<void> {
+  if (isSavingFallback.value) {
+    return;
+  }
+  isSavingFallback.value = true;
+  try {
+    const result = await setLlmFallback(fallbackChain.value);
+    fallbackChain.value = result.fallback_llm_servers;
+    showGlobalSuccessToast(t('settings.models.fallbackSaved'));
+  } catch (error) {
+    console.error(error);
+  } finally {
+    isSavingFallback.value = false;
+  }
+}
+
+async function loadFallback(): Promise<void> {
+  try {
+    const data = await getLlmFallback();
+    fallbackChain.value = data.fallback_llm_servers;
+  } catch (error) {
+    console.error(error);
+    statusText.value = t('settings.models.fallbackLoadFailed');
+  }
+}
 
 function formatServiceType(type: LlmServiceInfo['type']): string {
   switch (type) {
@@ -66,7 +128,7 @@ async function loadAll(preferredIndex?: number | null): Promise<void> {
   isLoading.value = true;
   statusText.value = '';
   try {
-    await loadServices(preferredIndex);
+    await Promise.all([loadServices(preferredIndex), loadFallback()]);
   } catch (error) {
     console.error(error);
     statusText.value = t('settings.models.loadFailed');
@@ -173,6 +235,72 @@ watch(showQuickInit, (value) => {
       </div>
 
       <p v-else class="models-empty">{{ t('settings.models.empty') }}</p>
+    </section>
+
+    <!-- 首选与兜底模型链（#3）-->
+    <section class="fallback-section">
+      <div class="fallback-head">
+        <div>
+          <p class="section-eyebrow">{{ t('settings.models.fallbackTitle') }}</p>
+          <p class="fallback-desc">{{ t('settings.models.fallbackDescription') }}</p>
+        </div>
+      </div>
+
+      <div class="fallback-card">
+        <div class="fallback-default">
+          <span class="fallback-default-label">{{ t('settings.models.fallbackDefaultLabel') }}</span>
+          <span v-if="defaultServer" class="svc-chip svc-chip--default">{{ defaultServer }}</span>
+          <span v-else class="fallback-default-empty">{{ t('settings.models.fallbackNoDefault') }}</span>
+        </div>
+
+        <p class="fallback-chain-label">{{ t('settings.models.fallbackChainLabel') }}</p>
+
+        <ol v-if="fallbackChain.length" class="fallback-list">
+          <li v-for="(name, index) in fallbackChain" :key="`${name}-${index}`" class="fallback-item">
+            <span class="fallback-order">{{ index + 1 }}</span>
+            <strong class="fallback-name">{{ name }}</strong>
+            <div class="fallback-item-actions">
+              <button
+                type="button"
+                class="ghost-button"
+                :disabled="index === 0"
+                @click="moveFallback(index, -1)"
+              >{{ t('settings.models.fallbackMoveUp') }}</button>
+              <button
+                type="button"
+                class="ghost-button"
+                :disabled="index === fallbackChain.length - 1"
+                @click="moveFallback(index, 1)"
+              >{{ t('settings.models.fallbackMoveDown') }}</button>
+              <button
+                type="button"
+                class="ghost-button ghost-button--danger"
+                @click="removeFallback(index)"
+              >{{ t('settings.models.fallbackRemove') }}</button>
+            </div>
+          </li>
+        </ol>
+        <p v-else class="fallback-empty">{{ t('settings.models.fallbackEmpty') }}</p>
+
+        <div class="fallback-add-row">
+          <select v-model="fallbackAddSelection" class="fallback-select">
+            <option value="">{{ t('settings.models.fallbackAddPlaceholder') }}</option>
+            <option v-for="name in fallbackCandidates" :key="name" :value="name">{{ name }}</option>
+          </select>
+          <button
+            type="button"
+            class="secondary-button"
+            :disabled="!fallbackAddSelection"
+            @click="addFallback"
+          >{{ t('settings.models.fallbackAdd') }}</button>
+          <button
+            type="button"
+            class="secondary-button"
+            :disabled="isSavingFallback"
+            @click="saveFallback"
+          >{{ isSavingFallback ? t('settings.models.fallbackSaving') : t('settings.models.fallbackSave') }}</button>
+        </div>
+      </div>
     </section>
 
     <ModelServiceEditorDialog ref="editorDialogRef" @changed="handleDialogChanged" />
@@ -376,6 +504,138 @@ watch(showQuickInit, (value) => {
   border-color: color-mix(in srgb, var(--warn) 28%, var(--panel-border) 72%);
   background: color-mix(in srgb, var(--warn) 8%, var(--panel-bg) 92%);
   color: var(--warn);
+}
+
+.fallback-section {
+  margin-top: 18px;
+  padding: 0 10px;
+}
+
+.fallback-head .section-eyebrow {
+  margin: 0;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.68rem;
+}
+
+.fallback-desc {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.fallback-card {
+  margin-top: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fallback-default {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fallback-default-label,
+.fallback-chain-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.fallback-default-empty {
+  color: var(--warn);
+  font-size: 0.8rem;
+}
+
+.fallback-chain-label {
+  margin: 0;
+}
+
+.fallback-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fallback-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel-bg);
+}
+
+.fallback-order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-bg) 84%);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.fallback-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fallback-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ghost-button--danger {
+  color: var(--danger);
+}
+
+.fallback-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.fallback-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fallback-select {
+  flex: 1;
+  min-width: 180px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  color: var(--text-strong);
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 0.86rem;
 }
 
 @media (max-width: 780px) {

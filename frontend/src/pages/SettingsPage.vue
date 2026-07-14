@@ -6,6 +6,9 @@ import { useRoute, useRouter } from 'vue-router';
 import { backupDatabase, getAgents, getDeptTree, getTeamPresetExport } from '../api';
 import { showGlobalSuccessToast, showQuickInit, totalMessageCount, appVersion, autoCheckUpdate, hasUpdate, latestVersion } from '../appUiState';
 import ModelsSettingsSection from '../components/settings/ModelsSettingsSection.vue';
+import SearchSettingsSection from '../components/settings/SearchSettingsSection.vue';
+import GhostSettingsSection from '../components/settings/GhostSettingsSection.vue';
+import DossiersSettingsSection from '../components/settings/DossiersSettingsSection.vue';
 import RolesSettingsSection from '../components/settings/RolesSettingsSection.vue';
 import SkillsSettingsSection from '../components/settings/SkillsSettingsSection.vue';
 import SettingsNavSidebar from '../components/settings/SettingsNavSidebar.vue';
@@ -413,6 +416,25 @@ watch(
         <ModelsSettingsSection
           v-else-if="currentSectionId === 'models'"
           :breadcrumb-items="breadcrumbItems"
+          @navigate-breadcrumb="handleBreadcrumbNavigate"
+        />
+
+        <SearchSettingsSection
+          v-else-if="currentSectionId === 'search'"
+          :breadcrumb-items="breadcrumbItems"
+          @navigate-breadcrumb="handleBreadcrumbNavigate"
+        />
+
+        <GhostSettingsSection
+          v-else-if="currentSectionId === 'ghost'"
+          :breadcrumb-items="breadcrumbItems"
+          @navigate-breadcrumb="handleBreadcrumbNavigate"
+        />
+
+        <DossiersSettingsSection
+          v-else-if="currentSectionId === 'dossiers'"
+          :breadcrumb-items="breadcrumbItems"
+          :team-id="Number.isFinite(teamId) ? teamId : null"
           @navigate-breadcrumb="handleBreadcrumbNavigate"
         />
 

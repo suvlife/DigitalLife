@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from dal.db import gtAgentHistoryManager, gtScheculeTaskManager, gtRoomMessageManager, gtRoomManager, atomic_transaction
+from dal.db import gtAgentHistoryManager, gtScheculeTaskManager, gtRoomMessageManager, gtRoomManager, run_in_transaction_with_retry
 from model.dbModel.gtAgentHistory import GtAgentHistory
 from model.dbModel.gtRoomMessage import GtRoomMessage
 from constants import AgentHistoryTag, AgentTaskStatus
@@ -47,8 +47,12 @@ async def fail_running_tasks(
     *,
     error_message: str = "task interrupted by process restart",
 ) -> None:
-    """将 Agent 的 RUNNING 任务标记为 FAILED（事务内批量更新，保证原子性）。"""
-    async with atomic_transaction():
+    """将 Agent 的 RUNNING 任务标记为 FAILED（事务内批量更新，保证原子性）。
+
+    启动恢复阶段高竞争时可能触发 COMMIT 期 BUSY，套用事务级重试（H8）避免
+    抛错阻断恢复；批量置 FAILED 幂等，整体回滚后重跑安全。
+    """
+    async def _op() -> None:
         tasks = await gtScheculeTaskManager.get_running_tasks(agent_id)
         for task in tasks:
             await gtScheculeTaskManager.update_task_status(
@@ -56,6 +60,8 @@ async def fail_running_tasks(
                 AgentTaskStatus.FAILED,
                 error_message=error_message,
             )
+
+    await run_in_transaction_with_retry(_op)
 
 
 def _trim_to_latest_compact(items: list[GtAgentHistory]) -> list[GtAgentHistory]:

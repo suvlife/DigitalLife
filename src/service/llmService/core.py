@@ -268,6 +268,42 @@ def _usage_to_log_json(usage: llmApiUtil.OpenAIUsage | None) -> str:
     return json.dumps(usage.model_dump(mode="json", exclude_none=False), ensure_ascii=False, default=str)
 
 
+def _resolve_primary_llm_service(team_config: dict | None) -> "LlmServiceConfig | None":
+    """解析首选 LLM 服务：优先团队级配置，其次用户 current_llm_service，最后内置默认。"""
+    if team_config:
+        return get_llm_service_for_team(team_config)
+    setting = configUtil.get_app_config().setting
+    return setting.current_llm_service or _get_builtin_llm_service()
+
+
+def _resolve_llm_service_chain(team_config: dict | None) -> list["LlmServiceConfig"]:
+    """构建 LLM 调用候选链：首选服务在前，随后按 fallback_llm_servers 顺序追加兜底服务。
+
+    审计 #3（LLM 首选 + 兜底 failover）：当首选服务不可用（网络错误/超时/5xx/限流等
+    可重试类错误）时，上层按此链顺序切换到下一个兜底服务重试。
+
+    仅收录 enable 的兜底服务；按 name 去重（避免重复调用同一服务）；未找到的名字跳过。
+    首选为空时返回空列表。
+    """
+    primary = _resolve_primary_llm_service(team_config)
+    chain: list["LlmServiceConfig"] = []
+    seen: set[str] = set()
+    if primary is not None:
+        chain.append(primary)
+        seen.add(primary.name)
+    setting = configUtil.get_app_config().setting
+    enabled_by_name = {s.name: s for s in setting.llm_services if s.enable}
+    for name in setting.fallback_llm_servers:
+        if not name or name in seen:
+            continue
+        svc = enabled_by_name.get(name)
+        if svc is None:
+            continue
+        chain.append(svc)
+        seen.add(name)
+    return chain
+
+
 def _build_request(
     *,
     model: str,
@@ -312,6 +348,7 @@ async def _send_with_retry(
     metrics: InferPerformanceMetrics,
     on_status_event: InferRequestStatusEventHandler | None = None,
     on_retry_reset: Callable[[], None] | None = None,
+    should_block_retry: Callable[[], bool] | None = None,
 ) -> llmApiUtil.OpenAIResponse:
     last_error: Exception | None = None
     total_attempts = len(_INFER_RETRY_DELAYS_SECONDS) + 1
@@ -334,6 +371,15 @@ async def _send_with_retry(
             last_error = e
             error_category = classify_llm_error(e)
             if error_category not in RETRYABLE_CATEGORIES or attempt >= total_attempts:
+                raise
+
+            # M10：流式已产出增量后不整体重试。已 yield / 落库的文本无法回撤，
+            # 整体重试会导致下游看到重复内容；此时直接抛出交由上层 failover 处理。
+            if should_block_retry is not None and should_block_retry():
+                logger.warning(
+                    "LLM 已产出输出增量，跳过整体重试以避免重复: request_id=%s, attempt=%s, error=%r",
+                    request_id, attempt, e,
+                )
                 raise
 
             if error_category == LlmErrorCategory.RATE_LIMITED:
@@ -398,43 +444,61 @@ async def infer(
     resolved_provider: str | None = None
     metrics = InferPerformanceMetrics()
     try:
-        llm_config = get_llm_service_for_team(team_config) if team_config else (configUtil.get_app_config().setting.current_llm_service or _get_builtin_llm_service())
-        if llm_config is None:
+        candidates = _resolve_llm_service_chain(team_config)
+        if not candidates:
             raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
-        resolved_model = model or llm_config.model
-        resolved_provider = _TYPE_TO_PROVIDER.get(llm_config.type)
-        request, applied_rules = _build_request(
-            model=resolved_model,
-            ctx=ctx,
-            llm_config=llm_config,
-        )
-        logger.info(
-            "LLM infer start: request_id=%s, stream=%s, model=%s, provider=%s, message_count=%d, tool_count=%d, tool_choice=%s, prompt_cache=%s, applied_rules=%s",
-            request_id, False, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
-            ctx.prompt_cache, list(applied_rules),
-        )
-        request_gate = _get_service_request_gate(llm_config)
-        response = await _send_with_retry(
-            send_request=llmApiUtil.send_request_non_stream,
-            args=(),
-            kwargs={
-                "request": request,
-                "url": llm_config.base_url,
-                "api_key": llm_config.api_key,
-                "custom_llm_provider": resolved_provider,
-                "extra_headers": llm_config.extra_headers,
-                "request_id": request_id,
-            },
-            request_gate=request_gate,
-            metrics=metrics,
-            on_status_event=on_status_event,
-        )
-        logger.info(
-            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s, queue_wait_ms=%s, rate_limit_wait_ms=%s, infer_duration_ms=%s, retry_wait_ms=%s, attempts=%s",
-            request_id, False, response.request_id, _usage_to_log_json(response.usage),
-            metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
-        )
-        return InferResult.success(response, request_id=request_id, performance=metrics)
+        last_error: Exception | None = None
+        for idx, llm_config in enumerate(candidates):
+            is_last = idx == len(candidates) - 1
+            resolved_model = model or llm_config.model
+            resolved_provider = _TYPE_TO_PROVIDER.get(llm_config.type)
+            request, applied_rules = _build_request(
+                model=resolved_model,
+                ctx=ctx,
+                llm_config=llm_config,
+            )
+            logger.info(
+                "LLM infer start: request_id=%s, stream=%s, service=%s, failover_index=%d/%d, model=%s, provider=%s, message_count=%d, tool_count=%d, tool_choice=%s, prompt_cache=%s, applied_rules=%s",
+                request_id, False, llm_config.name, idx, len(candidates) - 1, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
+                ctx.prompt_cache, list(applied_rules),
+            )
+            request_gate = _get_service_request_gate(llm_config)
+            try:
+                response = await _send_with_retry(
+                    send_request=llmApiUtil.send_request_non_stream,
+                    args=(),
+                    kwargs={
+                        "request": request,
+                        "url": llm_config.base_url,
+                        "api_key": llm_config.api_key,
+                        "custom_llm_provider": resolved_provider,
+                        "extra_headers": llm_config.extra_headers,
+                        "request_id": request_id,
+                    },
+                    request_gate=request_gate,
+                    metrics=metrics,
+                    on_status_event=on_status_event,
+                )
+            except Exception as e:
+                last_error = e
+                category = classify_llm_error(e)
+                # #3 failover：可重试/不可用类错误且仍有兜底服务时，切换到下一个服务；
+                # 永久错误（鉴权/400/上下文超长/内容策略）不切换，直接抛出。
+                if not is_last and category in RETRYABLE_CATEGORIES:
+                    logger.warning(
+                        "LLM failover: service=%s 调用失败(category=%s)，切换到下一个兜底服务: request_id=%s, error=%r",
+                        llm_config.name, category.name, request_id, e,
+                    )
+                    continue
+                raise
+            logger.info(
+                "LLM infer success: request_id=%s, stream=%s, service=%s, upstream_request_id=%s, usage=%s, queue_wait_ms=%s, rate_limit_wait_ms=%s, infer_duration_ms=%s, retry_wait_ms=%s, attempts=%s",
+                request_id, False, llm_config.name, response.request_id, _usage_to_log_json(response.usage),
+                metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
+            )
+            return InferResult.success(response, request_id=request_id, performance=metrics)
+        assert last_error is not None  # 循环内要么 return 要么 raise，不会正常退出
+        raise last_error
     except Exception as e:
         logger.exception(
             "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
@@ -476,25 +540,14 @@ async def infer_stream(
     resolved_provider: str | None = None
     metrics = InferPerformanceMetrics()
     try:
-        llm_config = get_llm_service_for_team(team_config) if team_config else (configUtil.get_app_config().setting.current_llm_service or _get_builtin_llm_service())
-        if llm_config is None:
+        candidates = _resolve_llm_service_chain(team_config)
+        if not candidates:
             raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
-        resolved_model = model or llm_config.model
-        resolved_provider = _TYPE_TO_PROVIDER.get(llm_config.type)
-        request, applied_rules = _build_request(
-            model=resolved_model,
-            ctx=ctx,
-            llm_config=llm_config,
-        )
-        logger.info(
-            "LLM infer start: request_id=%s, stream=%s, model=%s, provider=%s, message_count=%d, tool_count=%d, tool_choice=%s, prompt_cache=%s, applied_rules=%s",
-            request_id, True, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
-            ctx.prompt_cache, list(applied_rules),
-        )
 
-        # 用可变容器持有 completion_tokens，以便 _send_with_retry 重试时能重置。
-        # 直接用 nonlocal int 无法被 _send_with_retry 回调重置（它不在本闭包作用域）。
-        stream_state = {"completion_tokens": 0}
+        # 用可变容器持有流式状态，以便 _send_with_retry 回调重置 / 读取。
+        # produced_output：一旦向下游 yield 过增量即为 True，M10 据此禁止整体重试与 failover
+        # （已推送/落库文本无法回撤，重来会导致下游看到重复内容）。
+        stream_state = {"completion_tokens": 0, "produced_output": False}
 
         async def _on_chunk(chunk: llmApiUtil.ModelResponseStream) -> None:
             if on_progress is None:
@@ -517,6 +570,9 @@ async def infer_stream(
                 current_ct = stream_state["completion_tokens"]
                 current_total = None
 
+            if delta_text:
+                stream_state["produced_output"] = True
+
             progress = InferStreamProgress(
                 delta_text=delta_text,
                 current_completion_tokens=current_ct,
@@ -528,30 +584,64 @@ async def infer_stream(
                 if inspect.isawaitable(result):
                     await result
 
-        request_gate = _get_service_request_gate(llm_config)
-        response = await _send_with_retry(
-            send_request=llmApiUtil.send_request_stream,
-            args=(),
-            kwargs={
-                "request": request,
-                "url": llm_config.base_url,
-                "api_key": llm_config.api_key,
-                "custom_llm_provider": resolved_provider,
-                "extra_headers": llm_config.extra_headers,
-                "on_chunk": _on_chunk,
-                "request_id": request_id,
-            },
-            request_gate=request_gate,
-            metrics=metrics,
-            on_status_event=on_status_event,
-            on_retry_reset=lambda: stream_state.update(completion_tokens=0),
-        )
-        logger.info(
-            "LLM infer success: request_id=%s, stream=%s, upstream_request_id=%s, usage=%s, queue_wait_ms=%s, rate_limit_wait_ms=%s, infer_duration_ms=%s, retry_wait_ms=%s, attempts=%s",
-            request_id, True, response.request_id, _usage_to_log_json(response.usage),
-            metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
-        )
-        return InferResult.success(response, request_id=request_id, performance=metrics)
+        last_error: Exception | None = None
+        for idx, llm_config in enumerate(candidates):
+            is_last = idx == len(candidates) - 1
+            resolved_model = model or llm_config.model
+            resolved_provider = _TYPE_TO_PROVIDER.get(llm_config.type)
+            request, applied_rules = _build_request(
+                model=resolved_model,
+                ctx=ctx,
+                llm_config=llm_config,
+            )
+            logger.info(
+                "LLM infer start: request_id=%s, stream=%s, service=%s, failover_index=%d/%d, model=%s, provider=%s, message_count=%d, tool_count=%d, tool_choice=%s, prompt_cache=%s, applied_rules=%s",
+                request_id, True, llm_config.name, idx, len(candidates) - 1, resolved_model, resolved_provider, len(request.messages), len(ctx.tools or []), request.tool_choice,
+                ctx.prompt_cache, list(applied_rules),
+            )
+
+            # 每个候选服务重试前重置 completion_tokens 计数。
+            stream_state["completion_tokens"] = 0
+            request_gate = _get_service_request_gate(llm_config)
+            try:
+                response = await _send_with_retry(
+                    send_request=llmApiUtil.send_request_stream,
+                    args=(),
+                    kwargs={
+                        "request": request,
+                        "url": llm_config.base_url,
+                        "api_key": llm_config.api_key,
+                        "custom_llm_provider": resolved_provider,
+                        "extra_headers": llm_config.extra_headers,
+                        "on_chunk": _on_chunk,
+                        "request_id": request_id,
+                    },
+                    request_gate=request_gate,
+                    metrics=metrics,
+                    on_status_event=on_status_event,
+                    on_retry_reset=lambda: stream_state.update(completion_tokens=0),
+                    should_block_retry=lambda: stream_state["produced_output"],
+                )
+            except Exception as e:
+                last_error = e
+                category = classify_llm_error(e)
+                # #3 failover：可重试/不可用类错误且仍有兜底服务时切换下一个服务。
+                # M10：一旦已产出输出增量则不再 failover，避免下游重复内容。
+                if not is_last and category in RETRYABLE_CATEGORIES and not stream_state["produced_output"]:
+                    logger.warning(
+                        "LLM failover: service=%s 流式调用失败(category=%s)，切换到下一个兜底服务: request_id=%s, error=%r",
+                        llm_config.name, category.name, request_id, e,
+                    )
+                    continue
+                raise
+            logger.info(
+                "LLM infer success: request_id=%s, stream=%s, service=%s, upstream_request_id=%s, usage=%s, queue_wait_ms=%s, rate_limit_wait_ms=%s, infer_duration_ms=%s, retry_wait_ms=%s, attempts=%s",
+                request_id, True, llm_config.name, response.request_id, _usage_to_log_json(response.usage),
+                metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
+            )
+            return InferResult.success(response, request_id=request_id, performance=metrics)
+        assert last_error is not None  # 循环内要么 return 要么 raise，不会正常退出
+        raise last_error
     except Exception as e:
         logger.exception(
             "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",

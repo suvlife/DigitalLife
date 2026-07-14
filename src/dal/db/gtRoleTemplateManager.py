@@ -1,7 +1,7 @@
 import operator
 from functools import reduce
 from model.dbModel.gtRoleTemplate import GtRoleTemplate
-from .transaction import atomic_transaction
+from .transaction import run_in_transaction_with_retry
 
 
 async def get_role_template_by_name(template_name: str) -> GtRoleTemplate | None:
@@ -76,15 +76,18 @@ async def save_role_template(template: GtRoleTemplate) -> GtRoleTemplate:
     - 无 id：按 name 执行 upsert
     """
     if template.id is not None:
-        async with atomic_transaction():
+        async def _op_update() -> GtRoleTemplate | None:
             await template.aio_save()
-            updated = await get_role_template_by_id(template.id)
+            return await get_role_template_by_id(template.id)
+
+        updated = await run_in_transaction_with_retry(_op_update)
         if updated is None:
             raise RuntimeError(f"role template update failed: {template.id}")
         return updated
 
-    # 用事务包裹 upsert + re-select，防止并发写入导致 re-select 读到他人行
-    async with atomic_transaction():
+    # 用事务包裹 upsert + re-select，防止并发写入导致 re-select 读到他人行。
+    # 事务级重试（H8）：COMMIT 期 BUSY 整体回滚重跑；upsert + re-select 幂等，重跑安全。
+    async def _op_upsert() -> GtRoleTemplate | None:
         await (
             GtRoleTemplate.insert(
                 name=template.name,
@@ -102,7 +105,9 @@ async def save_role_template(template: GtRoleTemplate) -> GtRoleTemplate:
             )
             .aio_execute()
         )
-        created = await get_role_template_by_name(template.name)
+        return await get_role_template_by_name(template.name)
+
+    created = await run_in_transaction_with_retry(_op_upsert)
     if created is None:
         raise RuntimeError(f"role template save failed: {template.name}")
     return created

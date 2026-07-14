@@ -63,12 +63,14 @@ function scheduleReconnect(): void {
 
   reconnectAttempt += 1;
   connectionState.value = 'waiting_reconnect';
-  startReconnectCountdown(reconnectDelayMs);
+  // 审计 L10：指数退避（上限 30s），与 frontend-v2 一致，避免后端宕机期间固定 3s 高频重连压力。
+  const backoffMs = Math.min(30000, reconnectDelayMs * 2 ** (reconnectAttempt - 1));
+  startReconnectCountdown(backoffMs);
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null;
     clearReconnectCountdown();
     connectRealtimeSocket();
-  }, reconnectDelayMs);
+  }, backoffMs);
 }
 
 function connectRealtimeSocket(): void {

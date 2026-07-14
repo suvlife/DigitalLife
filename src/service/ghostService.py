@@ -29,6 +29,17 @@ import aiohttp
 from util import safeHttpUtil
 
 logger = logging.getLogger(__name__)
+
+try:  # Prefer the repository's markdown-it-py dependency for full Markdown.
+    from markdown_it import MarkdownIt
+
+    _MARKDOWN_IT = (
+        MarkdownIt("commonmark", {"html": False, "linkify": False, "breaks": False})
+        .enable("table")
+        .enable("strikethrough")
+    )
+except Exception:  # pragma: no cover - fallback when dependency is missing
+    _MARKDOWN_IT = None
 _GHOST_API_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _RETRY_DELAYS_SECONDS = (10, 30, 120, 300, 900, 3600)
 _worker_task: asyncio.Task[None] | None = None
@@ -234,6 +245,19 @@ def markdown_to_safe_html(markdown_text: str) -> str:
     return "\n".join(output)
 
 
+def markdown_to_html(markdown_text: str) -> str:
+    """Convert Markdown to HTML for Ghost ``source=html``.
+
+    The full document is rendered with no length truncation (#6). ``markdown-it-py``
+    is used when available (raw HTML disabled so untrusted input stays escaped);
+    otherwise the built-in allowlist renderer is used as a fallback.
+    """
+    text = markdown_text or ""
+    if _MARKDOWN_IT is not None:
+        return _MARKDOWN_IT.render(text)
+    return markdown_to_safe_html(text)
+
+
 def _extract_tags_from_content(title: str, content: str) -> list[str]:
     tags = ["数字人生", "多智能体"]
     words = [word.strip() for word in re.split(r"[,，\s]+", title) if len(word.strip()) >= 2]
@@ -254,6 +278,70 @@ def _build_final_markdown(title: str, conclusion: str, *, question: str = "") ->
 
 async def publish_post(
     title: str,
+    content_markdown: str,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Public contract: publish one Markdown document to Ghost.
+
+    Reads Ghost credentials from server-side config, converts the *entire*
+    Markdown body to HTML (no truncation, #6) and submits it via the Admin API
+    ``source=html`` endpoint. Returns ``{"success": True, "url": ...}`` on
+    success or ``{"success": False, "error": ...}`` on failure.
+    """
+    from util import configUtil
+
+    ghost = configUtil.get_app_config().setting.ghost
+    if not (ghost.api_url and ghost.admin_api_key):
+        return {"success": False, "error": "Ghost API URL 或 Admin Key 未配置"}
+    effective_status = (status or ghost.publish_status or "published").strip()
+    if not (title and title.strip()):
+        return {"success": False, "error": "标题不能为空"}
+    if not (content_markdown and content_markdown.strip()):
+        return {"success": False, "error": "正文内容不能为空"}
+
+    result = await _publish_to_ghost(
+        title.strip(),
+        content_markdown,
+        api_url=ghost.api_url,
+        admin_api_key=ghost.admin_api_key,
+        status=effective_status,
+        skip_ssl_verify=ghost.skip_ssl_verify,
+    )
+    if result.get("success"):
+        return {"success": True, "url": result.get("post_url"), "post_id": result.get("post_id")}
+    return {"success": False, "error": result.get("message", "Ghost 发布失败")}
+
+
+async def publish_run_conclusion(
+    run_id: Any,
+    team_name: str,
+    title: str,
+    content_markdown: str,
+) -> dict[str, Any]:
+    """Public contract: publish a run's final conclusion as a blog post.
+
+    Builds a complete document (title + conclusion body) and publishes it
+    through :func:`publish_post`. The full conclusion is submitted without any
+    length truncation. Returns ``{"success", "url"|"error"}``.
+    """
+    from util import configUtil
+
+    ghost = configUtil.get_app_config().setting.ghost
+    safe_title = (title or "").strip() or "综合分析报告"
+    document = _build_final_markdown(safe_title, content_markdown or "")
+
+    result = await publish_post(safe_title, document, status=ghost.publish_status)
+    if result.get("success"):
+        logger.info("Ghost run conclusion published: run_id=%s team=%s", run_id, team_name)
+    else:
+        logger.warning(
+            "Ghost run conclusion publish failed: run_id=%s team=%s", run_id, team_name
+        )
+    return result
+
+
+async def _publish_to_ghost(
+    title: str,
     content: str,
     tags: list[str] | None = None,
     *,
@@ -273,6 +361,10 @@ async def publish_post(
         return {"success": False, "message": "Ghost API URL 或 Admin Key 未配置", "retryable": False}
     if status not in {"published", "draft"}:
         return {"success": False, "message": "Ghost status 必须为 published 或 draft", "retryable": False}
+    if skip_ssl_verify:
+        # Audit L4: publishing without TLS verification is not an authenticated
+        # channel; surface it so operators do not run this way unintentionally.
+        logger.warning("Ghost publish with TLS verification disabled (skip_ssl_verify=True)")
     try:
         base_url = _safe_ghost_base_url(api_url)
         jwt_token = _generate_ghost_jwt(admin_api_key)
@@ -286,7 +378,7 @@ async def publish_post(
     }
     post_body: dict[str, Any] = {
         "title": title,
-        "html": markdown_to_safe_html(content),
+        "html": markdown_to_html(content),
         "tags": [{"name": tag} for tag in (tags or _extract_tags_from_content(title, content))],
         "status": status,
     }
@@ -457,7 +549,7 @@ async def _process_publication(row: Any) -> None:
         row.ghost_slug = slug
 
     ghost = configUtil.get_app_config().setting.ghost
-    result = await publish_post(
+    result = await _publish_to_ghost(
         row.title,
         row.markdown_content,
         list(row.tags or []),
@@ -578,6 +670,8 @@ async def test_ghost_connection(api_url: str, admin_api_key: str, *, skip_ssl_ve
     """Test server-side Admin API authentication without publishing content."""
     if not api_url or not admin_api_key:
         return {"success": False, "message": "请填写 Ghost API URL 和 Admin API Key"}
+    if skip_ssl_verify:
+        logger.warning("Ghost connection test with TLS verification disabled (skip_ssl_verify=True)")
     try:
         base_url = _safe_ghost_base_url(api_url)
         token = _generate_ghost_jwt(admin_api_key)

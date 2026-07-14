@@ -153,6 +153,58 @@ describe('settings API client', () => {
   });
 });
 
+describe('provider preset, fallback, search, and dossier clients', () => {
+  it('loads the provider catalog and creates a service from a preset', async () => {
+    const fetchMock = mockJson({ providers: [{ id: 'kimi', display_name: { 'zh-CN': 'Kimi' }, type: 'openai-compatible', base_url: 'https://api.moonshot.cn/v1', default_model: 'kimi-latest', signup_url: 'https://x', models: ['kimi-latest', 'moonshot-v1-8k'] }] });
+    const catalog = await api.getLlmProviderCatalog();
+    expect(requestAt(fetchMock).path).toBe('/config/llm_providers/catalog.json');
+    expect(catalog[0]).toMatchObject({ id: 'kimi', base_url: 'https://api.moonshot.cn/v1', models: ['kimi-latest', 'moonshot-v1-8k'] });
+    expect(api.providerDisplayName(catalog[0])).toBe('Kimi');
+    await api.createLlmServiceFromProvider({ provider_id: 'kimi', api_key: 'sk-1', model: 'kimi-latest', name: '主脑' });
+    expect(requestAt(fetchMock, 1)).toMatchObject({ path: '/config/llm_services/from_provider.json', body: { provider_id: 'kimi', api_key: 'sk-1', model: 'kimi-latest', name: '主脑' } });
+    expect(requestAt(fetchMock, 1).init.method).toBe('POST');
+  });
+
+  it('reads and writes the LLM fallback chain', async () => {
+    const fetchMock = mockJson({ default_llm_server: 'main', fallback_llm_servers: ['backup-a', 'backup-b'] });
+    const info = await api.getLlmFallback();
+    expect(requestAt(fetchMock).path).toBe('/config/llm_services/fallback.json');
+    expect(info).toEqual({ default_llm_server: 'main', fallback_llm_servers: ['backup-a', 'backup-b'] });
+    await api.setLlmFallback(['backup-a']);
+    expect(requestAt(fetchMock, 1)).toMatchObject({ path: '/config/llm_services/fallback.json', body: { fallback_llm_servers: ['backup-a'] } });
+    expect(requestAt(fetchMock, 1).init.method).toBe('POST');
+  });
+
+  it('reads masked search config and mutates providers', async () => {
+    const fetchMock = mockJson({ enabled: true, max_content_length: 8000, max_fetch_bytes: 5242880, providers: [{ provider: 'tavily', enable: true, api_keys: ['****abcd'], api_keys_count: 1, has_api_key: true }] });
+    const config = await api.getSearchConfig();
+    expect(requestAt(fetchMock).path).toBe('/config/search.json');
+    expect(config.providers[0]).toMatchObject({ provider: 'tavily', api_keys_count: 1, has_api_key: true });
+    await api.updateSearchSettings({ enabled: false, max_content_length: 9000, max_fetch_bytes: 1048576 });
+    await api.createSearchProvider({ provider: 'brave', api_keys: ['k1', 'k2'], enable: true });
+    await api.modifySearchProvider(0, { clear_api_keys: true });
+    await api.deleteSearchProvider(1);
+    expect(requestAt(fetchMock, 1)).toMatchObject({ path: '/config/search/settings.json', body: { enabled: false, max_content_length: 9000, max_fetch_bytes: 1048576 } });
+    expect(requestAt(fetchMock, 2)).toMatchObject({ path: '/config/search/providers/create.json', body: { provider: 'brave', api_keys: ['k1', 'k2'], enable: true } });
+    expect(requestAt(fetchMock, 3)).toMatchObject({ path: '/config/search/providers/0/modify.json', body: { clear_api_keys: true } });
+    expect(requestAt(fetchMock, 4).path).toBe('/config/search/providers/1/delete.json');
+    for (const index of [1, 2, 3, 4]) expect(requestAt(fetchMock, index).init.method).toBe('POST');
+  });
+
+  it('lists dossiers and reads a single dossier with normalized run', async () => {
+    const listMock = mockJson({ dossiers: [{ run: { id: 5, team_id: 2, title: '卷一', query: '问', status: 'COMPLETED', progress_percent: 100, blog_publish_status: 'PUBLISHED', blog_post_url: 'https://p' }, report_path: 'outputs/a.md', report_ready: true, has_conclusion: true }] });
+    const dossiers = await api.getDossiers(2, 30);
+    expect(requestAt(listMock).path).toBe('/runs/dossiers/list.json?team_id=2&limit=30');
+    expect(dossiers[0]).toMatchObject({ reportPath: 'outputs/a.md', reportReady: true, hasConclusion: true });
+    expect(dossiers[0].run).toMatchObject({ id: '5', teamId: 2, phase: 'completed', progress: 100 });
+
+    const detailMock = mockJson({ run: { id: 5, team_id: 2, title: '卷一', query: '问', status: 'COMPLETED' }, content: '# 结论', report_path: 'outputs/a.md', report_ready: true, has_conclusion: true });
+    const dossier = await api.getDossier(5);
+    expect(requestAt(detailMock).path).toBe('/runs/5/dossier.json');
+    expect(dossier).toMatchObject({ content: '# 结论', reportPath: 'outputs/a.md', reportReady: true, hasConclusion: true });
+  });
+});
+
 describe('authentication contract', () => {
   it('includes cookie credentials and exposes 401 as authentication-required state', async () => {
     const { auth } = await import('./auth');

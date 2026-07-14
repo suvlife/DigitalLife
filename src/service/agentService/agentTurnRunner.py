@@ -37,6 +37,12 @@ from dal.db import gtAgentTaskManager, gtAgentHistoryManager
 logger = logging.getLogger(__name__)
 
 
+# 单轮硬性步数上限：统计一轮内所有 step（推理 + 工具执行），防止行为异常/对抗性
+# 模型反复调用非 finish 工具而永不结束，导致单轮无限推进、烧尽 API 配额（审计 C2）。
+# 超限时以受控方式结束（标 ROOM_TURN_FINISH），而非抛 RuntimeError 走 FAILED→重试放大。
+_MAX_TURN_STEPS = 80
+
+
 # 高危命令模式：公网部署时拦截可能危害服务器的命令
 _DANGEROUS_COMMAND_PATTERNS = [
     "rm -rf", "rmdir", "mkfs", "dd if=", "shutdown", "reboot", "halt",
@@ -295,6 +301,7 @@ class AgentTurnRunner:
         tools = self.tool_registry.export_openai_tools()
         turn_setup: AgentTurnSetup = self.driver.turn_setup
         failed_action_count = 0
+        total_step_count = 0
         next_tool_choice: str | None = None
 
         while True:
@@ -309,12 +316,18 @@ class AgentTurnRunner:
 
             result = await self._advance_step(room, tools, tool_choice=next_tool_choice)
             next_tool_choice = None
+            total_step_count += 1
 
             if result == TurnStepResult.TURN_DONE:
                 return
 
             if result == TurnStepResult.TOOL_EXECUTE_SUCCESS:
                 failed_action_count = 0
+                # 硬性步数上限仅在干净边界（最后一条为已完成的 TOOL 结果）检查，
+                # 保证受控收尾不会遗留悬空 tool_call。
+                if total_step_count >= _MAX_TURN_STEPS:
+                    await self._force_finish_turn(room, total_step_count)
+                    return
                 continue
 
             if result == TurnStepResult.LLM_OUTPUT_TOOL_CALLS:
@@ -361,6 +374,35 @@ class AgentTurnRunner:
                     f"达到 finish 失败重试上限: agent_id={self.gt_agent.id}, "
                     f"failed_actions={failed_action_count}, max_retries={turn_setup.max_retries}"
                 )
+
+    async def _force_finish_turn(self, room: ChatRoom | None, total_step_count: int) -> None:
+        """轮次步数达到硬上限时的受控收尾（审计 C2）。
+
+        仅在干净边界调用（最后一条为已完成的 TOOL 结果，无悬空 tool_call）：
+        追加一条 ROOM_TURN_FINISH 标记消息关闭当前轮次，并触发房间收尾，
+        避免抛 RuntimeError 走 FAILED→重试放大。
+        """
+        logger.warning(
+            "轮次步数达到硬上限，强制受控结束: %s(agent_id=%d), steps=%d, max=%d",
+            self.gt_agent.name, self.gt_agent.id, total_step_count, _MAX_TURN_STEPS,
+        )
+        finish_text = (
+            f"本轮已达到系统步数上限（{_MAX_TURN_STEPS} 步），为控制成本已自动结束本轮。"
+            "请以下一条新消息为起点重新出发。"
+        )
+        await self._history.append_history_message(GtAgentHistory.build(
+            llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, finish_text),
+            tags=[AgentHistoryTag.ROOM_TURN_FINISH],
+        ))
+        await agentActivityService.add_activity(
+            gt_agent=self.gt_agent,
+            activity_type=AgentActivityType.AGENT_STATE,
+            status=AgentActivityStatus.SUCCEEDED,
+            detail=f"轮次达到步数上限({_MAX_TURN_STEPS})，自动结束",
+            metadata=self._base_metadata(),
+        )
+        if room is not None:
+            await room.handle_finish_request(self.gt_agent.id)
 
     async def _advance_step(self, room: ChatRoom | None, tools: list[llmApiUtil.OpenAITool], tool_choice: str | None = None) -> TurnStepResult:
         """根据当前 history 状态推进一个 step。
@@ -481,7 +523,7 @@ class AgentTurnRunner:
 
         try:
             messages = history.build_infer_messages()
-            estimated_tokens = compact.estimate_tokens(resolved_model, messages, self.system_prompt)
+            estimated_tokens = await compact.estimate_tokens_async(resolved_model, messages, self.system_prompt)
 
             messages, estimated_tokens, pre_compact_triggered = await self._check_compact(
                 messages,
@@ -567,7 +609,7 @@ class AgentTurnRunner:
 
                     await self._execute_compact()
                     messages = history.build_infer_messages()
-                    estimated_tokens = compact.estimate_tokens(resolved_model, messages, self.system_prompt)
+                    estimated_tokens = await compact.estimate_tokens_async(resolved_model, messages, self.system_prompt)
                     if estimated_tokens >= hard_limit_tokens:
                         raise RuntimeError(f"overflow compact 后仍超限: agent_id={self.gt_agent.id}") from error
 
@@ -985,7 +1027,7 @@ class AgentTurnRunner:
             "[compact-recheck] agent_id=%d, message_count=%d, messages=[%s]",
             self.gt_agent.id, len(messages), msg_summary,
         )
-        estimated_tokens = compact.estimate_tokens(resolved_model, messages, self.system_prompt)
+        estimated_tokens = await compact.estimate_tokens_async(resolved_model, messages, self.system_prompt)
         if estimated_tokens >= hard_limit_tokens:
             raise RuntimeError(
                 f"{check_stage} compact 后仍超限: agent_id={self.gt_agent.id}, "
@@ -1004,7 +1046,7 @@ class AgentTurnRunner:
             await self._execute_compact_locked()
 
     async def _execute_compact_locked(self) -> None:
-        resolved_model, llm_config, _, _ = self._resolve_compact_config()
+        resolved_model, llm_config, _, hard_limit_tokens = self._resolve_compact_config()
 
         compact_activity = await agentActivityService.add_activity(
             gt_agent=self.gt_agent, activity_type=AgentActivityType.COMPACT, metadata=self._base_metadata(),
@@ -1018,6 +1060,9 @@ class AgentTurnRunner:
 
         # 摘要 token 上限动态设为上下文长度的 10%，随模型配置自动伸缩
         compact_max_tokens = max(1, int(llm_config.context_window_tokens * 0.1))
+        # 单条源消息 token 硬上限：防止超长单条消息（如巨型工具结果）使 compact
+        # 请求本身无法收敛并触发下游 400（审计 M14）。取硬上限的一半作为单条预算。
+        per_message_max_tokens = max(1, hard_limit_tokens // 2)
         try:
             summary_text = await compact.compact_messages(
                 messages=compact_plan.source_messages,
@@ -1026,6 +1071,7 @@ class AgentTurnRunner:
                 tools=self.tool_registry.export_openai_tools(),
                 max_tokens=compact_max_tokens,
                 team_config=await self._get_team_config_async(),
+                per_message_max_tokens=per_message_max_tokens,
             )
         except Exception as e:
             error_detail = str(e)

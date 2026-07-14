@@ -59,7 +59,22 @@ class AgentTaskConsumer:
             logger.debug(f"消费协程已在运行，跳过启动: {self.gt_agent.name}(agent_id={self.gt_agent.id})")
             return
         logger.info(f"启动消费协程: {self.gt_agent.name}(agent_id={self.gt_agent.id})")
-        self._aio_consumer_task = asyncio.create_task(self.consume())
+        task = asyncio.create_task(self.consume())
+        # 注册 done_callback 检索异常：fire-and-forget 任务若崩溃，仅会在 GC 时
+        # 打印 "Task exception was never retrieved"，不落业务日志（审计 H6）。
+        task.add_done_callback(self._on_consumer_done)
+        self._aio_consumer_task = task
+
+    def _on_consumer_done(self, task: asyncio.Task) -> None:
+        """消费协程结束回调：检索并记录未处理异常，保证故障可观测。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "消费协程异常退出: %s(agent_id=%d), error=%s",
+                self.gt_agent.name, self.gt_agent.id, exc, exc_info=exc,
+            )
 
     def stop(self) -> None:
         """停止消费协程。"""
@@ -116,6 +131,26 @@ class AgentTaskConsumer:
                 f"existing_task={id(existing)}, current_task={id(current_consumer)}"
             )
 
+        try:
+            await self._consume_tasks(current_consumer)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # 外层兜底：循环体外的 await（_set_status / 取任务 / 收尾续起等）抛出时，
+            # 保证 Agent 不会静默卡死——落业务日志、置 FAILED、清理死任务引用（审计 H6）。
+            logger.error(
+                f"消费循环未捕获异常，Agent 置 FAILED: {self.gt_agent.name}(agent_id={self.gt_agent.id}), error={e}",
+                exc_info=True,
+            )
+            try:
+                await self._set_status(AgentStatus.FAILED, str(e))
+            except Exception:
+                logger.error(f"兜底置 FAILED 状态失败: agent_id={self.gt_agent.id}", exc_info=True)
+            if self._aio_consumer_task is current_consumer:
+                self._aio_consumer_task = None
+
+    async def _consume_tasks(self, current_consumer: "asyncio.Task | None") -> None:
+        """消费循环主体：取任务 → 执行 → 状态流转，直至无待处理任务。"""
         while True:
             await self._set_status(AgentStatus.ACTIVE)
             task = await gtScheculeTaskManager.get_first_unfinish_task(self.gt_agent.id)

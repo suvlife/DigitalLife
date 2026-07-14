@@ -204,17 +204,26 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
         self._user_id: int | None = None
 
     def check_origin(self, origin: str) -> bool:
-        """WebSocket Origin 校验：仅允许同源连接（公网部署安全防护）。"""
-        # 开发模式（无 Host 头或 localhost）允许所有来源
+        """WebSocket Origin 校验：仅允许同源连接（公网部署安全防护）。
+
+        审计 H3：默认策略对 loopback Host 放行（本地开发便捷，未鉴权模式下存在
+        CSWSH 风险）。当 setting.security.ws_strict_origin=True 时进入严格模式：
+        无论 Host 是否为 loopback，都要求 Origin 与 Host 严格同源，缺失 Origin 直接拒绝。
+        """
         host = self.request.headers.get("Host", "")
-        if not host or "localhost" in host or "127.0.0.1" in host:
-            return True
-        # 生产模式：校验 Origin 与 Host 一致
+        strict = configUtil.get_app_config().setting.security.ws_strict_origin
+        # 非严格模式：开发便捷，loopback 或无 Host 放行
+        if not strict:
+            if not host or "localhost" in host or "127.0.0.1" in host:
+                return True
+        elif not host:
+            return False
+        # 严格模式或生产 Host：校验 Origin 与 Host 一致
         from urllib.parse import urlparse
         try:
             parsed = urlparse(origin)
             origin_host = parsed.netloc or parsed.path
-            return origin_host == host
+            return bool(origin_host) and origin_host == host
         except Exception:
             return False
 

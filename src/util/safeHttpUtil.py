@@ -157,7 +157,12 @@ def create_pinned_client_session(
     )
     trace_config = aiohttp.TraceConfig()
     trace_config.on_request_redirect.append(_reject_redirect)
-    timeout_value = timeout or aiohttp.ClientTimeout(total=600)
+    if timeout is None:
+        timeout_value: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=600)
+    elif isinstance(timeout, (int, float)):
+        timeout_value = aiohttp.ClientTimeout(total=float(timeout))
+    else:
+        timeout_value = timeout
     return aiohttp.ClientSession(
         timeout=timeout_value,
         connector=connector,
@@ -186,15 +191,29 @@ async def request(
     max_redirects: int = 5,
     field_name: str = "URL",
     ssl: Any = None,
+    max_bytes: int | None = None,
 ) -> SafeHttpResponse:
-    """Perform a request with DNS pinning and manually validated redirects."""
+    """Perform a request with DNS pinning and manually validated redirects.
+
+    When ``max_bytes`` is set, the response body is read incrementally and
+    truncated at that limit so an oversized or slow-streaming upstream cannot
+    exhaust memory (see audit finding H2). A truncated body still returns the
+    partial content with the real status/headers.
+    """
     current_url = url.strip()
     current_method = method.upper()
     current_json = json_body
     current_data = data
     current_headers = dict(headers or {})
     visited: set[str] = set()
-    timeout_value = timeout or aiohttp.ClientTimeout(total=30)
+    # aiohttp 要求 timeout 为 ClientTimeout；调用方可能传入数字秒数（如 web_fetch 的 timeout=30），
+    # 统一归一化为 ClientTimeout，避免 "timeout parameter cannot be of <class 'int'>" 报错。
+    if timeout is None:
+        timeout_value: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=30)
+    elif isinstance(timeout, (int, float)):
+        timeout_value = aiohttp.ClientTimeout(total=float(timeout))
+    else:
+        timeout_value = timeout
 
     for hop in range(max_redirects + 1):
         if current_url in visited:
@@ -215,7 +234,12 @@ async def request(
                 allow_redirects=False,
                 ssl=ssl,
             ) as response:
-                body = await response.read()
+                if max_bytes is not None:
+                    body = await response.content.read(max_bytes + 1)
+                    if len(body) > max_bytes:
+                        body = body[:max_bytes]
+                else:
+                    body = await response.read()
                 response_headers = dict(response.headers)
                 response_url = str(response.url)
                 status = response.status

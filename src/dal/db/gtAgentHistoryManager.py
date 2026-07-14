@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from peewee import SQL
 
 from constants import AgentHistoryTag
@@ -8,8 +10,10 @@ from constants import OpenaiApiRole
 from model.dbModel.gtAgentHistory import GtAgentHistory
 from model.dbModel.historyUsage import HistoryUsage
 from util import llmApiUtil
-from .transaction import atomic_transaction
+from .transaction import run_in_transaction_with_retry
 from . import gtAgentManager
+
+logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
@@ -37,7 +41,51 @@ async def append_agent_history_message(message: GtAgentHistory) -> GtAgentHistor
     )
     if row is None:
         raise RuntimeError(f"append agent history failed: agent_id={message.agent_id}#{message.seq}")
+    # M11：on_conflict_ignore 会在 (agent_id, seq) 已被占用时静默丢弃本次写入，
+    # 使调用方误以为写入成功但拿到的是他人/旧行。re-select 后校验关键字段一致性，
+    # 若发现分叉则告警（不硬失败，避免打断上层业务；由日志暴露并发/重入抢插）。
+    if (
+        row.role != message.role
+        or row.tool_call_id != message.tool_call_id
+        or row.status != message.status
+    ):
+        logger.warning(
+            "[append-history] seq 冲突被 on_conflict_ignore 掩盖：agent_id=%d seq=%d "
+            "已存在行(role=%s, tool_call_id=%s, status=%s) 与待写入(role=%s, tool_call_id=%s, status=%s)不一致，本次写入被丢弃",
+            message.agent_id, message.seq,
+            row.role, row.tool_call_id, row.status,
+            message.role, message.tool_call_id, message.status,
+        )
     return row
+
+
+async def _shift_agent_history_seq_from_body(agent_id: int, from_seq: int, delta: int) -> None:
+    """seq 平移的语句体，不自行开启事务。
+
+    由调用方（``shift_agent_history_seq_from`` / ``insert_agent_history_message_at_seq``）
+    在事务级重试封装内统一提供事务边界，避免嵌套 savepoint 使外层 COMMIT BUSY 兜不到。
+    """
+    if delta == 0:
+        return
+    rows = await (
+        GtAgentHistory
+        .select()
+        .where(
+            GtAgentHistory.agent_id == agent_id,
+            GtAgentHistory.seq >= from_seq,
+        )
+        .order_by(
+            GtAgentHistory.seq.desc() if delta > 0 else GtAgentHistory.seq.asc()  # type: ignore[attr-defined]
+        )
+        .aio_execute()
+    )
+    for row in rows:
+        await (
+            GtAgentHistory
+            .update(seq=row.seq + delta)
+            .where(GtAgentHistory.id == row.id)
+            .aio_execute()
+        )
 
 
 async def shift_agent_history_seq_from(agent_id: int, from_seq: int, delta: int) -> None:
@@ -45,36 +93,30 @@ async def shift_agent_history_seq_from(agent_id: int, from_seq: int, delta: int)
 
     为避免唯一索引(agent_id, seq)冲突，delta>0 时按 seq 降序更新。
     整个操作在事务中执行，保证中途失败不会留下 seq 半平移的不一致状态。
+
+    多语句事务，套用事务级重试（H8）：COMMIT 期 BUSY 会整体回滚并重跑，
+    平移幂等且无外部副作用，重跑安全。
     """
     if delta == 0:
         return
 
-    async with atomic_transaction():
-        rows = await (
-            GtAgentHistory
-            .select()
-            .where(
-                GtAgentHistory.agent_id == agent_id,
-                GtAgentHistory.seq >= from_seq,
-            )
-            .order_by(
-                GtAgentHistory.seq.desc() if delta > 0 else GtAgentHistory.seq.asc()  # type: ignore[attr-defined]
-            )
-            .aio_execute()
-        )
-        for row in rows:
-            await (
-                GtAgentHistory
-                .update(seq=row.seq + delta)
-                .where(GtAgentHistory.id == row.id)
-                .aio_execute()
-            )
+    async def _op() -> None:
+        await _shift_agent_history_seq_from_body(agent_id, from_seq, delta)
+
+    await run_in_transaction_with_retry(_op)
 
 
 async def insert_agent_history_message_at_seq(message: GtAgentHistory) -> GtAgentHistory:
-    """在指定 seq 插入历史消息，并将其后的消息整体后移。"""
-    await shift_agent_history_seq_from(message.agent_id, message.seq, 1)
-    return await append_agent_history_message(message)
+    """在指定 seq 插入历史消息，并将其后的消息整体后移。
+
+    shift + insert 并入同一事务（H7），避免"已平移未插入"的 seq 空洞与内存/DB 分叉；
+    整块事务套用事务级重试（H8），COMMIT 期 BUSY 整体回滚后重跑（幂等、无外部副作用）。
+    """
+    async def _op() -> GtAgentHistory:
+        await _shift_agent_history_seq_from_body(message.agent_id, message.seq, 1)
+        return await append_agent_history_message(message)
+
+    return await run_in_transaction_with_retry(_op)
 
 
 async def update_agent_history_by_id(

@@ -1,6 +1,6 @@
 import os
 from constants import DriverType
-from controller.baseController import BaseHandler
+from controller.baseController import BaseHandler, format_validation_error
 from service import llmProviderService
 from util import configUtil, assertUtil, safeHttpUtil
 import appPaths
@@ -98,7 +98,7 @@ class LlmServiceFromProviderHandler(BaseHandler):
         except ValidationError as e:
             self.return_with_error(
                 error_code="validation_error",
-                error_desc=str(e),
+                error_desc=format_validation_error(e),
             )
             return
 
@@ -141,7 +141,9 @@ class DirectoriesHandler(BaseHandler):
 
     async def get(self) -> None:
         demo_mode = configUtil.get_app_config().setting.demo_mode
-        if demo_mode.hide_sensitive:
+        # 审计 M6：绝对路径属基础设施敏感信息，仅管理员可见；
+        # 非管理员或 demo 隐私模式下一律脱敏为空串。
+        if demo_mode.hide_sensitive or not self._is_admin():
             directories = {
                 "storage_root": "",
                 "config_dir": "",

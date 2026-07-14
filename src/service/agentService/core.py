@@ -184,7 +184,10 @@ async def _load_team_agents(team_id: int, workspace_root: str | None = None) -> 
 
 async def load_team_agents(team_id: int, workspace_root: str | None = None) -> None:
     """从数据库读取指定 Team 的 Agent 配置，并创建对应的内存 Agent 实例。"""
-    await _load_team_agents(team_id, workspace_root=workspace_root)
+    # 持 _agents_lock 序列化注册表变更，避免与 unload/hot_reload/shutdown 并发交错
+    # 导致注册表不一致或读到已关闭实例（审计 M1）。
+    async with _agents_lock:
+        await _load_team_agents(team_id, workspace_root=workspace_root)
 
 
 async def load_all_team_agents(workspace_root: str | None = None) -> None:
@@ -206,7 +209,9 @@ async def _unload_team_agents(team_id: int) -> None:
 
 async def unload_team(team_id: int) -> None:
     """关闭并移除指定 Team 的内存 Agent 实例。"""
-    await _unload_team_agents(team_id)
+    # 持 _agents_lock 序列化注册表变更，避免与 load/hot_reload/shutdown 并发交错（审计 M1）。
+    async with _agents_lock:
+        await _unload_team_agents(team_id)
 
 
 async def hot_reload_agent(agent_id: int) -> None:
@@ -477,7 +482,9 @@ async def overwrite_team_agent_employ_status(team_id: int, on_board_agent_ids: l
 
 async def shutdown() -> None:
     global _agents
-    close_tasks: List[Any] = [a.close() for a in _agents.values()]
-    if close_tasks:
-        await asyncio.gather(*close_tasks, return_exceptions=True)
-    _agents = {}
+    # 持 _agents_lock 序列化注册表变更，避免与 load/unload/hot_reload 并发交错（审计 M1）。
+    async with _agents_lock:
+        close_tasks: List[Any] = [a.close() for a in _agents.values()]
+        if close_tasks:
+            await asyncio.gather(*close_tasks, return_exceptions=True)
+        _agents = {}

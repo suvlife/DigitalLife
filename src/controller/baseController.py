@@ -6,7 +6,7 @@ import time
 from typing import Any, TypeVar
 
 import tornado.web
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from tornado.web import HTTPError
 
 from exception import TogoException
@@ -15,6 +15,24 @@ from util import jsonUtil, configUtil
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
+
+
+def format_validation_error(e: ValidationError) -> str:
+    """将 Pydantic ValidationError 归纳为「字段级」提示，不回显 input_value。
+
+    审计 L5：直接 str(e) 会带出 input_value（提交的原始字段值）与内部模型结构，
+    这里只提取 loc + msg，避免把用户提交内容/模型细节回显给前端。
+    """
+    parts: list[str] = []
+    try:
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err.get("loc", ()))
+            msg = err.get("msg", "校验失败")
+            parts.append(f"{loc}: {msg}" if loc else str(msg))
+    except Exception:  # pragma: no cover - 防御性兜底
+        return "参数校验失败"
+    return "; ".join(parts) or "参数校验失败"
+
 
 _CSP_HEADER = (
     "default-src 'self'; "
@@ -48,6 +66,26 @@ def set_security_headers(handler: tornado.web.RequestHandler) -> None:
 # _rate_limit_store: dict[(ip, path), list[float]] -> 最近请求时间戳列表
 _rate_limit_store: dict[tuple[str, str], list[float]] = {}
 _RATE_LIMIT_WINDOW_SECONDS = 60  # 60 秒窗口
+_rate_limit_last_prune: float = 0.0
+_RATE_LIMIT_PRUNE_INTERVAL_SECONDS = 300  # 每 5 分钟清理一次空/过期 key
+
+
+def _prune_rate_limit_store(now: float) -> None:
+    """周期性清理窗口外的空 key，防止 _rate_limit_store 无界增长（审计 L2）。
+
+    攻击者变换源 IP / 路径本可使字典无限膨胀；此处按窗口过滤后删除空列表 key。
+    """
+    global _rate_limit_last_prune
+    if now - _rate_limit_last_prune < _RATE_LIMIT_PRUNE_INTERVAL_SECONDS:
+        return
+    _rate_limit_last_prune = now
+    window = _RATE_LIMIT_WINDOW_SECONDS
+    for key in list(_rate_limit_store.keys()):
+        remaining = [ts for ts in _rate_limit_store[key] if now - ts < window]
+        if remaining:
+            _rate_limit_store[key] = remaining
+        else:
+            del _rate_limit_store[key]
 
 
 def _check_rate_limit(ip: str, path: str, max_requests: int) -> bool:
@@ -55,6 +93,7 @@ def _check_rate_limit(ip: str, path: str, max_requests: int) -> bool:
     key = (ip, path)
     now = time.monotonic()
     window = _RATE_LIMIT_WINDOW_SECONDS
+    _prune_rate_limit_store(now)
     timestamps = _rate_limit_store.get(key, [])
     # 清理过期时间戳
     timestamps = [ts for ts in timestamps if now - ts < window]
@@ -229,6 +268,40 @@ class BaseHandler(tornado.web.RequestHandler):
         user = self.get_current_user()
         return user.id if user else None
 
+    def _is_admin(self) -> bool:
+        """判断当前请求是否具备管理员身份（不抛异常，供脱敏判定使用）。
+
+        与 _assert_admin 判定一致：Cookie ADMIN 用户，或未启用多用户鉴权 / 合法
+        全局 Token 的旧部署视为管理员。
+        """
+        from model.dbModel.gtUser import UserRole
+
+        user = self.get_current_user()
+        if user is not None and user.role == UserRole.ADMIN:
+            return True
+        if user is None and self._is_authed():
+            return True
+        return False
+
+    def _assert_json_content_type(self) -> None:
+        """审计 H4：可配置强制校验 JSON 接口的 Content-Type。
+
+        setting.security.enforce_content_type=True 时，拒绝非 application/json 的
+        请求体（阻断 text/plain 跨站状态变更）。默认关闭，保持功能优先不破坏现有调用。
+        """
+        if not configUtil.get_app_config().setting.security.enforce_content_type:
+            return
+        content_type = self.request.headers.get("Content-Type", "")
+        # 取分号前的主类型，忽略 charset 等参数
+        main_type = content_type.split(";", 1)[0].strip().lower()
+        if main_type != "application/json":
+            self.set_status(415)
+            self.return_json({
+                "error_code": "unsupported_media_type",
+                "error_desc": "请求 Content-Type 必须为 application/json",
+            })
+            raise tornado.web.Finish()
+
     def _assert_admin(self) -> None:
         """要求管理员权限。
 
@@ -324,6 +397,7 @@ class BaseHandler(tornado.web.RequestHandler):
 
     def parse_request(self, model_class: type[T]) -> T:
         """解析请求体为指定的 Pydantic 模型。"""
+        self._assert_json_content_type()
         try:
             body = json.loads(self.request.body)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -334,6 +408,7 @@ class BaseHandler(tornado.web.RequestHandler):
 
     def parse_request_dict(self) -> dict:
         """解析请求体为 dict（用于不需要 Pydantic 模型的简单接口）。"""
+        self._assert_json_content_type()
         try:
             body = json.loads(self.request.body)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:

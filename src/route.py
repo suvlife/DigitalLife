@@ -64,6 +64,43 @@ class _V2CompatibilityRedirectHandler(tornado.web.RequestHandler):
         self.redirect(target, permanent=True)
 
 
+def _load_or_create_cookie_secret() -> str:
+    """从持久化文件读取 cookie_secret，不存在则生成并写入（审计 L7）。
+
+    每次进程启动随机生成会使已签发的 _xsrf cookie 失效（重启即需刷新），
+    且多进程/水平扩展时各实例 secret 不一致导致 XSRF 校验失败。持久化到
+    STORAGE_ROOT/cookie_secret（0600）可消除这两个问题。可用环境变量
+    DIGITALLIFE_COOKIE_SECRET 覆盖（多副本共享同一值）。
+    """
+    import secrets
+    import appPaths
+
+    env_secret = os.environ.get("DIGITALLIFE_COOKIE_SECRET")
+    if env_secret and env_secret.strip():
+        return env_secret.strip()
+
+    secret_path = os.path.join(appPaths.STORAGE_ROOT, "cookie_secret")
+    try:
+        if os.path.exists(secret_path):
+            with open(secret_path, "r", encoding="utf-8") as f:
+                existing = f.read().strip()
+            if existing:
+                return existing
+    except OSError:
+        pass
+
+    secret = secrets.token_hex(32)
+    try:
+        os.makedirs(appPaths.STORAGE_ROOT, exist_ok=True)
+        with open(secret_path, "w", encoding="utf-8") as f:
+            f.write(secret)
+        os.chmod(secret_path, 0o600)
+    except OSError:
+        # 无法持久化（如只读文件系统）时退回进程内随机值，功能不受影响
+        pass
+    return secret
+
+
 tornado_settings = {
     'debug': False,
     'compress_response': True,
@@ -72,7 +109,7 @@ tornado_settings = {
     'websocket_ping_timeout': 30,
     # Cookie 安全
     'xsrf_cookies': True,  # 启用 XSRF 防护（BaseHandler.check_xsrf_cookie 按需豁免）
-    'cookie_secret': __import__('secrets').token_hex(32),
+    'cookie_secret': _load_or_create_cookie_secret(),
 }
 
 application = tornado.web.Application([
@@ -92,6 +129,7 @@ application = tornado.web.Application([
     (r"/config/llm_services/list.json",              settingController.LlmServiceListHandler),
     (r"/config/llm_services/create.json",            settingController.LlmServiceCreateHandler),
     (r"/config/llm_services/test.json",              settingController.LlmServiceTestHandler),
+    (r"/config/llm_services/fallback.json",          settingController.LlmFallbackHandler),
     (r"/config/llm_services/(\d+)/modify.json",      settingController.LlmServiceModifyHandler),
     (r"/config/llm_services/(\d+)/delete.json",      settingController.LlmServiceDeleteHandler),
     (r"/config/llm_services/(\d+)/set_default.json",  settingController.LlmServiceSetDefaultHandler),
@@ -102,6 +140,13 @@ application = tornado.web.Application([
     (r"/config/tools/list.json",                    settingController.ToolListHandler),
     (r"/config/ghost.json",                         settingController.GhostConfigHandler),
     (r"/config/ghost/test.json",                    settingController.GhostTestHandler),
+
+    # Search Tools Config (#5：多引擎 + 多 key，key 脱敏)
+    (r"/config/search.json",                         settingController.SearchConfigHandler),
+    (r"/config/search/settings.json",                settingController.SearchSettingsHandler),
+    (r"/config/search/providers/create.json",        settingController.SearchProviderCreateHandler),
+    (r"/config/search/providers/(\d+)/modify.json",  settingController.SearchProviderModifyHandler),
+    (r"/config/search/providers/(\d+)/delete.json",  settingController.SearchProviderDeleteHandler),
 
     # System Status & Quick Init (V13)
     (r"/system/status.json",                         systemController.SystemStatusHandler),
@@ -140,10 +185,12 @@ application = tornado.web.Application([
     # Task Runs (可恢复进度快照)
     (r"/runs/current.json",                         runController.CurrentRunHandler),
     (r"/runs/list.json",                            runController.RunListHandler),
+    (r"/runs/dossiers/list.json",                   runController.DossierListHandler),
     (r"/runs/(\d+).json",                          runController.RunDetailHandler),
     (r"/runs/(\d+)/rooms.json",                    runController.RunRoomsHandler),
     (r"/runs/(\d+)/timeline.json",                 runController.RunTimelineHandler),
     (r"/runs/(\d+)/final_answer.json",             runController.RunFinalAnswerHandler),
+    (r"/runs/(\d+)/dossier.json",                  runController.DossierDetailHandler),
 
     # WebSocket
     (r"/ws/events.json",                            wsController.EventsWsHandler),

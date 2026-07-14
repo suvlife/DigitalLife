@@ -17,7 +17,7 @@ async def test_worker_marks_publication_and_run_published(monkeypatch) -> None:
     )))
     import util.configUtil as configUtil
     monkeypatch.setattr(configUtil, "get_app_config", lambda: config)
-    monkeypatch.setattr(ghostService, "publish_post", AsyncMock(return_value={
+    monkeypatch.setattr(ghostService, "_publish_to_ghost", AsyncMock(return_value={
         "success": True, "post_id": "post-1", "post_url": "https://blog.example/post/"
     }))
     import service.runService as runService
@@ -50,7 +50,7 @@ async def test_worker_persists_retry_and_run_status(monkeypatch) -> None:
     )))
     import util.configUtil as configUtil
     monkeypatch.setattr(configUtil, "get_app_config", lambda: config)
-    monkeypatch.setattr(ghostService, "publish_post", AsyncMock(return_value={
+    monkeypatch.setattr(ghostService, "_publish_to_ghost", AsyncMock(return_value={
         "success": False, "retryable": True, "message": "temporary"
     }))
     import service.runService as runService
@@ -88,7 +88,7 @@ async def test_worker_lost_local_mark_converges_on_retry_without_second_create(m
     publish = AsyncMock(return_value={
         "success": True, "post_id": "post-1", "post_url": "https://blog.example/post/"
     })
-    monkeypatch.setattr(ghostService, "publish_post", publish)
+    monkeypatch.setattr(ghostService, "_publish_to_ghost", publish)
 
     first = SimpleNamespace(
         id=9, publication_key="final:9", ghost_slug="digitallife-stable",

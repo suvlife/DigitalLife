@@ -199,8 +199,8 @@ def test_startup_skips_invalid_front_matter():
             appPaths.USER_SKILLS_DIR = original_user
 
 
-def test_startup_name_mismatch_uses_dir_name():
-    """name 与目录名不一致时使用目录名。"""
+def test_startup_name_mismatch_uses_front_matter_name():
+    """name 与目录名不一致时以 SKILL.md front-matter 的 name 为准（M9）。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = os.path.join(tmpdir, "dir_name")
         os.makedirs(skill_dir)
@@ -213,9 +213,11 @@ def test_startup_name_mismatch_uses_dir_name():
         appPaths.USER_SKILLS_DIR = "/nonexistent/skills/user"
         try:
             skillService.startup()
-            info = skillService.get_skill("dir_name")
+            info = skillService.get_skill("different_name")
             assert info is not None
-            assert info.name == "dir_name"
+            assert info.name == "different_name"
+            # 目录名不再是索引键
+            assert skillService.get_skill("dir_name") is None
         finally:
             appPaths.BUILTIN_SKILLS_DIR = original_builtin
             appPaths.USER_SKILLS_DIR = original_user

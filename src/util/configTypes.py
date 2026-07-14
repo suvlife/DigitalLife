@@ -193,11 +193,75 @@ class DriverFallbackConfig(BaseModel):
     tsp_to_native: bool = True
 
 
+class SearchProviderConfig(BaseModel):
+    """单个搜索/抓取引擎的配置，支持多 key 轮询。
+
+    provider 取值：tavily / brave / bing（bing 无需 key，作为最终兜底）。
+    api_keys 为该引擎的一个或多个 key，运行时按轮询方式使用，失败自动切换下一个。
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str
+    api_keys: List[str] = Field(default_factory=list)
+    enable: bool = True
+
+    @field_validator("provider")
+    @classmethod
+    def _normalize_provider(cls, value: str) -> str:
+        return (value or "").strip().lower()
+
+    @field_validator("api_keys")
+    @classmethod
+    def _clean_keys(cls, value: List[str] | None) -> List[str]:
+        if not value:
+            return []
+        # 去空白、去空串、保序去重
+        seen: set[str] = set()
+        cleaned: List[str] = []
+        for k in value:
+            k = (k or "").strip()
+            if k and k not in seen:
+                seen.add(k)
+                cleaned.append(k)
+        return cleaned
+
+
+class SearchToolsConfig(BaseModel):
+    """搜索与网页抓取工具配置。
+
+    支持多引擎、多 key 轮询与失败自动切换（tavily > brave > bing 优先级由 providers 顺序决定）。
+    未配置任何 provider 时，运行时仍会回退到内置 key / 环境变量 / Bing 抓取以保持兼容。
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    providers: List[SearchProviderConfig] = Field(default_factory=list)
+    # 网页抓取返回给模型的纯文本上限（字符）
+    max_content_length: int = Field(default=8000, ge=1000, le=200000)
+    # 网页抓取响应体读取上限（字节），防止超大响应导致内存/CPU 耗尽（审计 H2）
+    max_fetch_bytes: int = Field(default=5 * 1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
+
+
 class DevConfig(BaseModel):
     """开发配置，用于调试和测试。"""
     model_config = ConfigDict(extra="ignore")
 
     latest_release: str = ""
+
+
+class SecurityConfig(BaseModel):
+    """安全可配置加固开关。
+
+    默认全部宽松（False），保持功能优先、不破坏现有行为；生产环境可按需开启。
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    # Claude SDK 危险工具审批严格模式（审计 C1）
+    sdk_tool_approval_strict: bool = False
+    # 强制校验请求 Content-Type（审计 H4）
+    enforce_content_type: bool = False
+    # WebSocket 严格校验 Origin（审计 H3）
+    ws_strict_origin: bool = False
 
 
 class SettingConfig(BaseModel):
@@ -209,7 +273,10 @@ class SettingConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     ghost: GhostConfig = Field(default_factory=GhostConfig)
     driver_fallback: DriverFallbackConfig = Field(default_factory=DriverFallbackConfig)
+    search: SearchToolsConfig = Field(default_factory=SearchToolsConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     default_llm_server: str | None = None
+    fallback_llm_servers: list[str] = Field(default_factory=list)
     llm_services: list[LlmServiceConfig] = Field(default_factory=list)
     default_room_max_rounds: int = 100
     db_path: str = Field(default_factory=_default_db_path)

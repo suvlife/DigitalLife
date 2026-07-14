@@ -61,6 +61,46 @@
     ]
   },
   {
+    "id": "volcengine_codingplan",
+    "display_name": {
+      "zh-CN": "火山方舟 CodingPlan",
+      "en": "Volcengine CodingPlan"
+    },
+    "type": "openai-compatible",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "default_model": "doubao-seed-coder",
+    "context_window_tokens": 131072,
+    "reserve_output_tokens": 16384,
+    "compact_trigger_ratio": 0.85,
+    "signup_url": "https://console.volcengine.com/ark/",
+    "models": [
+      "doubao-seed-coder",
+      "doubao-1-5-pro-256k",
+      "deepseek-v3-250324",
+      "deepseek-r1-250120"
+    ]
+  },
+  {
+    "id": "apinebula",
+    "display_name": {
+      "zh-CN": "API 星云 (Nebula)",
+      "en": "API Nebula"
+    },
+    "type": "openai-compatible",
+    "base_url": "https://api.apinebula.com/v1",
+    "default_model": "gpt-4o",
+    "context_window_tokens": 131072,
+    "reserve_output_tokens": 16384,
+    "compact_trigger_ratio": 0.85,
+    "signup_url": "https://apinebula.com/",
+    "models": [
+      "gpt-4o",
+      "claude-3-5-sonnet-20241022",
+      "deepseek-chat",
+      "qwen-plus"
+    ]
+  },
+  {
     "id": "deepseek",
     "display_name": {
       "zh-CN": "DeepSeek",
@@ -138,5 +178,20 @@
       "claude-3-opus-latest",
       "claude-sonnet-4-20250514"
     ]
+  },
+  {
+    "id": "custom",
+    "display_name": {
+      "zh-CN": "自定义 (OpenAI 兼容)",
+      "en": "Custom (OpenAI-compatible)"
+    },
+    "type": "openai-compatible",
+    "base_url": "",
+    "default_model": "",
+    "context_window_tokens": 131072,
+    "reserve_output_tokens": 16384,
+    "compact_trigger_ratio": 0.85,
+    "signup_url": "",
+    "models": []
   }
 ]

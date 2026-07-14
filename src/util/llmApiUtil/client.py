@@ -23,6 +23,12 @@ from .OpenAiModels import (
 logger = logging.getLogger(__name__)
 _REDACTED_HEADER_KEYS = {"authorization", "api-key", "x-api-key", "proxy-authorization"}
 
+# M16：litellm.acompletion 显式请求超时（秒）。仅靠会话级 ClientTimeout(total=600)
+# 时，慢上游会长时间占用 ServiceRequestGate 并发槽（默认 max_concurrency=5，5 个挂起即耗尽）。
+# 非流式一次性返回，超时下调更激进；流式为长连接（生成期间持续产出），给更宽裕的上限。
+_NON_STREAM_REQUEST_TIMEOUT_SECONDS = 180.0
+_STREAM_REQUEST_TIMEOUT_SECONDS = 600.0
+
 
 def _patch_responses_api_streaming() -> None:
     """Monkey-patch litellm，修复 Responses API 流式 tool_calls 丢失的问题。
@@ -383,6 +389,18 @@ def _build_secure_litellm_client(
     # OpenAI-compatible adapters expect ``client`` to be an AsyncOpenAI object;
     # passing LiteLLM's HTTP handler there breaks the SDK path. They consume
     # ``shared_session`` directly. Anthropic/Gemini adapters accept the handler.
+    #
+    # H10 (SSRF pinning fail-open) — for openai/deepseek DNS pinning relies ENTIRELY
+    # on LiteLLM (>=1.84) consuming ``shared_session`` (our pinned aiohttp session)
+    # for the outbound request. This is an internal, undocumented LiteLLM contract:
+    # if a future version stops reusing ``shared_session`` it would build its own
+    # httpx client and re-resolve DNS, silently defeating ``_PinnedResolver`` (DNS
+    # rebinding window). We cannot inject an httpx-based pinned client here because
+    # ``create_pinned_client_session`` yields an aiohttp session, not an httpx one.
+    # The assertion below at least guarantees the pinned session was created; the
+    # remaining reliance is documented and should be covered by an integration test
+    # asserting outbound traffic goes through the pinned resolver.
+    assert session is not None, "pinned aiohttp session 必须创建成功，否则 openai/deepseek DNS pinning 会 fail-open"
     safe_client = None if provider in {"openai", "deepseek"} else AsyncHTTPHandler(shared_session=session)
     return session, safe_client
 
@@ -415,11 +433,17 @@ async def send_request_stream(
     model_name, messages, tools = _build_request_payload(request)
     base_url = _clean_base_url(url)
     logger.info(
-        "LLM upstream request start: request_id=%s, stream=%s, provider=%s, base_url=%s, extra_headers=%s, prompt_cache=%s, payload=%s",
-        request_id, True, custom_llm_provider, base_url, _to_log_json(_sanitize_headers(extra_headers)),
-        request.prompt_cache,
-        _to_log_json(_request_payload_for_log(request, stream=True)),
+        "LLM upstream request start: request_id=%s, stream=%s, provider=%s, base_url=%s, message_count=%d, tool_count=%d, prompt_cache=%s",
+        request_id, True, custom_llm_provider, base_url, len(messages), len(tools or []), request.prompt_cache,
     )
+    # H9：完整请求正文（system prompt + 全部历史 + 工具入参 + 自定义头）仅在 DEBUG 落盘，
+    # 生产默认 INFO 只记元数据，避免对话/业务数据长期沉淀磁盘。
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "LLM upstream request payload: request_id=%s, stream=%s, extra_headers=%s, payload=%s",
+            request_id, True, _to_log_json(_sanitize_headers(extra_headers)),
+            _to_log_json(_request_payload_for_log(request, stream=True)),
+        )
 
     safe_session, safe_client = _build_secure_litellm_client(base_url, custom_llm_provider)
     stream_resp: ModelResponse | CustomStreamWrapper | None = None
@@ -437,6 +461,7 @@ async def send_request_stream(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=True,
+            timeout=_STREAM_REQUEST_TIMEOUT_SECONDS,
             shared_session=safe_session,
             **({"client": safe_client} if safe_client is not None else {}),
             **extra_params,
@@ -450,10 +475,13 @@ async def send_request_stream(
                 if not isinstance(chunk, ModelResponseStream):
                     raise TypeError(f"期望流式 chunk 类型 ModelResponseStream，实际为: {type(chunk).__name__}")
                 chunks.append(chunk)
-                logger.info(
-                    "LLM upstream stream chunk: request_id=%s, chunk_index=%d, payload=%s",
-                    request_id, len(chunks), _to_log_json(chunk),
-                )
+                # H9：逐 chunk 全文仅 DEBUG 落盘，删除 INFO 级逐 chunk 正文，
+                # 避免放大对话数据暴露面与磁盘占用。
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "LLM upstream stream chunk: request_id=%s, chunk_index=%d, payload=%s",
+                        request_id, len(chunks), _to_log_json(chunk),
+                    )
                 if on_chunk is not None:
                     result = on_chunk(chunk)
                     if inspect.isawaitable(result):
@@ -477,9 +505,14 @@ async def send_request_stream(
             raise TypeError(f"流式聚合返回了未知类型: {type(merged).__name__}")
 
         logger.info(
-            "LLM upstream request success: request_id=%s, stream=%s, chunk_count=%d, payload=%s",
-            request_id, True, len(chunks), _to_log_json(merged),
+            "LLM upstream request success: request_id=%s, stream=%s, chunk_count=%d",
+            request_id, True, len(chunks),
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "LLM upstream response payload: request_id=%s, stream=%s, payload=%s",
+                request_id, True, _to_log_json(merged),
+            )
         return OpenAIResponse.model_validate(merged.model_dump(exclude_none=False))
     except Exception as e:
         _log_raw_response(e, request_id, stream=True)
@@ -501,11 +534,16 @@ async def send_request_non_stream(
     model_name, messages, tools = _build_request_payload(request)
     base_url = _clean_base_url(url)
     logger.info(
-        "LLM upstream request start: request_id=%s, stream=%s, provider=%s, base_url=%s, extra_headers=%s, prompt_cache=%s, payload=%s",
-        request_id, False, custom_llm_provider, base_url, _to_log_json(_sanitize_headers(extra_headers)),
-        request.prompt_cache,
-        _to_log_json(_request_payload_for_log(request, stream=False)),
+        "LLM upstream request start: request_id=%s, stream=%s, provider=%s, base_url=%s, message_count=%d, tool_count=%d, prompt_cache=%s",
+        request_id, False, custom_llm_provider, base_url, len(messages), len(tools or []), request.prompt_cache,
     )
+    # H9：完整请求正文仅 DEBUG 落盘，生产 INFO 只记元数据。
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "LLM upstream request payload: request_id=%s, stream=%s, extra_headers=%s, payload=%s",
+            request_id, False, _to_log_json(_sanitize_headers(extra_headers)),
+            _to_log_json(_request_payload_for_log(request, stream=False)),
+        )
 
     safe_session, safe_client = _build_secure_litellm_client(base_url, custom_llm_provider)
     try:
@@ -522,6 +560,7 @@ async def send_request_non_stream(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=False,
+            timeout=_NON_STREAM_REQUEST_TIMEOUT_SECONDS,
             shared_session=safe_session,
             **({"client": safe_client} if safe_client is not None else {}),
             **extra_params,
@@ -529,9 +568,14 @@ async def send_request_non_stream(
         if not isinstance(response, ModelResponse):
             raise TypeError(f"期望非流式响应类型 ModelResponse，实际为: {type(response).__name__}")
         logger.info(
-            "LLM upstream request success: request_id=%s, stream=%s, payload=%s",
-            request_id, False, _to_log_json(response),
+            "LLM upstream request success: request_id=%s, stream=%s",
+            request_id, False,
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "LLM upstream response payload: request_id=%s, stream=%s, payload=%s",
+                request_id, False, _to_log_json(response),
+            )
         return OpenAIResponse.model_validate(response.model_dump(exclude_none=False))
     except Exception as e:
         _log_raw_response(e, request_id, stream=False)

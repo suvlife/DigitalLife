@@ -7,6 +7,7 @@ from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage,
     SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock,
     UserMessage, create_sdk_mcp_server, tool,
+    PermissionResultAllow, PermissionResultDeny, ToolPermissionContext,
 )
 
 from service.roomService import ToolCallContext, ChatRoom
@@ -17,7 +18,7 @@ from service import funcToolService, roomService
 from model.dbModel.gtScheculeTask import GtScheculeTask
 from model.dbModel.gtAgentHistory import GtAgentHistory
 from constants import AgentHistoryStatus, OpenaiApiRole, ToolCategory
-from util import llmApiUtil
+from util import llmApiUtil, configUtil
 
 from .base import AgentDriver, AgentTurnSetup
 
@@ -42,6 +43,15 @@ _REMINDER_PROMPT = (
     "【提醒】检测到你直接输出了文字。这些文字不会出现在聊天室中！你必须使用 `send_chat_msg` 工具来发言。如果你已经说完，请调用 `finish_action`。"
 )
 _RUN_CHAT_TURN_MAX_RETRIES = 3
+
+# 严格审批模式（setting.security.sdk_tool_approval_strict=True）下拒绝的宿主级危险工具。
+# 这些是 claude_code 预设携带、可对宿主机造成命令执行/任意文件读写/绕过 SSRF 出网的工具。
+# 我们自建的 MCP chat 工具（mcp__chat__*）始终放行。
+_STRICT_DENY_TOOLS = frozenset({
+    "Bash", "BashOutput", "KillShell", "KillBash",
+    "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "WebFetch", "WebSearch",
+})
 
 
 def _format_sdk_blocks(blocks: Any) -> list[str]:
@@ -87,6 +97,38 @@ class ClaudeSdkAgentDriver(AgentDriver):
     def turn_setup(self) -> AgentTurnSetup:
         return AgentTurnSetup(max_retries=_RUN_CHAT_TURN_MAX_RETRIES)
 
+    async def _can_use_tool(
+        self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """SDK 工具审批回调（审计 C1）。
+
+        默认放行（功能优先）；仅当 setting.security.sdk_tool_approval_strict=True 时，
+        对宿主级危险工具（Bash/Write/Edit/WebFetch 等）拒绝，防止 prompt injection
+        诱导 Agent 调用危险工具致宿主 RCE。我们自建的 MCP chat 工具始终放行。
+        """
+        try:
+            strict = bool(configUtil.get_app_config().setting.security.sdk_tool_approval_strict)
+        except Exception:
+            # 配置读取异常时保持功能优先，默认放行（不因配置缺失阻断正常执行）
+            strict = False
+
+        if not strict:
+            return PermissionResultAllow()
+
+        if tool_name.startswith("mcp__chat"):
+            return PermissionResultAllow()
+
+        base_name = tool_name.split("__")[-1] if tool_name.startswith("mcp__") else tool_name
+        if base_name in _STRICT_DENY_TOOLS or tool_name in _STRICT_DENY_TOOLS:
+            logger.warning(
+                "SDK 危险工具被审批网关拒绝(strict): agent_id=%d, tool=%s",
+                self.host.gt_agent.id, tool_name,
+            )
+            return PermissionResultDeny(
+                message=f"工具 {tool_name} 在严格审批模式下被拒绝（sdk_tool_approval_strict）",
+            )
+        return PermissionResultAllow()
+
     async def startup(self) -> None:
         await super().startup()
         self.host.tool_registry.clear()
@@ -121,9 +163,10 @@ class ClaudeSdkAgentDriver(AgentDriver):
             "mcp_servers": {"chat": server},
             # 不再使用 bypassPermissions：Agent 输入含 web_fetch/web_search 抓取内容、
             # 用户上传 Skill 及聊天消息，均为 prompt injection 入口，无确认执行任意
-            # bash/文件读写会导致宿主机 RCE。改用 default 权限模式，由 SDK 在调用
-            # 危险工具前要求确认（生产环境应配合审批回调拒绝危险工具）。
+            # bash/文件读写会导致宿主机 RCE。改用 default 权限模式，并挂载 can_use_tool
+            # 审批回调（审计 C1）：默认放行，严格模式下拒绝宿主级危险工具。
             "permission_mode": "default",
+            "can_use_tool": self._can_use_tool,
             "max_rounds": self.config.options.get("max_rounds", 100),
             "cwd": self.host.agent_workdir,
             "add_dirs": [self.host.agent_workdir],
@@ -131,9 +174,12 @@ class ClaudeSdkAgentDriver(AgentDriver):
         external_allowed_tools = self._get_external_allowed_tools()
         if external_allowed_tools is not None:
             option_args["allowed_tools"] = external_allowed_tools
-        options = ClaudeAgentOptions(**option_args)
 
-        os.environ.pop("CLAUDECODE", None)
+        # 审计 L13：通过 SDK 的 per-session env 传递环境，而非修改进程级 os.environ，
+        # 避免并发 driver / 其它组件读取全局环境时相互影响。
+        session_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        option_args["env"] = session_env
+        options = ClaudeAgentOptions(**option_args)
 
         client = ClaudeSDKClient(options=options)
         await client.connect()

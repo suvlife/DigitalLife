@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timedelta
 
 from controller.baseController import BaseHandler
@@ -15,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 _SESSION_TTL_DAYS = 7
 _SESSION_COOKIE_NAME = "dl_session"
+
+# 固定的 dummy 哈希，用于用户不存在时执行等价耗时校验，消除时序侧信道（审计 L3）。
+# 在模块加载时生成一次（真实 PBKDF2 结构），不对应任何真实账户。
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_hex(16))
 
 
 class LoginHandler(BaseHandler):
@@ -32,6 +37,9 @@ class LoginHandler(BaseHandler):
 
         user = await GtUser.aio_get_or_none(GtUser.username == username)
         if user is None or not user.enabled:
+            # 防用户名枚举时序侧信道（审计 L3）：用户不存在/禁用时也执行一次
+            # 等价耗时的 PBKDF2 校验，使两条路径的响应时延一致。
+            verify_password(password, _DUMMY_PASSWORD_HASH)
             self.set_status(401)
             self.return_json({"error_code": "auth_failed", "error_desc": "用户名或密码错误"})
             return

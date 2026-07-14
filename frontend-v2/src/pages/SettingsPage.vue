@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { world } from '../store/world';
 import * as api from '../api/client';
+import { safeExternalUrl } from '../utils/safeUrl';
 import SettingsConfirmDialog from '../components/settings-v2/SettingsConfirmDialog.vue';
 import TeamConfigurationEditor from '../components/settings-v2/TeamConfigurationEditor.vue';
 
@@ -10,7 +11,8 @@ const route = useRoute();
 const router = useRouter();
 const sections = [
   { id: 'teams', label: '院落管理', note: '创建、资料与数据治理' },
-  { id: 'models', label: '大模型服务', note: '连接、校验与默认模型' },
+  { id: 'models', label: '大模型服务', note: '预设、校验、首选与兜底' },
+  { id: 'search', label: '搜网密钥', note: '搜索引擎与多 key 轮询' },
   { id: 'roles', label: '角色模板', note: '大师心法模板' },
   { id: 'capabilities', label: '武库清单', note: 'Skills 与 Tools（只读）' },
   { id: 'ghost', label: '博客刊行', note: 'Ghost 密钥与连通性' },
@@ -38,6 +40,24 @@ const defaultLlm = ref<string | null>(null);
 const llmEditing = ref<number | 'new' | null>(null);
 const llmForm = reactive({ name: '', base_url: '', api_key: '', type: 'openai-compatible' as api.LlmServiceType, model: '', enable: true, temperature: '', extra_headers: '{}', provider_params: '{}' });
 const llmTestResult = ref('');
+
+// LLM 厂商预设（#5：预设下拉 + 多模型）
+const providerCatalog = ref<api.LlmProviderCatalogEntry[]>([]);
+const providerForm = reactive({ provider_id: '', api_key: '', model: '', name: '' });
+const selectedProvider = computed(() => providerCatalog.value.find(p => p.id === providerForm.provider_id) || null);
+const providerModels = computed(() => selectedProvider.value?.models || []);
+const providerLabel = (entry: api.LlmProviderCatalogEntry) => api.providerDisplayName(entry);
+
+// LLM 首选/兜底链（#3）
+const fallbackServers = ref<string[]>([]);
+const availableFallback = computed(() => llmServices.value.filter(s => s.name !== defaultLlm.value && !fallbackServers.value.includes(s.name)));
+
+// 搜网密钥配置（#5：多引擎 + 多 key）
+const search = reactive({ enabled: true, max_content_length: 8000, max_fetch_bytes: 5242880 });
+const searchProviders = ref<api.SearchProviderInfo[]>([]);
+const searchEditing = ref<number | 'new' | null>(null);
+const searchForm = reactive({ provider: 'tavily', api_keys: '', enable: true });
+const searchPresets = ['tavily', 'brave', 'bing'];
 
 const roles = ref<api.RoleTemplate[]>([]);
 const roleEditing = ref<number | 'new' | null>(null);
@@ -201,8 +221,44 @@ async function testSavedLlm(index: number) {
   try { const result = await api.testLlmService({ mode: 'saved', index }); announce(`${llmServices.value[index].name}：${result.message}`); }
   catch (e) { fail(e, '连接测试失败'); } finally { saving.value = false; }
 }
-async function makeDefaultLlm(index: number) { saving.value = true; clearFeedback(); try { await api.setDefaultLlmService(index); await loadLlm(); announce('默认模型服务已更新'); } catch (e) { fail(e, '设置默认失败'); } finally { saving.value = false; } }
-function removeLlm(index: number) { const name = llmServices.value[index].name; ask('删除模型服务', `确定删除“${name}”吗？`, '删除服务', async () => { await api.deleteLlmService(index); await loadLlm(); announce(`“${name}”已删除`); }); }
+async function makeDefaultLlm(index: number) { saving.value = true; clearFeedback(); try { await api.setDefaultLlmService(index); await loadLlm(); await loadFallback(); announce('默认模型服务已更新'); } catch (e) { fail(e, '设置默认失败'); } finally { saving.value = false; } }
+function removeLlm(index: number) { const name = llmServices.value[index].name; ask('删除模型服务', `确定删除“${name}”吗？`, '删除服务', async () => { await api.deleteLlmService(index); await loadLlm(); await loadFallback(); announce(`“${name}”已删除`); }); }
+
+watch(() => providerForm.provider_id, () => { providerForm.model = selectedProvider.value?.default_model || ''; });
+async function loadProviderCatalog() { providerCatalog.value = await api.getLlmProviderCatalog(); }
+async function createFromProvider() {
+  if (!providerForm.provider_id) { error.value = '请选择厂商预设'; return; }
+  if (!providerForm.api_key.trim()) { error.value = '请填写 API Key'; return; }
+  saving.value = true; clearFeedback();
+  try {
+    const res = await api.createLlmServiceFromProvider({ provider_id: providerForm.provider_id, api_key: providerForm.api_key.trim(), model: providerForm.model.trim() || undefined, name: providerForm.name.trim() || undefined });
+    Object.assign(providerForm, { provider_id: '', api_key: '', model: '', name: '' });
+    await loadLlm(); announce(`已按预设创建「${res.service?.name || '模型服务'}」`);
+  } catch (e) { fail(e, '按预设创建失败'); } finally { saving.value = false; }
+}
+
+async function loadFallback() { const data = await api.getLlmFallback(); fallbackServers.value = data.fallback_llm_servers; if (data.default_llm_server != null) defaultLlm.value = data.default_llm_server; }
+function addFallback(name: string) { if (name && !fallbackServers.value.includes(name)) fallbackServers.value = [...fallbackServers.value, name]; }
+function removeFallback(name: string) { fallbackServers.value = fallbackServers.value.filter(item => item !== name); }
+function moveFallback(index: number, delta: number) { const next = index + delta; if (next < 0 || next >= fallbackServers.value.length) return; const arr = [...fallbackServers.value]; [arr[index], arr[next]] = [arr[next], arr[index]]; fallbackServers.value = arr; }
+async function saveFallback() { saving.value = true; clearFeedback(); try { await api.setLlmFallback(fallbackServers.value); await loadFallback(); announce('兜底链已保存'); } catch (e) { fail(e, '兜底链保存失败'); } finally { saving.value = false; } }
+
+async function loadSearch() { const data = await api.getSearchConfig(); Object.assign(search, { enabled: data.enabled, max_content_length: data.max_content_length, max_fetch_bytes: data.max_fetch_bytes }); searchProviders.value = data.providers; }
+async function saveSearchSettings() { saving.value = true; clearFeedback(); try { await api.updateSearchSettings({ enabled: search.enabled, max_content_length: Number(search.max_content_length) || 0, max_fetch_bytes: Number(search.max_fetch_bytes) || 0 }); await loadSearch(); announce('搜索全局设置已保存'); } catch (e) { fail(e, '搜索设置保存失败'); } finally { saving.value = false; } }
+function editSearch(index: number | 'new') { searchEditing.value = index; const value = index === 'new' ? null : searchProviders.value[index]; Object.assign(searchForm, value ? { provider: value.provider, api_keys: '', enable: value.enable } : { provider: 'tavily', api_keys: '', enable: true }); }
+function parseSearchKeys(raw: string): string[] { return raw.split(/[\n,]+/).map(item => item.trim()).filter(Boolean); }
+async function saveSearchProvider() {
+  if (!searchForm.provider.trim()) { error.value = '请填写搜索引擎名称'; return; }
+  saving.value = true; clearFeedback();
+  try {
+    const keys = parseSearchKeys(searchForm.api_keys);
+    if (searchEditing.value === 'new') await api.createSearchProvider({ provider: searchForm.provider.trim(), api_keys: keys, enable: searchForm.enable });
+    else if (typeof searchEditing.value === 'number') { const patch: api.SearchProviderModifyPayload = { provider: searchForm.provider.trim(), enable: searchForm.enable }; if (keys.length) patch.api_keys = keys; await api.modifySearchProvider(searchEditing.value, patch); }
+    await loadSearch(); searchEditing.value = null; announce('搜索引擎已保存');
+  } catch (e) { fail(e, '搜索引擎保存失败'); } finally { saving.value = false; }
+}
+function clearSearchKeys(index: number) { const name = searchProviders.value[index].provider; ask('清空搜索密钥', `将清空「${name}」的全部 API Key，引擎配置保留。`, '确认清空', async () => { await api.modifySearchProvider(index, { clear_api_keys: true }); await loadSearch(); announce(`「${name}」密钥已清空`); }); }
+function removeSearchProvider(index: number) { const name = searchProviders.value[index].provider; ask('删除搜索引擎', `确定删除「${name}」吗？`, '删除引擎', async () => { await api.deleteSearchProvider(index); await loadSearch(); announce(`「${name}」已删除`); }); }
 
 function editRole(role: api.RoleTemplate | null) { roleEditing.value = role?.id ?? 'new'; roleForm.name = role?.name || ''; roleForm.soul = role?.soul || ''; }
 async function saveRole() { saving.value = true; clearFeedback(); try { if (!roleForm.name.trim() || !roleForm.soul.trim()) throw new Error('模板名称和心法内容不能为空'); const body = { name: roleForm.name.trim(), soul: roleForm.soul.trim() }; if (roleEditing.value === 'new') await api.createRoleTemplate(body); else if (typeof roleEditing.value === 'number') await api.modifyRoleTemplate(roleEditing.value, body); roles.value = await api.getRoleTemplates(); roleEditing.value = null; announce('角色模板已保存'); } catch (e) { fail(e, '模板保存失败'); } finally { saving.value = false; } }
@@ -223,7 +279,7 @@ async function loadAll() {
   loading.value = true; clearFeedback();
   try {
     await world.loadTeams(); const requested = routeTeamId(); selectedTeamId.value = teams.value.some(team => team.id === requested) ? requested : (teams.value[0]?.id || 0); syncRoute(section.value, selectedTeamId.value);
-    await Promise.all([loadTeamDetail(selectedTeamId.value), loadLlm(), api.getRoleTemplates().then(v => roles.value = v), api.getSkills().then(v => skills.value = v), api.getTools().then(v => tools.value = v), api.getGhostConfig().then(v => Object.assign(ghost, v)), api.getSystemStatus().then(v => system.value = v)]);
+    await Promise.all([loadTeamDetail(selectedTeamId.value), loadLlm(), loadFallback(), loadProviderCatalog(), loadSearch(), api.getRoleTemplates().then(v => roles.value = v), api.getSkills().then(v => skills.value = v), api.getTools().then(v => tools.value = v), api.getGhostConfig().then(v => Object.assign(ghost, v)), api.getSystemStatus().then(v => system.value = v)]);
   } catch (e) { fail(e, '设置资料载入失败'); } finally { loading.value = false; }
 }
 watch(() => route.params.section, value => { const next = isSection(value) ? value : 'teams'; section.value = next; if (!isSection(value) && value != null) syncRoute(next); });
@@ -245,9 +301,24 @@ onMounted(loadAll);
           <template v-if="teamDetail"><div class="settings-form-grid"><label>院落名称<input v-model="teamForm.name" /></label><label>工作目录<input v-model="teamForm.working_directory" /></label><label class="wide">院训<input v-model="teamForm.slogan" /></label><label class="wide">协作规则<textarea v-model="teamForm.rules" rows="5" /></label></div><div class="settings-actions"><button class="gold-button" type="button" :disabled="saving" @click="saveTeam">保存基本资料</button><button class="quiet-button" type="button" :disabled="saving" @click="toggleTeam">{{ teamDetail.enabled ? '停用本院' : '启用本院' }}</button><button class="quiet-button" type="button" :disabled="saving" @click="exportCurrentTeam">导出预设</button><button class="quiet-button" type="button" :disabled="saving" @click="presetFile?.click()">导入预设</button><input ref="presetFile" class="visually-hidden" type="file" accept="application/json,.json" aria-label="导入团队预设" @change="importPreset" /><button class="danger-button" type="button" :disabled="saving" @click="clearTeam">清空运行数据</button><button class="danger-button" type="button" :disabled="saving" @click="removeTeam">删除院落</button></div><div class="settings-stat-grid"><div><b>{{ teamDetail.agents.length }}</b><small>位大师</small></div><div><b>{{ teamDetail.rooms.length }}</b><small>间研究室</small></div><div><b>{{ teamDetail.enabled ? '启' : '停' }}</b><small>当前状态</small></div></div><TeamConfigurationEditor :members="teamDetail.agents" :rooms="teamDetail.rooms" :roles="roles" :llm-services="llmServices" :team-llm="String(teamDetail.config.llm_service_name || '')" :dept-tree="deptTree" :busy="saving" @save-members="saveMembers" @clear-agent="clearAgent" @save-room="saveRoom" @delete-room="deleteRoom" @save-dept="saveDept" @save-team-llm="saveTeamLlm" /></template>
         </section>
 
-        <section v-else-if="section === 'models'" class="settings-section"><div class="subsection-head"><p class="section-intro">维护强类型模型连接，保存前可用临时配置测试。</p><button class="gold-button" type="button" @click="editLlm('new')">新增服务</button></div><div v-if="!llmServices.length" class="empty-state">尚未配置模型服务。</div><article v-for="(service, index) in llmServices" :key="`${service.name}-${index}`" class="service-card"><div><b>{{ service.name }} <em v-if="defaultLlm === service.name" class="default-mark">默认</em></b><small>{{ service.model || '未指定模型' }} · {{ service.type }} · {{ service.base_url }}</small></div><div class="settings-actions compact"><span :class="service.enable ? 'status-good' : 'status-muted'">{{ service.enable ? '已启用' : '已停用' }}</span><button class="text-button" @click="testSavedLlm(index)">测试</button><button class="text-button" @click="makeDefaultLlm(index)">设默认</button><button class="text-button" @click="editLlm(index)">编辑</button><button class="text-button danger-text" @click="removeLlm(index)">删除</button></div></article>
+        <section v-else-if="section === 'models'" class="settings-section">
+          <div class="settings-subsection provider-preset"><div class="subsection-head"><div><h3>厂商预设速建</h3><p>选择厂商与模型，填入 API Key 即可一键生成模型服务。</p></div></div><div class="settings-form-grid"><label>厂商预设<select v-model="providerForm.provider_id" aria-label="厂商预设"><option value="">选择厂商…</option><option v-for="entry in providerCatalog" :key="entry.id" :value="entry.id">{{ providerLabel(entry) }}</option></select></label><label>模型<select v-model="providerForm.model" aria-label="预设模型" :disabled="!providerModels.length"><option v-if="!providerModels.length" value="">先选择厂商</option><option v-for="m in providerModels" :key="m" :value="m">{{ m }}</option></select></label><label>API Key<input v-model="providerForm.api_key" type="password" placeholder="输入该厂商密钥" /></label><label>自定义服务名（可选）<input v-model="providerForm.name" :placeholder="selectedProvider ? providerLabel(selectedProvider) : '留空自动命名'" /></label></div><p v-if="selectedProvider" class="inline-result">{{ selectedProvider.base_url }} · {{ selectedProvider.type }}<a v-if="selectedProvider.signup_url" :href="safeExternalUrl(selectedProvider.signup_url)" target="_blank" rel="noopener noreferrer" class="preset-signup">获取密钥 ↗</a></p><div class="settings-actions"><button class="gold-button" type="button" :disabled="saving || !providerForm.provider_id" @click="createFromProvider">按预设创建</button></div></div>
+
+          <div class="subsection-head"><p class="section-intro">维护强类型模型连接，保存前可用临时配置测试。</p><button class="gold-button" type="button" @click="editLlm('new')">新增服务</button></div><div v-if="!llmServices.length" class="empty-state">尚未配置模型服务。</div><article v-for="(service, index) in llmServices" :key="`${service.name}-${index}`" class="service-card"><div><b>{{ service.name }} <em v-if="defaultLlm === service.name" class="default-mark">首选</em></b><small>{{ service.model || '未指定模型' }} · {{ service.type }} · {{ service.base_url }}</small></div><div class="settings-actions compact"><span :class="service.enable ? 'status-good' : 'status-muted'">{{ service.enable ? '已启用' : '已停用' }}</span><button class="text-button" @click="testSavedLlm(index)">测试</button><button class="text-button" @click="makeDefaultLlm(index)">设首选</button><button class="text-button" @click="editLlm(index)">编辑</button><button class="text-button danger-text" @click="removeLlm(index)">删除</button></div></article>
           <div v-if="llmEditing !== null" class="settings-editor"><div class="subsection-head"><h3>{{ llmEditing === 'new' ? '新增模型服务' : '编辑模型服务' }}</h3><button class="text-button" @click="llmEditing = null">关闭</button></div><div class="settings-form-grid"><label>服务名称<input v-model="llmForm.name" :disabled="llmEditing !== 'new'" /></label><label>类型<select v-model="llmForm.type"><option value="openai-compatible">OpenAI Compatible</option><option value="anthropic">Anthropic</option><option value="google">Google</option><option value="deepseek">DeepSeek</option></select></label><label class="wide">Base URL<input v-model="llmForm.base_url" /></label><label>模型名<input v-model="llmForm.model" /></label><label>API Key<input v-model="llmForm.api_key" type="password" :placeholder="llmEditing === 'new' ? '输入密钥' : '留空则保留原密钥'" /></label><label>Temperature<input v-model="llmForm.temperature" type="number" step="0.1" /></label><label class="toggle"><input v-model="llmForm.enable" type="checkbox" />启用服务</label><label class="wide">额外请求头（JSON）<textarea v-model="llmForm.extra_headers" rows="4" /></label><label class="wide">供应商参数（JSON）<textarea v-model="llmForm.provider_params" rows="4" /></label></div><p v-if="llmTestResult" class="inline-result">{{ llmTestResult }}</p><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveLlm">保存服务</button><button class="quiet-button" :disabled="saving" @click="testEditingLlm">测试当前填写</button></div></div>
+
+          <div class="settings-subsection fallback-chain"><div class="subsection-head"><div><h3>首选与兜底链</h3><p>首选服务不可用时，按顺序自动切换到兜底服务。首选可在上方“设首选”调整。</p></div></div><p class="inline-result">首选：<b>{{ defaultLlm || '未设置' }}</b></p><ol v-if="fallbackServers.length" class="fallback-list"><li v-for="(name, index) in fallbackServers" :key="name"><span class="fallback-order">{{ index + 1 }}</span><b>{{ name }}</b><div class="settings-actions compact"><button class="text-button" :disabled="index === 0" @click="moveFallback(index, -1)">上移</button><button class="text-button" :disabled="index === fallbackServers.length - 1" @click="moveFallback(index, 1)">下移</button><button class="text-button danger-text" @click="removeFallback(name)">移除</button></div></li></ol><p v-else class="empty-state">尚未配置兜底服务。</p><div class="settings-actions"><select aria-label="添加兜底服务" :disabled="!availableFallback.length" @change="addFallback(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value=''"><option value="">{{ availableFallback.length ? '添加兜底服务…' : '无可用服务' }}</option><option v-for="svc in availableFallback" :key="svc.name" :value="svc.name">{{ svc.name }}</option></select><button class="gold-button" type="button" :disabled="saving" @click="saveFallback">保存兜底链</button></div></div>
         </section>
+
+        <section v-else-if="section === 'search'" class="settings-section">
+          <div class="settings-subsection"><div class="subsection-head"><div><h3>搜索全局设置</h3><p>控制联网搜索开关与抓取上限。未配置任何引擎时仍会回退到内置兜底。</p></div></div><div class="settings-form-grid"><label class="toggle"><input v-model="search.enabled" type="checkbox" />启用联网搜索</label><label>正文最大字符<input v-model.number="search.max_content_length" type="number" min="1000" step="1000" /></label><label>抓取字节上限<input v-model.number="search.max_fetch_bytes" type="number" min="65536" step="65536" /></label></div><div class="settings-actions"><button class="gold-button" type="button" :disabled="saving" @click="saveSearchSettings">保存全局设置</button></div></div>
+
+          <div class="subsection-head"><p class="section-intro">按引擎维护多个 API Key，运行时轮询并在失败时自动切换。已保存的 key 仅显示掩码。</p><button class="gold-button" type="button" @click="editSearch('new')">新增引擎</button></div>
+          <div v-if="!searchProviders.length" class="empty-state">尚未配置搜索引擎。</div>
+          <article v-for="(provider, index) in searchProviders" :key="`${provider.provider}-${index}`" class="service-card"><div><b>{{ provider.provider }}</b><small>{{ provider.api_keys_count }} 个 key<template v-if="provider.api_keys.length"> · {{ provider.api_keys.join(' · ') }}</template></small></div><div class="settings-actions compact"><span :class="provider.enable ? 'status-good' : 'status-muted'">{{ provider.enable ? '已启用' : '已停用' }}</span><button class="text-button" @click="editSearch(index)">编辑</button><button v-if="provider.has_api_key" class="text-button danger-text" @click="clearSearchKeys(index)">清空密钥</button><button class="text-button danger-text" @click="removeSearchProvider(index)">删除</button></div></article>
+          <div v-if="searchEditing !== null" class="settings-editor"><div class="subsection-head"><h3>{{ searchEditing === 'new' ? '新增搜索引擎' : '编辑搜索引擎' }}</h3><button class="text-button" @click="searchEditing = null">关闭</button></div><div class="settings-form-grid"><label>引擎名称<input v-model="searchForm.provider" list="search-presets" placeholder="tavily / brave / bing" /><datalist id="search-presets"><option v-for="name in searchPresets" :key="name" :value="name" /></datalist></label><label class="toggle"><input v-model="searchForm.enable" type="checkbox" />启用引擎</label><label class="wide">API Keys（每行一个，或逗号分隔）<textarea v-model="searchForm.api_keys" rows="4" :placeholder="searchEditing === 'new' ? '输入一个或多个 key' : '留空则保留原有 key；bing 可无 key'" /></label></div><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveSearchProvider">保存引擎</button></div></div>
+        </section>
+
 
         <section v-else-if="section === 'roles'" class="settings-section"><div class="subsection-head"><p class="section-intro">角色模板定义大师的长期心法与行事准则。</p><button class="gold-button" @click="editRole(null)">新增模板</button></div><div class="card-grid"><article v-for="role in roles" :key="role.id" class="settings-list-card"><h3>{{ role.name }}</h3><p>{{ role.soul }}</p><div class="settings-actions compact"><button class="text-button" @click="editRole(role)">编辑</button><button class="text-button danger-text" @click="removeRole(role)">删除</button></div></article></div><div v-if="roleEditing !== null" class="settings-editor"><h3>{{ roleEditing === 'new' ? '新增角色模板' : '编辑角色模板' }}</h3><div class="settings-form-grid"><label>模板名称<input v-model="roleForm.name" /></label><label class="wide">角色心法<textarea v-model="roleForm.soul" rows="10" /></label></div><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveRole">保存模板</button><button class="quiet-button" @click="roleEditing = null">取消</button></div></div></section>
 
@@ -255,7 +326,7 @@ onMounted(loadAll);
 
         <section v-else-if="section === 'ghost'" class="settings-section"><p class="section-intro">密钥只提交至服务端，已保存的密钥不会回显。</p><div class="settings-form-grid"><label class="wide toggle"><input v-model="ghost.enabled" type="checkbox" />启用 Ghost 最终结论刊行</label><label class="wide">Ghost 地址<input v-model="ghost.api_url" placeholder="https://blog.example.com" /></label><label>Admin API Key<input v-model="ghostAdminKey" type="password" :placeholder="ghost.has_admin_key ? '已配置；留空则保留' : '尚未配置'" /></label><label>Content API Key<input v-model="ghostContentKey" type="password" :placeholder="ghost.has_content_key ? '已配置；留空则保留' : '尚未配置'" /></label><label>发布状态<select v-model="ghost.publish_status"><option value="published">直接发布</option><option value="draft">保存为草稿</option></select></label><label class="toggle"><input v-model="ghost.auto_publish" type="checkbox" />结论完成后自动刊行</label><label class="toggle"><input v-model="ghost.skip_ssl_verify" type="checkbox" />跳过 SSL 证书验证（自签名证书时启用）</label></div><div class="key-row"><span>Admin Key：{{ ghost.has_admin_key ? '已录入' : '未录入' }}</span><button v-if="ghost.has_admin_key" class="text-button danger-text" @click="clearGhostKey('admin')">清除</button><span>Content Key：{{ ghost.has_content_key ? '已录入' : '未录入' }}</span><button v-if="ghost.has_content_key" class="text-button danger-text" @click="clearGhostKey('content')">清除</button></div><p v-if="ghostTestResult" class="inline-result">{{ ghostTestResult }}</p><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveGhost">保存设置与新密钥</button><button class="quiet-button" :disabled="saving" @click="testGhost">测试连接</button></div></section>
 
-        <section v-else class="settings-section maintenance"><div class="maintenance-grid"><article class="maintenance-card"><span>数据库护卷</span><h3>立即创建备份</h3><p>由服务端生成完整数据库备份，路径与文件名会在成功后显示。</p><button class="gold-button" :disabled="saving" @click="backup">创建数据库备份</button><small v-if="backupResult">{{ backupResult.backup_path }}</small></article><article class="maintenance-card"><span>版本巡检</span><h3>{{ system?.version ? `当前版本 ${system.version}` : '系统更新检查' }}</h3><p>强制向更新源检查最新版本；不会在此页面自动执行升级。</p><button class="gold-button" :disabled="saving" @click="checkForUpdate">检查更新</button><div v-if="updateResult" class="update-result"><b>{{ updateResult.has_update ? `可更新至 ${updateResult.latest_version}` : '已是最新版本' }}</b><p>{{ updateResult.release_notes }}</p><a v-if="updateResult.release_url" :href="updateResult.release_url" target="_blank" rel="noopener noreferrer">查看发行说明</a></div></article><article class="maintenance-card"><span>巡检偏好</span><h3>自动检查更新</h3><p>控制服务端是否按其既定周期检查新版本。</p><button class="quiet-button" :disabled="saving || !system" @click="setAutoUpdate">{{ system?.auto_check_update ? '已开启 · 点击关闭' : '已关闭 · 点击开启' }}</button></article><article class="maintenance-card"><span>外观说明</span><h3>V2 固定武侠主题</h3><p>当前 V2 以武侠书院为唯一视觉语言，不提供旧版主题或旧后台跳转。</p></article></div></section>
+        <section v-else class="settings-section maintenance"><div class="maintenance-grid"><article class="maintenance-card"><span>数据库护卷</span><h3>立即创建备份</h3><p>由服务端生成完整数据库备份，路径与文件名会在成功后显示。</p><button class="gold-button" :disabled="saving" @click="backup">创建数据库备份</button><small v-if="backupResult">{{ backupResult.backup_path }}</small></article><article class="maintenance-card"><span>版本巡检</span><h3>{{ system?.version ? `当前版本 ${system.version}` : '系统更新检查' }}</h3><p>强制向更新源检查最新版本；不会在此页面自动执行升级。</p><button class="gold-button" :disabled="saving" @click="checkForUpdate">检查更新</button><div v-if="updateResult" class="update-result"><b>{{ updateResult.has_update ? `可更新至 ${updateResult.latest_version}` : '已是最新版本' }}</b><p>{{ updateResult.release_notes }}</p><a v-if="updateResult.release_url" :href="safeExternalUrl(updateResult.release_url)" target="_blank" rel="noopener noreferrer">查看发行说明</a></div></article><article class="maintenance-card"><span>巡检偏好</span><h3>自动检查更新</h3><p>控制服务端是否按其既定周期检查新版本。</p><button class="quiet-button" :disabled="saving || !system" @click="setAutoUpdate">{{ system?.auto_check_update ? '已开启 · 点击关闭' : '已关闭 · 点击开启' }}</button></article><article class="maintenance-card"><span>外观说明</span><h3>V2 固定武侠主题</h3><p>当前 V2 以武侠书院为唯一视觉语言，不提供旧版主题或旧后台跳转。</p></article></div></section>
       </main>
     </div>
     <SettingsConfirmDialog :open="confirmation.open" :title="confirmation.title" :message="confirmation.message" :confirm-label="confirmation.label" :busy="saving" danger @cancel="confirmation.open = false" @confirm="confirmAction" />

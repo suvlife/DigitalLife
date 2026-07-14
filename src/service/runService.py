@@ -17,7 +17,14 @@ from constants import (
     TaskRunStatus,
     TaskStatus,
 )
-from dal.db import atomic_transaction, gtRoomManager, gtRoomRunManager, gtTaskRunManager
+from dal.db import (
+    atomic_transaction,
+    gtRoomManager,
+    gtRoomMessageManager,
+    gtRoomRunManager,
+    gtTaskRunManager,
+    gtTeamManager,
+)
 from model.dbModel.gtAgentActivity import GtAgentActivity
 from model.dbModel.gtAgentTask import GtAgentTask
 from model.dbModel.gtRoom import GtRoom
@@ -351,7 +358,8 @@ async def complete_final_answer(
     The report file has a deterministic name and is atomically replaced. All
     TaskRun/RoomRun mutations commit in one SQLite transaction and the bounded
     retry contains database work only. Event delivery is at-least-once snapshot
-    delivery; Ghost enqueue is idempotent through the stable publication key.
+    delivery; the full conclusion is auto-published to Ghost (source=html, no
+    truncation) after the terminal snapshot commits.
     """
     run = await gtTaskRunManager.get_run(run_id)
     if run is None:
@@ -414,29 +422,33 @@ async def complete_final_answer(
     )
     messageBus.publish(MessageBusTopic.RUN_PROGRESS_CHANGED, run=_run_payload(run))
 
-    # The stable publication key makes enqueue re-entrant if the process dies
-    # after the database commit but before or during this side effect.
+    # 自动发布完整结论到博客（#6）：Ghost 启用且开启自动发布时，把本次 Run 的
+    # 完整汇总结论交给 ghostService.publish_run_conclusion，内部以 source=html 整体
+    # 提交、全文无截断。发布是终态之后的副作用，失败只记录 blog_publish_status，
+    # 不回滚 Run 终态。
     try:
         from service import ghostService
-        queued = await ghostService.enqueue_final_conclusion(
-            source_id=f"run:{run.id}",
-            publication_key=f"final-conclusion:run:{run.id}",
-            title=run.title or "综合分析报告",
-            question=run.query,
-            conclusion=final_answer,
-            team_id=run.team_id,
-            room_id=run.root_room_id,
-            run_id=run.id,
-        )
-        if queued.get("success"):
-            run = await update_blog_publish_status(run_id=run.id, status="PENDING")
-        else:
-            run = await update_blog_publish_status(
-                run_id=run.id, status="FAILED",
-                error_message=str(queued.get("message") or "Ghost 未进入发布队列"),
+        from util import configUtil
+        ghost = configUtil.get_app_config().setting.ghost
+        if ghost.enabled and ghost.auto_publish:
+            team = await gtTeamManager.get_team_by_id(run.team_id)
+            published = await ghostService.publish_run_conclusion(
+                run_id=run.id,
+                team_name=team.name if team is not None else "",
+                title=run.title or "综合分析报告",
+                content_markdown=final_answer,
             )
+            if published.get("success"):
+                run = await update_blog_publish_status(
+                    run_id=run.id, status="PUBLISHED", post_url=published.get("url"),
+                )
+            else:
+                run = await update_blog_publish_status(
+                    run_id=run.id, status="FAILED",
+                    error_message=str(published.get("error") or "Ghost 发布失败"),
+                )
     except Exception as exc:
-        logger.exception("Failed to enqueue final answer for Ghost publication: run_id=%s", run.id)
+        logger.exception("Failed to auto-publish run conclusion to Ghost: run_id=%s", run.id)
         run = await update_blog_publish_status(run_id=run.id, status="FAILED", error_message=str(exc))
     return run
 

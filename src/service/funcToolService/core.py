@@ -127,6 +127,13 @@ async def run_tool_call(
         logger.warning(f"工具参数 JSON 解析失败，已忽略参数: tool={function_name}, args={function_args!r}")
         args = {}
 
+    # 安全过滤（审计 L9）：剔除 LLM 自带的下划线前缀内部键（如 _context），
+    # 防止模型注入伪造的受信参数；随后按需注入服务端受信 _context。
+    if isinstance(args, dict):
+        args = {k: v for k, v in args.items() if not (isinstance(k, str) and k.startswith("_"))}
+    else:
+        args = {}
+
     caller = context.agent_id if context is not None else "unknown"
     logger.info(f"use_tool: caller_id={caller}, tool={function_name}, args={args}")
 
@@ -155,13 +162,16 @@ async def run_tool_call(
         return result
 
     except Exception as e:
-        if isinstance(e, TypeError):
-            error = f"Invalid arguments for function {function_name}: {e}"
+        # 审计 L8：完整异常仅写日志；返回给模型的消息归一化，避免泄露
+        # 内部路径 / DB 细节 / 堆栈到 Agent 上下文（可经 web_fetch 等外发）。
+        if isinstance(e, (ValueError, TypeError)):
+            # 参数类错误对模型自我纠正有用，保留精简信息
+            error = f"参数错误: {e}"
         else:
-            error = str(e)
+            error = "工具执行内部错误，请调整参数后重试"
 
-        logger.error(f"函数执行失败: {e}")
-        return {"success": False, "message": f"函数执行失败: {error}"}
+        logger.error(f"函数执行失败: tool={function_name}, error={e!r}", exc_info=True)
+        return {"success": False, "message": error}
 
 
 def shutdown() -> None:

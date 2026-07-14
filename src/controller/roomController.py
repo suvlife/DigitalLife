@@ -505,6 +505,17 @@ class RoomMessageUploadHandler(BaseHandler):
 
         team_config = team.config or {}
         team_workdir = team_config.get("working_directory") or os.path.join(workspace_root, team.name)
+
+        # 审计 L6：与下载侧一致，先校验团队工作目录本身在 workspace_root 沙箱内，
+        # 防止 working_directory 曾被配置到工作空间之外导致上传落盘越界。
+        from util import fileUtil
+        try:
+            fileUtil.assert_path_within_sandbox(team_workdir, workspace_root)
+        except Exception:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_workdir", "error_desc": "团队工作目录不在工作空间沙箱内"})
+            return
+
         upload_dir = os.path.join(team_workdir, "uploads")
         os.makedirs(upload_dir, exist_ok=True)
 
@@ -519,7 +530,6 @@ class RoomMessageUploadHandler(BaseHandler):
         saved_path = os.path.join(upload_dir, saved_filename)
 
         # 沙箱校验：确保最终路径在 upload_dir 内
-        from util import fileUtil
         fileUtil.assert_path_within_sandbox(saved_path, upload_dir)
         saved_path = os.path.join(upload_dir, saved_filename)
 

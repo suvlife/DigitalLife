@@ -48,6 +48,43 @@ def test_markdown_to_safe_html_blocks_javascript_links() -> None:
     assert "javascript:" not in rendered
 
 
+def test_markdown_to_html_renders_full_document_without_truncation() -> None:
+    """审计 #6：完整正文渲染为 HTML，不做任何长度截断。"""
+    body = "\n\n".join(f"段落编号 {i} 的正文内容。" for i in range(2000))
+    markdown = f"# 开头标题\n\n{body}\n\n## 结尾标记 UNIQUE_TAIL_MARKER\n"
+    rendered = ghostService.markdown_to_html(markdown)
+    # 首尾内容都必须保留，证明没有被中途截断
+    assert "开头标题" in rendered
+    assert "UNIQUE_TAIL_MARKER" in rendered
+    assert "段落编号 1999" in rendered
+
+
+@pytest.mark.asyncio
+async def test_publish_to_ghost_sends_full_untruncated_html(monkeypatch) -> None:
+    """审计 #6：_publish_to_ghost 提交完整 HTML，末尾标记不丢失。"""
+    captured = {}
+
+    async def request(method, url, *, headers, json_body, **kwargs):
+        captured["body"] = json_body
+        return ghostService.safeHttpUtil.SafeHttpResponse(
+            status=201, headers={},
+            body=json.dumps({"posts": [{"id": "post-1", "url": "https://blog.example/post/"}]}).encode(),
+            url=url,
+        )
+
+    monkeypatch.setattr(ghostService.safeHttpUtil, "request", request)
+    monkeypatch.setattr(ghostService.safeHttpUtil, "assert_safe_http_url", lambda *args, **kwargs: None)
+    long_body = "\n\n".join(f"正文段落 {i}" for i in range(3000)) + "\n\nEND_OF_REPORT_MARKER"
+    result = await ghostService._publish_to_ghost(
+        "报告", long_body, api_url="https://blog.example",
+        admin_api_key="id:" + "ab" * 32,
+    )
+    assert result["success"] is True
+    html = captured["body"]["posts"][0]["html"]
+    assert "END_OF_REPORT_MARKER" in html
+    assert "正文段落 2999" in html
+
+
 @pytest.mark.asyncio
 async def test_publish_post_uses_source_html_and_never_sends_markdown_as_lexical(monkeypatch) -> None:
     captured = {}
@@ -62,7 +99,7 @@ async def test_publish_post_uses_source_html_and_never_sends_markdown_as_lexical
 
     monkeypatch.setattr(ghostService.safeHttpUtil, "request", request)
     monkeypatch.setattr(ghostService.safeHttpUtil, "assert_safe_http_url", lambda *args, **kwargs: None)
-    result = await ghostService.publish_post(
+    result = await ghostService._publish_to_ghost(
         "报告", "# 完整结论", api_url="https://blog.example",
         admin_api_key="id:" + "ab" * 32,
     )
@@ -125,7 +162,7 @@ async def test_publish_post_reconciles_existing_slug_with_update(monkeypatch) ->
 
     monkeypatch.setattr(ghostService.safeHttpUtil, "request", request)
     monkeypatch.setattr(ghostService.safeHttpUtil, "assert_safe_http_url", lambda *args, **kwargs: None)
-    result = await ghostService.publish_post(
+    result = await ghostService._publish_to_ghost(
         "报告", "# 新结论", api_url="https://blog.example",
         admin_api_key="id:" + "ab" * 32, slug="digitallife-stable",
     )
@@ -159,8 +196,8 @@ async def test_publish_post_timeout_then_retry_finds_remote_post(monkeypatch) ->
         api_url="https://blog.example", admin_api_key="id:" + "ab" * 32,
         slug="digitallife-stable",
     )
-    first = await ghostService.publish_post("报告", "# 结论", **kwargs)
-    second = await ghostService.publish_post("报告", "# 结论", **kwargs)
+    first = await ghostService._publish_to_ghost("报告", "# 结论", **kwargs)
+    second = await ghostService._publish_to_ghost("报告", "# 结论", **kwargs)
 
     assert first["success"] is False and first["retryable"] is True
     assert second["success"] is True

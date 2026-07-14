@@ -92,6 +92,25 @@ def publish(topic: MessageBusTopic, **payload: Any) -> None:
             logger.error("[messageBus] 无可用事件循环，丢弃事件: topic=%s", topic.name)
 
 
+def _on_background_task_done(task: asyncio.Task) -> None:
+    """回收后台回调任务的强引用，并检索异常（审计 H5）。
+
+    裸 `_background_tasks.discard` 只丢引用、从不检索 `.exception()`，会把协程
+    回调里的异常静默吞掉（仅 GC 时报 "Task exception was never retrieved"），
+    导致调度事件被静默丢弃、Agent 不被唤醒且无业务日志。这里主动检索并落错误
+    日志，保证故障可观测。
+    """
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "[messageBus] 后台回调任务异常: task=%s: %s",
+            task.get_name(), exc, exc_info=exc,
+        )
+
+
 def _invoke_callback(callback: Callable[[EventBusMessage], None], msg: EventBusMessage) -> None:
     callback_name = getattr(callback, "__name__", repr(callback))
     try:
@@ -99,7 +118,7 @@ def _invoke_callback(callback: Callable[[EventBusMessage], None], msg: EventBusM
         if inspect.isawaitable(result):
             task = asyncio.create_task(result, name=f"mb-{msg.event_id}-{callback_name}")
             _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
+            task.add_done_callback(_on_background_task_done)
     except Exception as e:
         logger.error(f"[messageBus] event_id={msg.event_id} topic={msg.topic} callback={callback_name} 异常: {e}")
 

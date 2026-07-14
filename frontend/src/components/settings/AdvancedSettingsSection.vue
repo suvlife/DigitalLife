@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { checkUpdate, updateSystemConfig } from '../../api';
 import { autoCheckUpdate, hasUpdate, latestVersion, releaseUrl, appVersion } from '../../appUiState';
 import LabeledSwitch from '../ui/LabeledSwitch.vue';
+import { safeExternalUrl } from '../../utils/safeUrl';
 import SettingsBreadcrumb from './SettingsBreadcrumb.vue';
 import type { SettingsBreadcrumbItem } from './types';
 import type { UpdateCheckResult } from '../../api';
@@ -84,8 +85,8 @@ async function handleManualCheck(): Promise<void> {
               <template v-if="hasUpdate">
                 · {{ t('settings.advanced.updateAvailable', { version: latestVersion }) }}
                 <a
-                  v-if="releaseUrl"
-                  :href="releaseUrl"
+                  v-if="safeExternalUrl(releaseUrl)"
+                  :href="safeExternalUrl(releaseUrl)"
                   target="_blank"
                   rel="noopener"
                   class="update-link"

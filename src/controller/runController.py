@@ -3,7 +3,7 @@ from __future__ import annotations
 from tornado.web import Finish
 
 from controller.baseController import BaseHandler
-from service import runService
+from service import runService, artifactService
 from model.dbModel.gtTaskRun import GtTaskRun
 
 
@@ -112,3 +112,39 @@ class RunFinalAnswerHandler(_RunOwnedHandler):
             "blog_publish_status": run.blog_publish_status,
             "blog_post_url": run.blog_post_url,
         })
+
+
+# ---------------------------------------------------------------------------
+# 卷宗（#7）：一次「问策」Run 的最终综合报告。列举历史卷宗 + 查看卷宗详情。
+# ---------------------------------------------------------------------------
+
+class DossierListHandler(BaseHandler):
+    """GET /runs/dossiers/list.json?team_id=...&limit=50 — 列举历史卷宗。"""
+
+    async def get(self) -> None:
+        team_id = self.get_int_argument("team_id", min_val=1)
+        if team_id is None:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_argument", "error_desc": "team_id 必填"})
+            return
+        await self._assert_team_owned(team_id)
+        limit = self.get_int_argument("limit", default=50, min_val=1, max_val=200) or 50
+        dossiers = await artifactService.list_dossiers(
+            team_id, limit=limit, owner_user_id=self._current_user_id(),
+        )
+        self.return_json({"dossiers": dossiers})
+
+
+class DossierDetailHandler(_RunOwnedHandler):
+    """GET /runs/{id}/dossier.json — 查看单个卷宗详情（含正文）。"""
+
+    async def get(self, run_id_str: str) -> None:
+        run_id = int(run_id_str)
+        # 复用 Run 归属校验（团队可读 + 运行实例 owner 校验）
+        await self._load_owned_run(run_id)
+        dossier = await artifactService.get_dossier(run_id)
+        if dossier is None:
+            self.set_status(404)
+            self.return_json({"error_code": "dossier_not_found", "error_desc": "卷宗不存在"})
+            return
+        self.return_json(dossier)

@@ -28,6 +28,14 @@ import type {
   TeamDetail,
   TeamSummary,
   SkillInfo,
+  LlmProviderPreset,
+  LlmFallbackConfig,
+  SearchConfig,
+  SearchProviderInfo,
+  GhostConfig,
+  GhostTestResult,
+  DossierSummary,
+  DossierDetail,
 } from './types';
 import { showGlobalRequestError, showTokenDialog } from './appUiState';
 import { getToken } from './authStore';
@@ -239,9 +247,11 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   try {
     const response = await fetch(requestUrl, {
-      headers,
       credentials: 'include',  // 自动携带 Cookie（session 鉴权）
       ...init,
+      // headers 必须放到 ...init 之后，确保自动注入的 Authorization / Content-Type / XSRF
+      // 不会被 init.headers 覆盖（init.headers 已在上方合并进 headers）
+      headers,
     });
     const responseContentType = response.headers.get('content-type') || '';
 
@@ -1369,4 +1379,171 @@ export async function register(username: string, password: string, display_name?
     method: 'POST',
     body: JSON.stringify({ username, password, display_name }),
   });
+}
+
+// ─── LLM 厂商预设 & 兜底链（#3）─────────────────────────────
+
+export async function getLlmProviderCatalog(): Promise<LlmProviderPreset[]> {
+  const data = await requestJson<{ providers?: Partial<LlmProviderPreset>[] }>('/config/llm_providers/catalog.json');
+  return (data.providers ?? []).map((item) => ({
+    id: String(item.id ?? ''),
+    display_name: (item.display_name && typeof item.display_name === 'object')
+      ? item.display_name as Record<string, string>
+      : {},
+    type: String(item.type ?? 'openai-compatible'),
+    base_url: String(item.base_url ?? ''),
+    default_model: String(item.default_model ?? ''),
+    signup_url: String(item.signup_url ?? ''),
+    models: Array.isArray(item.models) ? item.models.map((m) => String(m)) : [],
+  }));
+}
+
+export async function createLlmServiceFromProvider(payload: {
+  provider_id: string;
+  api_key: string;
+  model?: string | null;
+  name?: string | null;
+}): Promise<{ status: string; index: number; service?: Record<string, unknown> }> {
+  return requestJson('/config/llm_services/from_provider.json', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getLlmFallback(): Promise<LlmFallbackConfig> {
+  const data = await requestJson<Partial<LlmFallbackConfig>>('/config/llm_services/fallback.json');
+  return {
+    default_llm_server: typeof data.default_llm_server === 'string' && data.default_llm_server
+      ? data.default_llm_server
+      : null,
+    fallback_llm_servers: Array.isArray(data.fallback_llm_servers)
+      ? data.fallback_llm_servers.map((item) => String(item))
+      : [],
+  };
+}
+
+export async function setLlmFallback(fallbackServers: string[]): Promise<{ status: string; fallback_llm_servers: string[] }> {
+  return requestJson('/config/llm_services/fallback.json', {
+    method: 'POST',
+    body: JSON.stringify({ fallback_llm_servers: fallbackServers }),
+  });
+}
+
+// ─── 搜索工具配置（#5）─────────────────────────────────────
+
+export async function getSearchConfig(): Promise<SearchConfig> {
+  const data = await requestJson<Partial<SearchConfig>>('/config/search.json');
+  return {
+    enabled: Boolean(data.enabled),
+    max_content_length: Number(data.max_content_length ?? 8000),
+    max_fetch_bytes: Number(data.max_fetch_bytes ?? 5 * 1024 * 1024),
+    providers: Array.isArray(data.providers)
+      ? data.providers.map((item): SearchProviderInfo => ({
+        provider: String(item.provider ?? ''),
+        enable: Boolean(item.enable),
+        api_keys: Array.isArray(item.api_keys) ? item.api_keys.map((k) => String(k)) : [],
+        api_keys_count: Number(item.api_keys_count ?? (Array.isArray(item.api_keys) ? item.api_keys.length : 0)),
+        has_api_key: Boolean(item.has_api_key),
+      }))
+      : [],
+  };
+}
+
+export async function updateSearchSettings(payload: {
+  enabled?: boolean;
+  max_content_length?: number;
+  max_fetch_bytes?: number;
+}): Promise<{ status: string }> {
+  return requestJson('/config/search/settings.json', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createSearchProvider(payload: {
+  provider: string;
+  api_keys: string[];
+  enable?: boolean;
+}): Promise<{ status: string; index: number }> {
+  return requestJson('/config/search/providers/create.json', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function modifySearchProvider(index: number, payload: {
+  provider?: string;
+  enable?: boolean;
+  api_keys?: string[];
+  clear_api_keys?: boolean;
+}): Promise<{ status: string }> {
+  return requestJson(`/config/search/providers/${index}/modify.json`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteSearchProvider(index: number): Promise<{ status: string; deleted_provider: string }> {
+  return requestJson(`/config/search/providers/${index}/delete.json`, {
+    method: 'POST',
+  });
+}
+
+// ─── Ghost 博客发布配置（#4）───────────────────────────────
+
+export async function getGhostConfig(): Promise<GhostConfig> {
+  const data = await requestJson<Partial<GhostConfig>>('/config/ghost.json');
+  return {
+    enabled: Boolean(data.enabled),
+    api_url: String(data.api_url ?? ''),
+    admin_api_key: '',
+    content_api_key: '',
+    auto_publish: data.auto_publish !== false,
+    publish_status: String(data.publish_status ?? 'published'),
+    has_admin_key: Boolean(data.has_admin_key),
+    has_content_key: Boolean(data.has_content_key),
+    skip_ssl_verify: Boolean(data.skip_ssl_verify),
+    is_builtin: Boolean(data.is_builtin),
+  };
+}
+
+export async function updateGhostConfig(payload: {
+  enabled?: boolean;
+  api_url?: string;
+  admin_api_key?: string;
+  content_api_key?: string;
+  clear_admin_api_key?: boolean;
+  clear_content_api_key?: boolean;
+  auto_publish?: boolean;
+  publish_status?: string;
+  skip_ssl_verify?: boolean;
+}): Promise<{ success: boolean; has_admin_key: boolean; has_content_key: boolean }> {
+  return requestJson('/config/ghost.json', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testGhostConnection(payload: {
+  api_url?: string;
+  admin_api_key?: string;
+  skip_ssl_verify?: boolean;
+}): Promise<GhostTestResult> {
+  return requestJson('/config/ghost/test.json', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+// ─── 卷宗（#7）─────────────────────────────────────────────
+
+export async function getDossiers(teamId: number, limit = 50): Promise<DossierSummary[]> {
+  const data = await requestJson<{ dossiers?: DossierSummary[] }>(
+    withSearch('/runs/dossiers/list.json', { team_id: teamId, limit }),
+  );
+  return data.dossiers ?? [];
+}
+
+export async function getDossierDetail(runId: number): Promise<DossierDetail> {
+  return requestJson<DossierDetail>(`/runs/${runId}/dossier.json`);
 }

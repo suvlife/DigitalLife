@@ -93,6 +93,28 @@ export async function deleteLlmService(index:number):Promise<{status:string;dele
 export async function setDefaultLlmService(index:number):Promise<{status:string;default_llm_server:string}>{return json(`/config/llm_services/${index}/set_default.json`,{method:'POST'});}
 export async function testLlmService(body:LlmServiceTestPayload):Promise<LlmServiceTestResult>{return json('/config/llm_services/test.json',{method:'POST',body:JSON.stringify(body)});}
 
+// LLM 厂商预设目录（#5：预设下拉 + 多模型）与「首选/兜底」链（#3）
+export interface LlmProviderCatalogEntry{id:string;display_name:Record<string,string>;type:LlmServiceType|string;base_url:string;default_model:string;signup_url:string;models:string[];}
+export interface LlmServiceFromProviderPayload{provider_id:string;api_key:string;model?:string;name?:string;}
+export interface LlmFallbackInfo{default_llm_server:string|null;fallback_llm_servers:string[];}
+const strMap=(x:unknown):Record<string,string>=>{const r=record(x);const out:Record<string,string>={};for(const k of Object.keys(r))out[k]=String(r[k]??'');return out;};
+export function providerDisplayName(entry:Pick<LlmProviderCatalogEntry,'display_name'|'id'>):string{const d=entry.display_name||{};return d['zh-CN']||d.zh_CN||d.zh||d.en||entry.id;}
+export async function getLlmProviderCatalog():Promise<LlmProviderCatalogEntry[]>{const d=await json<{providers?:any[]}>('/config/llm_providers/catalog.json');return(d.providers||[]).map(x=>({id:String(x.id||''),display_name:strMap(x.display_name),type:String(x.type||'openai-compatible'),base_url:String(x.base_url||''),default_model:String(x.default_model||''),signup_url:String(x.signup_url||''),models:Array.isArray(x.models)?x.models.map(String):[]}));}
+export async function createLlmServiceFromProvider(body:LlmServiceFromProviderPayload):Promise<{status:string;index:number;service:LlmServiceInfo}>{return json('/config/llm_services/from_provider.json',{method:'POST',body:JSON.stringify(body)});}
+export async function getLlmFallback():Promise<LlmFallbackInfo>{const d=await json<any>('/config/llm_services/fallback.json');return{default_llm_server:d.default_llm_server??null,fallback_llm_servers:Array.isArray(d.fallback_llm_servers)?d.fallback_llm_servers.map(String):[]};}
+export async function setLlmFallback(fallbackServers:string[]):Promise<{status:string}>{return json('/config/llm_services/fallback.json',{method:'POST',body:JSON.stringify({fallback_llm_servers:fallbackServers})});}
+
+// 搜索工具配置（#5：多引擎 + 多 key，key 脱敏，后台增删改查）
+export interface SearchProviderInfo{provider:string;enable:boolean;api_keys:string[];api_keys_count:number;has_api_key:boolean;}
+export interface SearchToolsConfig{enabled:boolean;max_content_length:number;max_fetch_bytes:number;providers:SearchProviderInfo[];}
+export interface SearchProviderCreatePayload{provider:string;api_keys?:string[];enable?:boolean;}
+export interface SearchProviderModifyPayload{provider?:string;api_keys?:string[];enable?:boolean;clear_api_keys?:boolean;}
+export async function getSearchConfig():Promise<SearchToolsConfig>{const d=await json<any>('/config/search.json');return{enabled:Boolean(d.enabled),max_content_length:Number(d.max_content_length||0),max_fetch_bytes:Number(d.max_fetch_bytes||0),providers:(d.providers||[]).map((p:any)=>({provider:String(p.provider||''),enable:Boolean(p.enable),api_keys:Array.isArray(p.api_keys)?p.api_keys.map(String):[],api_keys_count:Number(p.api_keys_count||0),has_api_key:Boolean(p.has_api_key)}))};}
+export async function updateSearchSettings(body:{enabled?:boolean;max_content_length?:number;max_fetch_bytes?:number}):Promise<{status:string}>{return json('/config/search/settings.json',{method:'POST',body:JSON.stringify(body)});}
+export async function createSearchProvider(body:SearchProviderCreatePayload):Promise<{status:string;index:number}>{return json('/config/search/providers/create.json',{method:'POST',body:JSON.stringify(body)});}
+export async function modifySearchProvider(index:number,body:SearchProviderModifyPayload):Promise<{status:string}>{return json(`/config/search/providers/${index}/modify.json`,{method:'POST',body:JSON.stringify(body)});}
+export async function deleteSearchProvider(index:number):Promise<{status:string;deleted_provider:string}>{return json(`/config/search/providers/${index}/delete.json`,{method:'POST'});}
+
 export async function getGhostConfig():Promise<GhostConfig>{return json('/config/ghost.json');}
 export async function saveGhostConfig(body:GhostConfigPatch):Promise<GhostSaveResult>{return json('/config/ghost.json',{method:'POST',body:JSON.stringify(body)});}
 export async function testGhostConfig(body:GhostTestPayload={}):Promise<GhostTestResult>{return json('/config/ghost/test.json',{method:'POST',body:JSON.stringify(body)});}
@@ -138,6 +160,12 @@ export async function getRunTimeline(runId:string,limit=500):Promise<Message[]>{
 function normalizedRunPhase(raw:unknown):RunPhase{const value=String(raw||'queued').split('.').pop()!.toLowerCase();return value as RunPhase;}
 export function normalizeRunArchiveEntry(x:any):RunArchiveEntry{return{id:String(x.id),teamId:Number(x.team_id??x.teamId),title:String(x.title||''),question:String((x.query??x.question)||''),phase:normalizedRunPhase(x.status??x.phase),progress:Math.max(0,Math.min(100,Number(x.progress_percent??x.progress??0)||0)),publication:{status:normalizePublicationStatus(x.blog_publish_status??x.publication?.status),url:x.blog_post_url??x.publication?.url??undefined,error:x.metadata?.blog_publish_error??x.publication?.error??undefined},createdAt:x.created_at??x.createdAt,updatedAt:x.updated_at??x.updatedAt,startedAt:x.started_at??x.startedAt,finishedAt:x.finished_at??x.finishedAt};}
 export async function getRuns(teamId:number,limit=200):Promise<RunArchiveEntry[]>{const d=await json<{runs?:any[]}>(`/runs/list.json?team_id=${teamId}&limit=${Math.max(1,Math.min(200,Math.trunc(limit)))}`);return(d.runs||[]).map(normalizeRunArchiveEntry);}
+
+// 卷宗（#7）：一次「问策」Run 的最终综合报告，可列举历史卷宗并查看正文。
+export interface DossierEntry{run:RunArchiveEntry;reportPath:string|null;reportReady:boolean;hasConclusion:boolean;}
+export interface DossierDetail extends DossierEntry{content:string;}
+export async function getDossiers(teamId:number,limit=50):Promise<DossierEntry[]>{const d=await json<{dossiers?:any[]}>(`/runs/dossiers/list.json?team_id=${teamId}&limit=${Math.max(1,Math.min(200,Math.trunc(limit)))}`);return(d.dossiers||[]).map(x=>({run:normalizeRunArchiveEntry(x.run||{}),reportPath:x.report_path==null?null:String(x.report_path),reportReady:Boolean(x.report_ready),hasConclusion:Boolean(x.has_conclusion)}));}
+export async function getDossier(runId:string|number):Promise<DossierDetail>{const x=await json<any>(`/runs/${encodeURIComponent(String(runId))}/dossier.json`);return{run:normalizeRunArchiveEntry(x.run||{}),content:String(x.content||''),reportPath:x.report_path==null?null:String(x.report_path),reportReady:Boolean(x.report_ready),hasConclusion:Boolean(x.has_conclusion)};}
 
 export async function uploadFile(roomId:number,file:File,message=''):Promise<{filename:string;saved_path:string;size:number}>{const form=new FormData();form.append('file',file);if(message)form.append('message',message);const token=getToken();const headers=new Headers();if(token)headers.set('Authorization',`Bearer ${token}`);const xsrf=getXsrfToken();if(xsrf)headers.set('X-Xsrftoken',xsrf);const response=await fetch(url(`/rooms/${roomId}/messages/upload.json`),{method:'POST',headers,body:form,credentials:'include'});let body:any={};try{body=await response.json();}catch{}if(!response.ok){const detail=body.error_desc||`卷宗上传失败 (${response.status})`;if(response.status===401)requireAuthentication(detail);throw new ApiError(detail,response.status);}return body;}
 export function wsUrl():string{if(BASE){const u=new URL(BASE);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname='/ws/events.json';u.search='';return u.toString();}return `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws/events.json`;}

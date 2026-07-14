@@ -5,10 +5,10 @@ import time
 from pydantic import BaseModel, ValidationError
 
 from constants import LlmServiceType
-from controller.baseController import BaseHandler
+from controller.baseController import BaseHandler, format_validation_error
 from service import ghostService, llmService, schedulerService
 from util import assertUtil, configUtil, safeHttpUtil
-from util.configTypes import GhostConfig, LlmServiceConfig
+from util.configTypes import GhostConfig, LlmServiceConfig, SearchProviderConfig, SearchToolsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +47,11 @@ def _get_setting():
     return configUtil.get_app_config().setting
 
 
-def _serialize_llm_service(service: LlmServiceConfig) -> dict:
+def _serialize_llm_service(service: LlmServiceConfig, *, is_admin: bool = True) -> dict:
     """序列化 LLM 服务配置。
 
     安全策略：api_key 始终不返回明文（仅返回 has_api_key 布尔），
-    extra_headers 脱敏为 ***。demo 模式额外隐藏 base_url。
+    extra_headers 脱敏为 ***。demo 模式或非管理员额外隐藏 base_url（审计 M6）。
     """
     item = service.model_dump(exclude_unset=True, mode="json")
     item.setdefault("provider_params", {})
@@ -62,7 +62,8 @@ def _serialize_llm_service(service: LlmServiceConfig) -> dict:
     if item.get("extra_headers"):
         item["extra_headers"] = {k: "***" for k in item["extra_headers"]}
     demo_mode = configUtil.get_app_config().setting.demo_mode
-    if demo_mode.hide_sensitive:
+    # M6：base_url 属基础设施敏感信息，非管理员或 demo 隐私模式下屏蔽
+    if demo_mode.hide_sensitive or not is_admin:
         item["base_url"] = ""
         item["extra_headers"] = {}
     return item
@@ -91,7 +92,8 @@ class LlmServiceListHandler(BaseHandler):
 
     async def get(self) -> None:
         setting = _get_setting()
-        user_services = [_serialize_llm_service(service) for service in setting.llm_services]
+        is_admin = self._is_admin()
+        user_services = [_serialize_llm_service(service, is_admin=is_admin) for service in setting.llm_services]
 
         # 检查用户配置中是否有已启用的服务
         has_enabled_user_service = any(s.enable for s in setting.llm_services)
@@ -105,12 +107,17 @@ class LlmServiceListHandler(BaseHandler):
                 item["api_key"] = ""  # 内置 Key 不返回明文
                 item["is_builtin"] = True
                 item.setdefault("provider_params", {})
+                # M6：非管理员不暴露内置服务的 base_url
+                if not is_admin:
+                    item["base_url"] = ""
+                    item["extra_headers"] = {}
                 user_services.append(item)
 
             builtin_default = configUtil.get_builtin_default_llm_server()
             self.return_json({
                 "llm_services": user_services,
                 "default_llm_server": builtin_default or setting.default_llm_server or "",
+                "fallback_llm_servers": setting.fallback_llm_servers,
             })
             return
 
@@ -121,6 +128,7 @@ class LlmServiceListHandler(BaseHandler):
         self.return_json({
             "llm_services": user_services,
             "default_llm_server": setting.default_llm_server,
+            "fallback_llm_servers": setting.fallback_llm_servers,
         })
 
 
@@ -134,7 +142,7 @@ class LlmServiceCreateHandler(BaseHandler):
         except ValidationError as e:
             self.return_with_error(
                 error_code="validation_error",
-                error_desc=str(e),
+                error_desc=format_validation_error(e),
             )
             return
 
@@ -198,7 +206,7 @@ class LlmServiceModifyHandler(BaseHandler):
         except ValidationError as e:
             self.return_with_error(
                 error_code="validation_error",
-                error_desc=str(e),
+                error_desc=format_validation_error(e),
             )
             return
 
@@ -358,8 +366,13 @@ async def _test_llm_service(config: LlmServiceConfig) -> dict:
         from urllib.parse import quote
         model = quote(config.model, safe="")
         root = base_url[:-3] if base_url.endswith("/v1") else base_url
-        endpoint = f"{root}/v1beta/models/{model}:generateContent?key={quote(config.api_key, safe='')}"
-        headers.setdefault("content-type", "application/json")
+        # 审计 M15：用 x-goog-api-key 请求头承载密钥，而非放入 URL query，
+        # 避免密钥进入 aiohttp 内部日志 / 中间层 / 跨域重定向 query。
+        endpoint = f"{root}/v1beta/models/{model}:generateContent"
+        headers.update({
+            "x-goog-api-key": config.api_key,
+            "content-type": "application/json",
+        })
         payload = {"contents": [{"parts": [{"text": "Reply OK"}]}], "generationConfig": {"maxOutputTokens": 8}}
     else:
         endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
@@ -526,9 +539,11 @@ class GhostConfigHandler(BaseHandler):
     async def get(self) -> None:
         ghost = _get_setting().ghost
         # 密钥永不返回明文。空字符串用于保持前端表单兼容。
+        # 审计 M6：api_url 属基础设施敏感信息，非管理员脱敏为空串。
+        api_url = ghost.api_url if self._is_admin() else ""
         self.return_json({
             "enabled": ghost.enabled,
-            "api_url": ghost.api_url,
+            "api_url": api_url,
             "admin_api_key": "",
             "content_api_key": "",
             "auto_publish": ghost.auto_publish,
@@ -577,3 +592,248 @@ class GhostTestHandler(BaseHandler):
         skip_ssl_verify = bool(body.get("skip_ssl_verify", _get_setting().ghost.skip_ssl_verify))
         result = await ghostService.test_ghost_connection(api_url, admin_api_key, skip_ssl_verify=skip_ssl_verify)
         self.return_json(result)
+
+
+# ---------------------------------------------------------------------------
+# 搜索工具配置（#5）：多引擎 + 多 key，后台增删改查；key 返回时脱敏。
+# ---------------------------------------------------------------------------
+
+def _mask_key(key: str) -> str:
+    """脱敏单个 api_key，仅保留尾部少量字符用于识别。"""
+    key = (key or "").strip()
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "****"
+    return "****" + key[-4:]
+
+
+def _serialize_search_provider(provider: SearchProviderConfig) -> dict:
+    """序列化搜索引擎配置，api_keys 一律脱敏，仅返回掩码与数量。"""
+    return {
+        "provider": provider.provider,
+        "enable": provider.enable,
+        "api_keys": [_mask_key(k) for k in provider.api_keys],
+        "api_keys_count": len(provider.api_keys),
+        "has_api_key": bool(provider.api_keys),
+    }
+
+
+def _validate_search_index(index_str: str) -> int:
+    """将路径参数转为合法的 providers 数组下标。"""
+    index = int(index_str)
+    providers = _get_setting().search.providers
+    assertUtil.assertTrue(
+        0 <= index < len(providers),
+        error_message=f"搜索引擎序号 {index} 越界，当前共 {len(providers)} 个",
+        error_code="index_out_of_range",
+    )
+    return index
+
+
+class SearchConfigHandler(BaseHandler):
+    """GET /config/search.json — 返回搜索工具配置（key 脱敏）。"""
+
+    async def get(self) -> None:
+        search = _get_setting().search
+        self.return_json({
+            "enabled": search.enabled,
+            "max_content_length": search.max_content_length,
+            "max_fetch_bytes": search.max_fetch_bytes,
+            "providers": [_serialize_search_provider(p) for p in search.providers],
+        })
+
+
+class SearchSettingsHandler(BaseHandler):
+    """POST /config/search/settings.json — 更新搜索全局开关与抓取上限。"""
+
+    async def post(self) -> None:
+        self._assert_admin()
+        body = self.parse_request_dict()
+
+        # 先在副本上构建并校验，避免校验失败时污染内存中的实时配置。
+        data = _get_setting().search.model_dump()
+        if "enabled" in body:
+            data["enabled"] = bool(body["enabled"])
+        for int_field in ("max_content_length", "max_fetch_bytes"):
+            if int_field in body:
+                try:
+                    data[int_field] = int(body[int_field])
+                except (TypeError, ValueError):
+                    self.return_with_error(
+                        error_code="invalid_argument",
+                        error_desc=f"{int_field} 必须是整数",
+                    )
+                    return
+
+        try:
+            new_search = SearchToolsConfig(**data)
+        except ValidationError as e:
+            self.return_with_error(error_code="validation_error", error_desc=format_validation_error(e))
+            return
+
+        def mutator(setting):
+            setting.search = new_search
+
+        configUtil.update_setting(mutator)
+        self.return_success()
+
+
+class SearchProviderCreateHandler(BaseHandler):
+    """POST /config/search/providers/create.json — 新增一个搜索引擎。"""
+
+    async def post(self) -> None:
+        self._assert_admin()
+        body = self.parse_request_dict()
+        try:
+            new_provider = SearchProviderConfig(
+                provider=str(body.get("provider", "")),
+                api_keys=[str(k) for k in (body.get("api_keys") or [])],
+                enable=bool(body.get("enable", True)),
+            )
+        except ValidationError as e:
+            self.return_with_error(error_code="validation_error", error_desc=format_validation_error(e))
+            return
+
+        assertUtil.assertTrue(
+            bool(new_provider.provider),
+            error_message="provider 不能为空",
+            error_code="missing_provider",
+        )
+        setting = _get_setting()
+        existing = {p.provider for p in setting.search.providers}
+        assertUtil.assertTrue(
+            new_provider.provider not in existing,
+            error_message=f"搜索引擎 '{new_provider.provider}' 已存在，请改用修改接口",
+            error_code="provider_duplicate",
+        )
+
+        def mutator(s):
+            s.search.providers.append(new_provider)
+
+        configUtil.update_setting(mutator)
+        self.return_success(index=len(setting.search.providers) - 1)
+
+
+class SearchProviderModifyHandler(BaseHandler):
+    """POST /config/search/providers/{index}/modify.json — 修改搜索引擎。
+
+    api_keys 仅在请求显式提供时才覆盖（GET 返回的是掩码值，避免误清空）；
+    可用 clear_api_keys=true 清空全部 key。
+    """
+
+    async def post(self, index_str: str) -> None:
+        self._assert_admin()
+        index = _validate_search_index(index_str)
+        setting = _get_setting()
+        current = setting.search.providers[index]
+
+        provider_name = current.provider
+        enable = current.enable
+        api_keys = list(current.api_keys)
+
+        body = self.parse_request_dict()
+        if "provider" in body:
+            provider_name = str(body["provider"])
+        if "enable" in body:
+            enable = bool(body["enable"])
+        if bool(body.get("clear_api_keys")):
+            api_keys = []
+        elif "api_keys" in body and isinstance(body["api_keys"], list):
+            api_keys = [str(k) for k in body["api_keys"]]
+
+        try:
+            new_provider = SearchProviderConfig(
+                provider=provider_name, api_keys=api_keys, enable=enable,
+            )
+        except ValidationError as e:
+            self.return_with_error(error_code="validation_error", error_desc=format_validation_error(e))
+            return
+
+        assertUtil.assertTrue(
+            bool(new_provider.provider),
+            error_message="provider 不能为空",
+            error_code="missing_provider",
+        )
+        # 改名后不得与其他引擎重名
+        rename_conflict = any(
+            i != index and p.provider == new_provider.provider
+            for i, p in enumerate(setting.search.providers)
+        )
+        assertUtil.assertFalse(
+            rename_conflict,
+            error_message=f"搜索引擎 '{new_provider.provider}' 已存在",
+            error_code="provider_duplicate",
+        )
+
+        def mutator(s):
+            s.search.providers[index] = new_provider
+
+        configUtil.update_setting(mutator)
+        self.return_success()
+
+
+class SearchProviderDeleteHandler(BaseHandler):
+    """POST /config/search/providers/{index}/delete.json — 删除搜索引擎。"""
+
+    async def post(self, index_str: str) -> None:
+        self._assert_admin()
+        index = _validate_search_index(index_str)
+        setting = _get_setting()
+        removed = setting.search.providers[index].provider
+
+        def mutator(s):
+            s.search.providers.pop(index)
+
+        configUtil.update_setting(mutator)
+        self.return_success(deleted_provider=removed)
+
+
+# ---------------------------------------------------------------------------
+# LLM 兜底链（#3）：设置 default_llm_server 不可用时按顺序切换的候选服务名列表。
+# ---------------------------------------------------------------------------
+
+class LlmFallbackHandler(BaseHandler):
+    """GET/POST /config/llm_services/fallback.json — 读取 / 设置 LLM 兜底链。"""
+
+    async def get(self) -> None:
+        setting = _get_setting()
+        self.return_json({
+            "default_llm_server": setting.default_llm_server,
+            "fallback_llm_servers": setting.fallback_llm_servers,
+        })
+
+    async def post(self) -> None:
+        self._assert_admin()
+        body = self.parse_request_dict()
+        raw = body.get("fallback_llm_servers")
+        assertUtil.assertTrue(
+            isinstance(raw, list),
+            error_message="fallback_llm_servers 必须是字符串数组",
+            error_code="invalid_fallback",
+        )
+
+        setting = _get_setting()
+        known_names = {s.name for s in setting.llm_services}
+        # 保序去重；剔除默认服务自身（兜底链不含首选）
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            name = str(item).strip()
+            if not name or name in seen:
+                continue
+            assertUtil.assertTrue(
+                name in known_names,
+                error_message=f"兜底服务 '{name}' 不存在于已配置的 LLM 服务中",
+                error_code="unknown_fallback_service",
+            )
+            if name == setting.default_llm_server:
+                continue
+            seen.add(name)
+            ordered.append(name)
+
+        def mutator(s):
+            s.fallback_llm_servers = ordered
+
+        configUtil.update_setting(mutator)
+        self.return_success(fallback_llm_servers=ordered)

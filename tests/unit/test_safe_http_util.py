@@ -18,11 +18,27 @@ class _Response:
     async def read(self):
         return self._body
 
+    @property
+    def content(self):
+        return _Content(self._body)
+
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
         return False
+
+
+class _Content:
+    """Minimal aiohttp StreamReader stand-in supporting ``read(n)``."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            return self._body
+        return self._body[:n]
 
 
 class _Session:
@@ -149,3 +165,25 @@ async def test_pinned_session_rejects_redirect_before_following_private_location
             await resolver.resolve("127.0.0.1", 443)
     finally:
         await session.close()
+
+
+@pytest.mark.asyncio
+async def test_max_bytes_truncates_oversized_body(monkeypatch):
+    """审计 H2：设置 max_bytes 时，超大响应体按上限截断，不会整体读入内存。"""
+    monkeypatch.setattr(safeHttpUtil.socket, "getaddrinfo", _public)
+    monkeypatch.setattr(safeHttpUtil.aiohttp, "ClientSession", _Session)
+    _Session.responses = [_Response(200, "https://public.example/big", body=b"x" * 10_000)]
+
+    response = await safeHttpUtil.request("GET", "https://public.example/big", max_bytes=1024)
+    assert len(response.body) == 1024
+
+
+@pytest.mark.asyncio
+async def test_max_bytes_none_reads_full_body(monkeypatch):
+    """未设置 max_bytes 时保持原行为，完整读取响应体。"""
+    monkeypatch.setattr(safeHttpUtil.socket, "getaddrinfo", _public)
+    monkeypatch.setattr(safeHttpUtil.aiohttp, "ClientSession", _Session)
+    _Session.responses = [_Response(200, "https://public.example/ok", body=b"y" * 5000)]
+
+    response = await safeHttpUtil.request("GET", "https://public.example/ok")
+    assert len(response.body) == 5000

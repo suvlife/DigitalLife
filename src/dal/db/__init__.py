@@ -14,7 +14,7 @@ from . import gtTeamManager
 from . import gtTaskRunManager
 from . import gtRoomRunManager
 from . import gtBlogPublicationManager
-from .transaction import atomic_transaction
+from .transaction import atomic_transaction, run_in_transaction_with_retry
 
 __all__ = [
     "gtAgentActivityManager",
@@ -32,4 +32,5 @@ __all__ = [
     "gtRoomRunManager",
     "gtBlogPublicationManager",
     "atomic_transaction",
+    "run_in_transaction_with_retry",
 ]

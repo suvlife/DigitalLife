@@ -245,7 +245,7 @@ class TestSchedulerRun(ServiceTestCase):
         with patch("service.schedulerService.gtScheculeTaskManager") as mock_task_manager:
             msg = EventBusMessage(
                 topic=MessageBusTopic.ROOM_STATUS_CHANGED,
-                payload={"need_scheduling": False},
+                payload={"gt_room": SimpleNamespace(id=1), "need_scheduling": False},
             )
             await scheduler._on_room_status_changed(msg)
 

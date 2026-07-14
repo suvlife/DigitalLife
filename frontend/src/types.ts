@@ -359,3 +359,91 @@ export interface SkillInfo {
   is_builtin: boolean;
   files: string[];
 }
+
+// ── LLM 厂商预设（#3）──
+export interface LlmProviderPreset {
+  id: string;
+  display_name: Record<string, string>;
+  type: string;
+  base_url: string;
+  default_model: string;
+  signup_url: string;
+  models: string[];
+}
+
+// ── LLM 兜底链（#3）──
+export interface LlmFallbackConfig {
+  default_llm_server: string | null;
+  fallback_llm_servers: string[];
+}
+
+// ── 搜索工具配置（#5）──
+export interface SearchProviderInfo {
+  provider: string;
+  enable: boolean;
+  // 后端一律脱敏返回，元素形如 "****abcd"；数量以 api_keys_count 为准。
+  api_keys: string[];
+  api_keys_count: number;
+  has_api_key: boolean;
+}
+
+export interface SearchConfig {
+  enabled: boolean;
+  max_content_length: number;
+  max_fetch_bytes: number;
+  providers: SearchProviderInfo[];
+}
+
+// ── Ghost 博客发布配置（#4）──
+export interface GhostConfig {
+  enabled: boolean;
+  api_url: string;
+  // GET 时后端返回空串；仅在提交表单时填写。
+  admin_api_key: string;
+  content_api_key: string;
+  auto_publish: boolean;
+  publish_status: string;
+  has_admin_key: boolean;
+  has_content_key: boolean;
+  skip_ssl_verify: boolean;
+  is_builtin: boolean;
+}
+
+export interface GhostTestResult {
+  status?: string;
+  success?: boolean;
+  message?: string;
+  detail?: string;
+  [key: string]: unknown;
+}
+
+// ── 卷宗（#7）──
+export interface DossierRun {
+  id: number;
+  team_id: number;
+  root_room_id: number;
+  title: string;
+  query: string;
+  status: string;
+  progress_percent: number;
+  final_answer?: string;
+  blog_publish_status?: string;
+  blog_post_url?: string | null;
+  error_message?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface DossierSummary {
+  run: DossierRun;
+  report_path: string | null;
+  report_ready: boolean;
+  has_conclusion: boolean;
+}
+
+export interface DossierDetail extends DossierSummary {
+  content: string;
+}

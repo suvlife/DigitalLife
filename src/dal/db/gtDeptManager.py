@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from model.dbModel.gtDept import GtDept
-from .transaction import atomic_transaction
+from .transaction import run_in_transaction_with_retry
 
 
 async def get_dept_by_id(dept_id: int) -> GtDept | None:
@@ -74,8 +74,9 @@ async def save_dept(
     }
     if i18n is not None:
         update_data[GtDept.i18n] = i18n
-    # 用事务包裹 upsert + re-select，防止并发写入导致 re-select 读到他人行
-    async with atomic_transaction():
+    # 用事务包裹 upsert + re-select，防止并发写入导致 re-select 读到他人行。
+    # 事务级重试（H8）：COMMIT 期 BUSY 整体回滚重跑；upsert + re-select 幂等，重跑安全。
+    async def _op() -> GtDept | None:
         await (
             GtDept.insert(insert_data)
             .on_conflict(
@@ -84,10 +85,12 @@ async def save_dept(
             )
             .aio_execute()
         )
-        row = await GtDept.aio_get_or_none(
+        return await GtDept.aio_get_or_none(
             GtDept.team_id == team_id,
             GtDept.name == name,
         )
+
+    row = await run_in_transaction_with_retry(_op)
     if row is None:
         raise RuntimeError(f"dept upsert failed: team_id={team_id}, name={name}")
     return row

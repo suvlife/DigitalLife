@@ -384,6 +384,12 @@ def _save_setting_to_file() -> None:
         ghost_raw["content_api_key"] = existing_ghost.get("content_api_key", "")
     raw["ghost"] = ghost_raw
     raw["driver_fallback"] = setting.driver_fallback.model_dump(exclude_unset=True, mode="json")
+    # 搜索工具（#5）、安全加固开关与 LLM 兜底链（#3）需随配置持久化，
+    # 否则通过 API 增删改的结果会在重启后丢失。search 用全量 dump 以免遗漏
+    # provider 列表（首次写入时字段可能尚未显式 set）。
+    raw["search"] = setting.search.model_dump(mode="json")
+    raw["security"] = setting.security.model_dump(exclude_unset=True, mode="json")
+    raw["fallback_llm_servers"] = list(setting.fallback_llm_servers)
 
     # 原子写入：先写临时文件再 os.replace。失败时清理残留 .tmp 文件。
     # 设置 0o600 权限保护含 api_key/token 的配置文件，防止 world-readable。

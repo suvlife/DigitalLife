@@ -115,17 +115,25 @@ class AgentHistoryStore:
         item.seq = target_seq
 
         if seq is None:
-            # 追加到末尾
-            self._items.append(item)
+            # 追加到末尾：先持久化，DB 成功后才改内存，
+            # 避免持久化失败（含取消）留下"内存有、DB 无"的分叉。
             saved = await gtAgentHistoryManager.append_agent_history_message(item)
+            self._items.append(item)
         else:
-            # 按 seq 插入
+            # 按 seq 插入：DAL 内 shift+insert 已并入同一事务（原子）。
+            # 参照 insert_compact_summary：先算好插入位与内存快照，DB 成功后才改内存；
+            # DB 失败/取消则恢复快照，保证内存与 DB 不分叉。
             insert_idx = len(self._items)
             for idx, existing in enumerate(self._items):
                 if existing.seq >= seq:
                     insert_idx = idx
                     break
-            saved = await gtAgentHistoryManager.insert_agent_history_message_at_seq(item)
+            items_snapshot = list(self._items)
+            try:
+                saved = await gtAgentHistoryManager.insert_agent_history_message_at_seq(item)
+            except Exception:
+                self._items = items_snapshot
+                raise
             for existing in self._items[insert_idx:]:
                 existing.seq += 1
             self._items.insert(insert_idx, item)

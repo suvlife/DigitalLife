@@ -7,6 +7,7 @@ import { clearToken } from '../../authStore';
 import { showTokenDialog } from '../../appUiState';
 import { clearTeams } from '../../teamStore';
 import { clearRuntimeStore } from '../../realtime/runtimeStore';
+import { safeExternalUrl } from '../../utils/safeUrl';
 import LabeledSwitch from '../ui/LabeledSwitch.vue';
 import ConfirmDialog from '../ui/ConfirmDialog.vue';
 import type { TeamSummary } from '../../types';
@@ -492,7 +493,7 @@ function closeLogoutConfirm(): void {
       </div>
       <a
         v-if="hasUpdate"
-        :href="releaseUrl || 'https://github.com/suvlife/DigitalLife/releases'"
+        :href="safeExternalUrl(releaseUrl) || 'https://github.com/suvlife/DigitalLife/releases'"
         target="_blank"
         rel="noopener"
         class="update-pill"

@@ -4,12 +4,13 @@ import { useI18n } from 'vue-i18n';
 import {
   createLlmService,
   deleteLlmService,
+  getLlmProviderCatalog,
   modifyLlmService,
   setDefaultLlmService,
   testLlmService,
 } from '../../api';
 import { showGlobalSuccessToast } from '../../appUiState';
-import type { LlmServiceInfo, LlmServiceType } from '../../types';
+import type { LlmProviderPreset, LlmServiceInfo, LlmServiceType } from '../../types';
 import ConfirmDialog from '../ui/ConfirmDialog.vue';
 import ToggleSwitch from '../ui/ToggleSwitch.vue';
 
@@ -49,7 +50,7 @@ const emit = defineEmits<{
   changed: [payload: { preferredIndex: number | null }];
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const visible = ref(false);
 const mode = ref<EditorMode>('create');
@@ -65,6 +66,51 @@ const apiKeyVisible = ref(false);
 const deleteConfirmOpen = ref(false);
 const statusText = ref('');
 const testResult = ref<{ status: string; message: string; detail?: string } | null>(null);
+
+// 厂商预设（#3）：仅在新建时使用，选预设自动带出 base_url / type / 默认模型。
+const presets = ref<LlmProviderPreset[]>([]);
+const selectedPresetId = ref('');
+
+function presetDisplayName(preset: LlmProviderPreset): string {
+  const map = preset.display_name || {};
+  return map[locale.value] || map['zh-CN'] || map.en || map.default || preset.id;
+}
+
+const selectedPreset = computed(() => presets.value.find((p) => p.id === selectedPresetId.value) ?? null);
+
+const KNOWN_SERVICE_TYPES: LlmServiceType[] = ['openai-compatible', 'anthropic', 'google', 'deepseek'];
+
+function normalizePresetType(rawType: string): LlmServiceType {
+  const value = (rawType || '').trim().toLowerCase();
+  return (KNOWN_SERVICE_TYPES as string[]).includes(value) ? (value as LlmServiceType) : 'openai-compatible';
+}
+
+async function loadPresets(): Promise<void> {
+  if (presets.value.length) {
+    return;
+  }
+  try {
+    presets.value = await getLlmProviderCatalog();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function applyPreset(): void {
+  const preset = selectedPreset.value;
+  if (!preset) {
+    return;
+  }
+  form.value.base_url = preset.base_url;
+  form.value.type = normalizePresetType(preset.type);
+  if (preset.default_model) {
+    form.value.model = preset.default_model;
+  }
+  if (!form.value.name.trim()) {
+    form.value.name = preset.id;
+  }
+  statusText.value = t('settings.models.presetApplied', { name: presetDisplayName(preset) });
+}
 
 const form = ref({
   name: '',
@@ -236,8 +282,10 @@ function openCreate(): void {
   currentIndex.value = null;
   originalService.value = null;
   defaultServer.value = null;
+  selectedPresetId.value = '';
   resetForm(null);
   visible.value = true;
+  void loadPresets();
 }
 
 function openEdit(payload: OpenEditPayload): void {
@@ -469,6 +517,26 @@ defineExpose({
         </div>
 
         <div class="svc-form-grid">
+          <label v-if="isCreating" class="svc-field svc-field--wide svc-field--preset">
+            <span>{{ t('settings.models.presetLabel') }}</span>
+            <div class="svc-input-group">
+              <select v-model="selectedPresetId" class="svc-input svc-select svc-input--flex" @change="applyPreset">
+                <option value="">{{ t('settings.models.presetCustom') }}</option>
+                <option v-for="preset in presets" :key="preset.id" :value="preset.id">
+                  {{ presetDisplayName(preset) }}
+                </option>
+              </select>
+              <a
+                v-if="selectedPreset?.signup_url"
+                :href="selectedPreset.signup_url"
+                target="_blank"
+                rel="noopener"
+                class="ghost-button svc-signup-link"
+              >{{ t('settings.models.presetSignup') }}</a>
+            </div>
+            <small class="svc-hint">{{ t('settings.models.presetHint') }}</small>
+          </label>
+
           <label class="svc-field">
             <span>{{ t('settings.models.nameLabel') }}</span>
             <input
@@ -533,8 +601,12 @@ defineExpose({
               v-model="form.model"
               type="text"
               class="svc-input"
+              list="llm-preset-models"
               :placeholder="t('settings.models.modelPlaceholder')"
             />
+            <datalist v-if="selectedPreset && selectedPreset.models.length" id="llm-preset-models">
+              <option v-for="modelName in selectedPreset.models" :key="modelName" :value="modelName" />
+            </datalist>
           </label>
         </div>
 
@@ -812,6 +884,13 @@ defineExpose({
 .svc-input--flex {
   flex: 1;
   min-width: 0;
+}
+
+.svc-signup-link {
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 .svc-input-group {
