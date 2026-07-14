@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.8.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.8.1-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -28,7 +28,7 @@
 ## 目录
 
 - [项目简介](#项目简介)
-- [v0.8.0 重点更新](#v080-重点更新)
+- [v0.8.1 重点更新](#v081-重点更新)
 - [核心能力](#核心能力)
 - [内置团队](#内置团队)
 - [系统架构](#系统架构)
@@ -71,7 +71,12 @@
 
 ---
 
-## v0.8.0 重点更新
+## v0.8.1 重点更新
+
+- **Ubuntu 原生安装包**：Release 新增 Linux `.deb` 与 AppImage 安装包（amd64 / arm64），`.deb` 可 `sudo apt install ./digitallife-*.deb` 安装，AppImage 下载后 `chmod +x` 即可运行；macOS 签名安装包与 Docker 多架构镜像同步产出。
+- 以下为 v0.8.0 起的核心能力（本版本一并包含）：
+
+### v0.8.0 起的核心更新
 
 - **联网搜索与网页抓取修复**：`web_search` / `web_fetch` 支持 Tavily、Brave、Bing 三级引擎；新增专用搜索配置与**多 Key 轮询、失败自动切换下一个 Key/引擎**，网页抓取增加响应体大小上限防止内存耗尽。
 - **大模型服务预设与兜底链**：后台新增常见服务商下拉预设（小米 MiMo、DeepSeek、火山方舟 AgentPlan / CodingPlan、Kimi、APINebula、自定义），选中即带默认接入地址与模型识别，只需填 API Key；支持配置多个模型、设置**默认首选模型**与**兜底模型链**——首选不可用时自动切换到下一个兜底服务。

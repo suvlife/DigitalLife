@@ -1,4 +1,4 @@
-name: Release macOS App
+name: Release macOS & Linux App
 
 on:
   push:
@@ -289,5 +289,94 @@ jobs:
         files: |
           ${{ env.ZIP_PATH }}
           ${{ env.SHA_PATH }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ env.RELEASE_TAG }}
+        submodules: recursive
+        lfs: true
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Verify tag matches repository version
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "${RELEASE_TAG#v}" = "$(cat VERSION)"
+        python scripts/check_version_consistency.py
+
+    - name: Install system packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends dpkg-dev file wget fuse
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build frontends
+      run: python scripts/build_frontend.py --install
+
+    - name: Build Linux app (PyInstaller onedir)
+      run: pyinstaller --clean --noconfirm scripts/digital_life_linux.spec
+
+    - name: Package .deb and AppImage
+      run: bash scripts/package_linux.sh "${RELEASE_TAG#v}" "${{ matrix.arch }}"
+
+    - name: Collect release assets
+      id: assets
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="${RELEASE_TAG#v}"
+        {
+          echo "files<<EOF"
+          for f in \
+            "dist/digitallife-${VERSION}-linux-${{ matrix.arch }}.deb" \
+            "dist/digitallife-${VERSION}-linux-${{ matrix.arch }}.deb.sha256" \
+            "dist/digitallife-${VERSION}-linux-${{ matrix.arch }}.AppImage" \
+            "dist/digitallife-${VERSION}-linux-${{ matrix.arch }}.AppImage.sha256"; do
+            [ -f "$f" ] && echo "$f"
+          done
+          echo EOF
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Attach Linux assets to release
+      uses: softprops/action-gh-release@v3
+      with:
+        name: "digitallife ${{ env.RELEASE_TAG }}"
+        tag_name: ${{ env.RELEASE_TAG }}
+        draft: false
+        prerelease: false
+        fail_on_unmatched_files: false
+        overwrite_files: false
+        files: ${{ steps.assets.outputs.files }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
