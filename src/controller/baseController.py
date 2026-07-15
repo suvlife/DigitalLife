@@ -107,15 +107,15 @@ def _check_rate_limit(ip: str, path: str, max_requests: int) -> bool:
 
 # 需要速率限制的路径及其配额（每 60 秒最大请求数）
 _RATE_LIMITED_PATHS: dict[str, int] = {
-    "/config/llm_services/test.json": 10,
-    "/system/check_update.json": 5,
-    "/config/skills/import.json": 10,
-    "/config/quick_init.json": 30,
-    "/auth/login.json": 10,        # 登录限流
-    "/auth/register.json": 3,      # 注册限流
+    "/config/llm_services/test.json": 100,
+    "/system/check_update.json": 100,
+    "/config/skills/import.json": 50,
+    "/config/quick_init.json": 100,
+    "/auth/login.json": 30,        # 登录限流
+    "/auth/register.json": 10,     # 注册限流
 }
 _RATE_LIMITED_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
-    (re.compile(r"^/rooms/\d+/messages/upload\.json$"), 20),
+    (re.compile(r"^/rooms/\d+/messages/upload\.json$"), 100),
 )
 
 
@@ -129,7 +129,9 @@ def _path_rate_limit(path: str) -> int | None:
     return None
 
 # 全局默认限流（非敏感接口）：每 IP 每 60 秒最大请求数
-_GLOBAL_RATE_LIMIT = 120
+# 部署在反向代理（Nginx/Cloudflare）后时，所有用户 IP 可能坍缩为代理 IP，
+# 因此阈值需要足够宽松以容纳多用户并发浏览。
+_GLOBAL_RATE_LIMIT = 2000
 
 
 class BaseHandler(tornado.web.RequestHandler):

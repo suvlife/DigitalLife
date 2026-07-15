@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.8.3-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.8.4-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -28,7 +28,7 @@
 ## 目录
 
 - [项目简介](#项目简介)
-- [v0.8.2 重点更新](#v082-重点更新)
+- [v0.8.4 重点更新](#v084-重点更新)
 - [核心能力](#核心能力)
 - [内置团队](#内置团队)
 - [系统架构](#系统架构)
@@ -70,6 +70,26 @@
 工具执行层支持 [TSP（Tool Service Protocol）](https://github.com/alexazhou/TSP)，也保留原生 Function Calling 驱动。通过 `driver_fallback.tsp_to_native` 可以在外部 TSP/GTSP 不可用时回退到原生工具调用，避免单一工具驱动阻塞整个任务。
 
 ---
+
+## v0.8.4 重点更新
+
+- **SSRF 防护支持本地 LLM**：`safeHttpUtil` 新增 `allow_private` 参数，LLM 服务配置（添加/修改/测试/快速初始化/从厂商创建）全部允许 `localhost`、`127.0.0.1`、`192.168.x.x` 等私有/回环地址，用户可直连本地 Ollama / llama.cpp 等服务；Ghost 博客地址仍保持严格公网校验。
+- **限流阈值大幅放宽**：全局限流 120 → 2000 次/分钟，LLM 测试 10 → 100，检查更新 5 → 100，解决反向代理（Nginx/Cloudflare）后 IP 坍缩导致正常使用被误杀的问题。
+- **SSRF 错误信息中文化**：DNS 解析失败、非公共地址等错误改为中文提示并附带域名/IP 诊断信息，方便排查。
+- **Ghost Key 保存修复**：`configUtil._save_setting_to_file` 的 Ghost 配置序列化从 `exclude_unset=True` 改为全量 `model_dump`，修复通过 API 属性赋值修改的 key 不被持久化的问题。
+- **LLM 厂商预设更新**：`catalog.json` 更新为 2025-2026 最新模型（doubao-seed-1-6、Qwen3、GPT-4.1、Gemini 2.5、Claude 4 等）。
+- 以下为 v0.8.3 起的核心能力（本版本一并包含）：
+
+## v0.8.3 重点更新
+
+- **LLM 服务管理修复**：内置服务标记 `index=-1`，前端用 `service.index`，彻底解决"服务序号越界"问题；配置 LLM 后自动重启调度器。
+- **调度器优化**：OPERATOR 在 SCHEDULING 状态发消息时重置轮次触发新调度，修复服务重启后房间卡死、用户提问无响应的死锁问题；`include_failed=False` 避免旧 FAILED 任务阻塞。
+- **实时消息修复**：WebSocket `normalizeEvent` 从 `gt_message` 提取字段；心跳保活 + 5 秒快速重连。
+- **新讨论功能**：后端归档 Run + 清空消息，前端新会话模式。
+- **六爻研究院**：10 位专家、4 个房间、3 层部门树、五层研判体系。
+- **性能优化**：`default_room_max_rounds` 100→10，`max_concurrency` 5→20。
+- **品牌清理**：移除所有 TogoSpace 引用，统一为 DigitalLife；莫比乌斯环图标；环境变量 `TOGOSPACE_*` → `DIGITALLIFE_*`。
+- 以下为 v0.8.2 起的核心能力（本版本一并包含）：
 
 ## v0.8.2 重点更新
 

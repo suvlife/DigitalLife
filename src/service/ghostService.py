@@ -74,9 +74,9 @@ def _generate_ghost_jwt(admin_api_key: str) -> str:
     return f"{header_b64}.{payload_b64}.{_b64(signature)}"
 
 
-def assert_safe_http_url(url: str, *, field_name: str = "URL") -> None:
+def assert_safe_http_url(url: str, *, field_name: str = "URL", allow_private: bool = False) -> None:
     """Validate a configured upstream using the shared pinned-DNS policy."""
-    safeHttpUtil.assert_safe_http_url(url, field_name=field_name)
+    safeHttpUtil.assert_safe_http_url(url, field_name=field_name, allow_private=allow_private)
 
 
 def _safe_ghost_base_url(api_url: str) -> str:

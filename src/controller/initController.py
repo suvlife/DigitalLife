@@ -62,9 +62,9 @@ class QuickInitHandler(BaseHandler):
             )
             return
 
-        # SSRF 防护：校验 base_url 不指向内网/回环/元数据端点
+        # SSRF 防护：校验 base_url（允许私有/回环地址，用户可能配置本地 LLM）
         try:
-            safeHttpUtil.assert_safe_http_url(req.base_url, field_name="base_url")
+            safeHttpUtil.assert_safe_http_url(req.base_url, field_name="base_url", allow_private=True)
         except safeHttpUtil.UnsafeUrlError as e:
             self.return_with_error(
                 error_code="unsafe_url",

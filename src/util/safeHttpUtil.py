@@ -46,9 +46,9 @@ class SafeHttpResponse:
         return json.loads(self.body.decode("utf-8"))
 
 
-def _parse_target(url: str, *, field_name: str = "URL") -> tuple[str, int]:
-    parsed = urlparse(url.strip())
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+def _parse_target(url: str, *, field_name: str = "URL", allow_private: bool = False) -> tuple[str, int]:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in ("http", "https"):
         raise UnsafeUrlError(f"{field_name} must be an absolute http(s) URL")
     if parsed.username or parsed.password:
         raise UnsafeUrlError(f"{field_name} must not contain credentials")
@@ -59,21 +59,27 @@ def _parse_target(url: str, *, field_name: str = "URL") -> tuple[str, int]:
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
     except ValueError as exc:
         raise UnsafeUrlError(f"{field_name} contains an invalid port") from exc
-    if hostname.rstrip(".").lower() in _BLOCKED_HOSTS:
+    # allow_private 时跳过 localhost 拦截，允许配置本地 LLM（Ollama 等）
+    if not allow_private and hostname.rstrip(".").lower() in _BLOCKED_HOSTS:
         raise UnsafeUrlError(f"{field_name} points to a local or metadata host")
     return hostname, port
 
 
 def resolve_public_addresses(
-    url: str, *, field_name: str = "URL", allow_test_loopback: bool = False
+    url: str, *, field_name: str = "URL", allow_test_loopback: bool = False,
+    allow_private: bool = False,
 ) -> tuple[str, int, tuple[str, ...]]:
     """Resolve one URL once and keep only globally routable addresses.
 
     A domain is accepted as long as it resolves to at least one global IP; only
     those global IPs are returned so the pinned resolver never reaches a private
     target. A purely private/loopback domain (no global IP) is still rejected.
+
+    When ``allow_private`` is True, private/loopback addresses are also accepted.
+    This is intended for LLM base_url configuration where users may point to
+    local services (e.g. Ollama at http://localhost:11434/v1).
     """
-    hostname, port = _parse_target(url, field_name=field_name)
+    hostname, port = _parse_target(url, field_name=field_name, allow_private=allow_private)
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
@@ -93,13 +99,16 @@ def resolve_public_addresses(
             raise UnsafeUrlError(f"{field_name} resolved to an invalid address") from exc
         if ip.is_global or (allow_test_loopback and test_mode and ip.is_loopback):
             safe_addresses.append(address)
+        elif allow_private:
+            # 允许私有/回环地址（用于本地 LLM 配置，如 Ollama）
+            safe_addresses.append(address)
     if not safe_addresses:
         raise UnsafeUrlError(f"{field_name} points to a non-public address")
     return hostname, port, tuple(safe_addresses)
 
 
-def assert_safe_http_url(url: str, *, field_name: str = "URL") -> None:
-    resolve_public_addresses(url, field_name=field_name)
+def assert_safe_http_url(url: str, *, field_name: str = "URL", allow_private: bool = False) -> None:
+    resolve_public_addresses(url, field_name=field_name, allow_private=allow_private)
 
 
 class _PinnedResolver(AbstractResolver):
@@ -203,6 +212,7 @@ async def request(
     field_name: str = "URL",
     ssl: Any = None,
     max_bytes: int | None = None,
+    allow_private: bool = False,
 ) -> SafeHttpResponse:
     """Perform a request with DNS pinning and manually validated redirects.
 
@@ -230,7 +240,7 @@ async def request(
         if current_url in visited:
             raise TooManyRedirectsError(f"{field_name} redirect loop detected")
         visited.add(current_url)
-        hostname, port, addresses = resolve_public_addresses(current_url, field_name=field_name)
+        hostname, port, addresses = resolve_public_addresses(current_url, field_name=field_name, allow_private=allow_private)
         connector = aiohttp.TCPConnector(
             resolver=_PinnedResolver(hostname, port, addresses),
             use_dns_cache=False,

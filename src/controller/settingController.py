@@ -20,15 +20,23 @@ _TYPE_TO_PROVIDER = {
     LlmServiceType.DEEPSEEK: "deepseek",
 }
 
-def _assert_safe_service_url(url: str, *, field_name: str = "base_url") -> None:
+def _assert_safe_service_url(url: str, *, field_name: str = "base_url", allow_private: bool = False) -> None:
     try:
-        ghostService.assert_safe_http_url(url, field_name=field_name)
+        ghostService.assert_safe_http_url(url, field_name=field_name, allow_private=allow_private)
+    except safeHttpUtil.UnsafeUrlError as exc:
+        logger.warning("SSRF check failed for %s=%s: %s", field_name, url, exc)
+        raise assertUtil.MakeSureException(
+            f"URL 安全检查失败（{field_name}={url}）: {exc}",
+            error_code="unsafe_url",
+        ) from exc
     except ValueError as exc:
+        logger.warning("URL validation failed for %s=%s: %s", field_name, url, exc)
         raise assertUtil.MakeSureException(str(exc), error_code="unsafe_url") from exc
 
 
 def _assert_safe_llm_url(base_url: str) -> None:
-    _assert_safe_service_url(base_url, field_name="base_url")
+    """LLM base_url 校验：允许私有/回环地址，因为用户可能配置本地 LLM（如 Ollama）。"""
+    _assert_safe_service_url(base_url, field_name="base_url", allow_private=True)
 
 
 class TestLlmServiceRequest(BaseModel):
@@ -425,7 +433,7 @@ async def _test_llm_service(config: LlmServiceConfig) -> dict:
     start_time = time.monotonic()
     response = await safeHttpUtil.request(
         "POST", endpoint, headers=headers, json_body=payload, timeout=timeout,
-        field_name="base_url",
+        field_name="base_url", allow_private=True,
     )
     duration_ms = int((time.monotonic() - start_time) * 1000)
     if response.status < 200 or response.status >= 300:
