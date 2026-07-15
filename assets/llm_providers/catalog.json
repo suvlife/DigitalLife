@@ -14,6 +14,7 @@
     "signup_url": "https://platform.moonshot.cn/",
     "models": [
       "kimi-latest",
+      "kimi-code",
       "kimi-k2.6",
       "moonshot-v1-128k"
     ]
@@ -63,12 +64,14 @@
     },
     "type": "deepseek",
     "base_url": "https://api.deepseek.com/v1",
-    "default_model": "deepseek-chat",
+    "default_model": "deepseek-v4-pro",
     "context_window_tokens": 128000,
     "reserve_output_tokens": 16384,
     "compact_trigger_ratio": 0.85,
     "signup_url": "https://platform.deepseek.com/",
     "models": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
       "deepseek-chat",
       "deepseek-reasoner",
       "deepseek-v3.2",
@@ -193,9 +196,26 @@
     "signup_url": "https://apinebula.com/",
     "models": [
       "gpt-5.6",
+      "gpt-5.5",
+      "gpt-4o",
+      "o3",
+      "o4-mini",
+      "claude-opus-4-5",
       "claude-sonnet-4-5",
+      "claude-haiku-4-5",
+      "claude-3-5-sonnet-latest",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
       "deepseek-chat",
-      "qwen-plus"
+      "deepseek-reasoner",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen-plus",
+      "glm-4.6",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "kimi-latest",
+      "kimi-code"
     ]
   },
   {

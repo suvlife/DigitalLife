@@ -1,4 +1,4 @@
-# TogoSpace 版本发布手册
+# DigitalLife 版本发布手册
 
 本文档描述发布新版本的最小流程。
 
@@ -43,8 +43,8 @@ gh release view v0.1.12
 ```
 
 确认包含两个安装包：
-- `TogoSpace-0.1.12-macos-arm64.zip` (CI 构建)
-- `TogoSpace-0.1.12-macos-x86_64.zip` (CI 构建)
+- `DigitalLife-0.1.12-macos-arm64.zip` (CI 构建)
+- `DigitalLife-0.1.12-macos-x86_64.zip` (CI 构建)
 
 ## 4. 补充 Release Note
 
@@ -79,7 +79,7 @@ gh release edit v0.1.12 --notes-file /tmp/v0.1.12-release-notes.md
 - Fixed issue A.
 - Improved behavior B.
 
-**Full Changelog**: https://github.com/alexazhou/TogoSpace/compare/v0.1.11...v0.1.12
+**Full Changelog**: https://github.com/alexazhou/DigitalLife/compare/v0.1.11...v0.1.12
 ```
 
 Release Note 注意事项：

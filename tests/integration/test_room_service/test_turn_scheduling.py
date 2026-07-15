@@ -73,6 +73,7 @@ class TestTurnScheduling(ServiceTestCase):
                 state=RoomState.SCHEDULING,
                 current_turn_agent_id=alice_id,
                 need_scheduling=True,
+                run_id=None,
             )
 
     async def test_add_message_publishes_next_agent(self):
@@ -93,6 +94,7 @@ class TestTurnScheduling(ServiceTestCase):
                 state=RoomState.SCHEDULING,
                 current_turn_agent_id=bob_id,
                 need_scheduling=True,
+                run_id=None,
             )
 
     async def test_turn_state_becomes_idle_after_max_rounds(self):

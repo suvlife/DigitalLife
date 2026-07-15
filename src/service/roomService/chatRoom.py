@@ -37,6 +37,19 @@ class ChatRoom:
             gt_room=room,
             get_read_index=self._store.get_read_index,
         )
+        # 当前关联的活动 Run ID，由 roomController 在用户发消息时设置，
+        # 传递给 publish_status 以帮助 runService 精准关联进度事件。
+        self._current_run_id: int | None = None
+
+    @property
+    def current_run_id(self) -> int | None:
+        return self._current_run_id
+
+    @current_run_id.setter
+    def current_run_id(self, value: int | None) -> None:
+        self._current_run_id = value
+        # 同步到 scheduler，使其内部所有 publish_status 调用都能携带 run_id
+        self._scheduler.current_run_id = value
 
     # ─── 属性 delegation ─────────────────────────────────────
 
@@ -240,7 +253,7 @@ class ChatRoom:
             next_agent_id = self._scheduler.on_message(sender_id)
             if next_agent_id is not None:
                 await self._scheduler.persist_state()
-                self._scheduler.publish_status(next_agent_id, need_scheduling=True)
+                self._scheduler.publish_status(next_agent_id, need_scheduling=True, run_id=self.current_run_id)
             if sender_id == self.OPERATOR_MEMBER_ID and next_agent_id is None:
                 await self.handle_finish_request(self.OPERATOR_MEMBER_ID)
 
@@ -277,6 +290,10 @@ class ChatRoom:
 
     def mark_all_messages_read(self) -> None:
         self._store.mark_all_read()
+
+    def clear_messages(self) -> None:
+        """清空房间所有消息（内存+重置已读进度），用于发起新会话。"""
+        self._store.clear()
 
     def rebuild_state_from_history(self, persisted_speaker_index: int | None = None) -> None:
         if not self._agent_ids:

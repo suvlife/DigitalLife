@@ -181,6 +181,7 @@ application = tornado.web.Application([
     (r"/rooms/(\d+)/messages/list.json",            roomController.RoomMessagesHandler),
     (r"/rooms/(\d+)/messages/send.json",            roomController.RoomMessagesHandler),
     (r"/rooms/(\d+)/messages/(\d+)/escalate_to_immediate.json", roomController.EscalateMessageToImmediateHandler),
+    (r"/rooms/(\d+)/new_session.json",              roomController.RoomNewSessionHandler),
 
     # Task Runs (可恢复进度快照)
     (r"/runs/current.json",                         runController.CurrentRunHandler),

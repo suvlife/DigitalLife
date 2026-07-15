@@ -59,4 +59,4 @@ class TestRoomApiPayload(ServiceTestCase):
         room = roomService.get_room_by_key(f"default_rounds_room@{TEAM}")
 
         assert room.gt_room.max_rounds is None
-        assert room._max_rounds == 100
+        assert room._max_rounds == 10  # default_room_max_rounds 默认值

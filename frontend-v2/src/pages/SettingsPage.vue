@@ -191,6 +191,10 @@ async function importPreset(event: Event) {
 
 async function loadLlm() { const data = await api.getLlmServiceConfig(); llmServices.value = data.llm_services; defaultLlm.value = data.default_llm_server; }
 function editLlm(index: number | 'new') {
+  if (index !== 'new') {
+    const svc = llmServices.value[index];
+    if (!svc || svc.is_builtin) return; // 内置服务不可编辑
+  }
   llmEditing.value = index; llmTestResult.value = '';
   const value = index === 'new' ? null : llmServices.value[index];
   Object.assign(llmForm, value ? { name: value.name, base_url: value.base_url, api_key: '', type: value.type, model: value.model, enable: value.enable, temperature: value.temperature == null ? '' : String(value.temperature), extra_headers: JSON.stringify(value.extra_headers || {}, null, 2), provider_params: JSON.stringify(value.provider_params || {}, null, 2) } : { name: '', base_url: '', api_key: '', type: 'openai-compatible', model: '', enable: true, temperature: '', extra_headers: '{}', provider_params: '{}' });
@@ -205,7 +209,7 @@ async function saveLlm() {
   try {
     const payload = llmPayload(); if (!payload.name || !payload.base_url) throw new Error('服务名称和地址不能为空');
     if (llmEditing.value === 'new') await api.createLlmService(payload);
-    else if (typeof llmEditing.value === 'number') { const { name: _name, ...rest } = payload; const patch: api.LlmServiceModifyPayload = { ...rest }; if (!patch.api_key) delete patch.api_key; await api.modifyLlmService(llmEditing.value, patch); }
+    else if (typeof llmEditing.value === 'number') { const svc = llmServices.value[llmEditing.value]; const realIndex = svc?.index ?? llmEditing.value; const { name: _name, ...rest } = payload; const patch: api.LlmServiceModifyPayload = { ...rest }; if (!patch.api_key) delete patch.api_key; await api.modifyLlmService(realIndex, patch); }
     await loadLlm(); llmEditing.value = null; announce('模型服务已保存');
   } catch (e) { fail(e, '模型服务保存失败'); } finally { saving.value = false; }
 }
@@ -217,12 +221,27 @@ async function testEditingLlm() {
   } catch (e) { fail(e, '连接测试失败'); } finally { saving.value = false; }
 }
 async function testSavedLlm(index: number) {
+  const svc = llmServices.value[index];
+  if (!svc) return;
+  // 使用后端返回的真实 index（内置服务为 -1，由后端特殊处理）
+  const realIndex = svc.index ?? index;
   saving.value = true; clearFeedback();
-  try { const result = await api.testLlmService({ mode: 'saved', index }); announce(`${llmServices.value[index].name}：${result.message}`); }
+  try { const result = await api.testLlmService({ mode: 'saved', index: realIndex }); announce(`${svc.name}：${result.message}`); }
   catch (e) { fail(e, '连接测试失败'); } finally { saving.value = false; }
 }
-async function makeDefaultLlm(index: number) { saving.value = true; clearFeedback(); try { await api.setDefaultLlmService(index); await loadLlm(); await loadFallback(); announce('默认模型服务已更新'); } catch (e) { fail(e, '设置默认失败'); } finally { saving.value = false; } }
-function removeLlm(index: number) { const name = llmServices.value[index].name; ask('删除模型服务', `确定删除“${name}”吗？`, '删除服务', async () => { await api.deleteLlmService(index); await loadLlm(); await loadFallback(); announce(`“${name}”已删除`); }); }
+async function makeDefaultLlm(index: number) {
+  const svc = llmServices.value[index];
+  if (!svc || svc.is_builtin) return;
+  const realIndex = svc.index ?? index;
+  saving.value = true; clearFeedback();
+  try { await api.setDefaultLlmService(realIndex); await loadLlm(); await loadFallback(); announce('默认模型服务已更新'); }
+  catch (e) { fail(e, '设置默认失败'); } finally { saving.value = false; }
+}
+function removeLlm(index: number) {
+  const svc = llmServices.value[index];
+  if (!svc || svc.is_builtin) return;
+  const realIndex = svc.index ?? index;
+  const name = svc.name; ask('删除模型服务', `确定删除”${name}”吗？`, '删除服务', async () => { await api.deleteLlmService(realIndex); await loadLlm(); await loadFallback(); announce(`”${name}”已删除`); }); }
 
 watch(() => providerForm.provider_id, () => { providerForm.model = selectedProvider.value?.default_model || ''; });
 async function loadProviderCatalog() { providerCatalog.value = await api.getLlmProviderCatalog(); }
@@ -304,7 +323,7 @@ onMounted(loadAll);
         <section v-else-if="section === 'models'" class="settings-section">
           <div class="settings-subsection provider-preset"><div class="subsection-head"><div><h3>厂商预设速建</h3><p>选择厂商与模型，填入 API Key 即可一键生成模型服务。</p></div></div><div class="settings-form-grid"><label>厂商预设<select v-model="providerForm.provider_id" aria-label="厂商预设"><option value="">选择厂商…</option><option v-for="entry in providerCatalog" :key="entry.id" :value="entry.id">{{ providerLabel(entry) }}</option></select></label><label>模型<select v-model="providerForm.model" aria-label="预设模型" :disabled="!providerModels.length"><option v-if="!providerModels.length" value="">先选择厂商</option><option v-for="m in providerModels" :key="m" :value="m">{{ m }}</option></select></label><label>API Key<input v-model="providerForm.api_key" type="password" placeholder="输入该厂商密钥" /></label><label>自定义服务名（可选）<input v-model="providerForm.name" :placeholder="selectedProvider ? providerLabel(selectedProvider) : '留空自动命名'" /></label></div><p v-if="selectedProvider" class="inline-result">{{ selectedProvider.base_url }} · {{ selectedProvider.type }}<a v-if="selectedProvider.signup_url" :href="safeExternalUrl(selectedProvider.signup_url)" target="_blank" rel="noopener noreferrer" class="preset-signup">获取密钥 ↗</a></p><div class="settings-actions"><button class="gold-button" type="button" :disabled="saving || !providerForm.provider_id" @click="createFromProvider">按预设创建</button></div></div>
 
-          <div class="subsection-head"><p class="section-intro">维护强类型模型连接，保存前可用临时配置测试。</p><button class="gold-button" type="button" @click="editLlm('new')">新增服务</button></div><div v-if="!llmServices.length" class="empty-state">尚未配置模型服务。</div><article v-for="(service, index) in llmServices" :key="`${service.name}-${index}`" class="service-card"><div><b>{{ service.name }} <em v-if="defaultLlm === service.name" class="default-mark">首选</em></b><small>{{ service.model || '未指定模型' }} · {{ service.type }} · {{ service.base_url }}</small></div><div class="settings-actions compact"><span :class="service.enable ? 'status-good' : 'status-muted'">{{ service.enable ? '已启用' : '已停用' }}</span><button class="text-button" @click="testSavedLlm(index)">测试</button><button class="text-button" @click="makeDefaultLlm(index)">设首选</button><button class="text-button" @click="editLlm(index)">编辑</button><button class="text-button danger-text" @click="removeLlm(index)">删除</button></div></article>
+          <div class="subsection-head"><p class="section-intro">维护强类型模型连接，保存前可用临时配置测试。</p><button class="gold-button" type="button" @click="editLlm('new')">新增服务</button></div><div v-if="!llmServices.length" class="empty-state">尚未配置模型服务。</div><article v-for="(service, index) in llmServices" :key="`${service.name}-${index}`" class="service-card"><div><b>{{ service.name }} <em v-if="defaultLlm === service.name" class="default-mark">首选</em> <em v-if="service.is_builtin" class="readonly-mark">内置</em></b><small>{{ service.model || '未指定模型' }} · {{ service.type }} · {{ service.base_url }}</small></div><div class="settings-actions compact"><span :class="service.enable ? 'status-good' : 'status-muted'">{{ service.enable ? '已启用' : '已停用' }}</span><button class="text-button" @click="testSavedLlm(index)">测试</button><template v-if="!service.is_builtin"><button class="text-button" @click="makeDefaultLlm(index)">设首选</button><button class="text-button" @click="editLlm(index)">编辑</button><button class="text-button danger-text" @click="removeLlm(index)">删除</button></template><span v-else class="status-muted">只读</span></div></article>
           <div v-if="llmEditing !== null" class="settings-editor"><div class="subsection-head"><h3>{{ llmEditing === 'new' ? '新增模型服务' : '编辑模型服务' }}</h3><button class="text-button" @click="llmEditing = null">关闭</button></div><div class="settings-form-grid"><label>服务名称<input v-model="llmForm.name" :disabled="llmEditing !== 'new'" /></label><label>类型<select v-model="llmForm.type"><option value="openai-compatible">OpenAI Compatible</option><option value="anthropic">Anthropic</option><option value="google">Google</option><option value="deepseek">DeepSeek</option></select></label><label class="wide">Base URL<input v-model="llmForm.base_url" /></label><label>模型名<input v-model="llmForm.model" /></label><label>API Key<input v-model="llmForm.api_key" type="password" :placeholder="llmEditing === 'new' ? '输入密钥' : '留空则保留原密钥'" /></label><label>Temperature<input v-model="llmForm.temperature" type="number" step="0.1" /></label><label class="toggle"><input v-model="llmForm.enable" type="checkbox" />启用服务</label><label class="wide">额外请求头（JSON）<textarea v-model="llmForm.extra_headers" rows="4" /></label><label class="wide">供应商参数（JSON）<textarea v-model="llmForm.provider_params" rows="4" /></label></div><p v-if="llmTestResult" class="inline-result">{{ llmTestResult }}</p><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveLlm">保存服务</button><button class="quiet-button" :disabled="saving" @click="testEditingLlm">测试当前填写</button></div></div>
 
           <div class="settings-subsection fallback-chain"><div class="subsection-head"><div><h3>首选与兜底链</h3><p>首选服务不可用时，按顺序自动切换到兜底服务。首选可在上方“设首选”调整。</p></div></div><p class="inline-result">首选：<b>{{ defaultLlm || '未设置' }}</b></p><ol v-if="fallbackServers.length" class="fallback-list"><li v-for="(name, index) in fallbackServers" :key="name"><span class="fallback-order">{{ index + 1 }}</span><b>{{ name }}</b><div class="settings-actions compact"><button class="text-button" :disabled="index === 0" @click="moveFallback(index, -1)">上移</button><button class="text-button" :disabled="index === fallbackServers.length - 1" @click="moveFallback(index, 1)">下移</button><button class="text-button danger-text" @click="removeFallback(name)">移除</button></div></li></ol><p v-else class="empty-state">尚未配置兜底服务。</p><div class="settings-actions"><select aria-label="添加兜底服务" :disabled="!availableFallback.length" @change="addFallback(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value=''"><option value="">{{ availableFallback.length ? '添加兜底服务…' : '无可用服务' }}</option><option v-for="svc in availableFallback" :key="svc.name" :value="svc.name">{{ svc.name }}</option></select><button class="gold-button" type="button" :disabled="saving" @click="saveFallback">保存兜底链</button></div></div>
@@ -316,7 +335,7 @@ onMounted(loadAll);
           <div class="subsection-head"><p class="section-intro">按引擎维护多个 API Key，运行时轮询并在失败时自动切换。已保存的 key 仅显示掩码。</p><button class="gold-button" type="button" @click="editSearch('new')">新增引擎</button></div>
           <div v-if="!searchProviders.length" class="empty-state">尚未配置搜索引擎。</div>
           <article v-for="(provider, index) in searchProviders" :key="`${provider.provider}-${index}`" class="service-card"><div><b>{{ provider.provider }}</b><small>{{ provider.api_keys_count }} 个 key<template v-if="provider.api_keys.length"> · {{ provider.api_keys.join(' · ') }}</template></small></div><div class="settings-actions compact"><span :class="provider.enable ? 'status-good' : 'status-muted'">{{ provider.enable ? '已启用' : '已停用' }}</span><button class="text-button" @click="editSearch(index)">编辑</button><button v-if="provider.has_api_key" class="text-button danger-text" @click="clearSearchKeys(index)">清空密钥</button><button class="text-button danger-text" @click="removeSearchProvider(index)">删除</button></div></article>
-          <div v-if="searchEditing !== null" class="settings-editor"><div class="subsection-head"><h3>{{ searchEditing === 'new' ? '新增搜索引擎' : '编辑搜索引擎' }}</h3><button class="text-button" @click="searchEditing = null">关闭</button></div><div class="settings-form-grid"><label>引擎名称<input v-model="searchForm.provider" list="search-presets" placeholder="tavily / brave / bing" /><datalist id="search-presets"><option v-for="name in searchPresets" :key="name" :value="name" /></datalist></label><label class="toggle"><input v-model="searchForm.enable" type="checkbox" />启用引擎</label><label class="wide">API Keys（每行一个，或逗号分隔）<textarea v-model="searchForm.api_keys" rows="4" :placeholder="searchEditing === 'new' ? '输入一个或多个 key' : '留空则保留原有 key；bing 可无 key'" /></label></div><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveSearchProvider">保存引擎</button></div></div>
+          <div v-if="searchEditing !== null" class="settings-editor"><div class="subsection-head"><h3>{{ searchEditing === 'new' ? '新增搜索引擎' : '编辑搜索引擎' }}</h3><button class="text-button" @click="searchEditing = null">关闭</button></div><div class="settings-form-grid"><label>引擎<select v-model="searchForm.provider"><option v-for="name in searchPresets" :key="name" :value="name">{{ name }}</option></select></label><label class="toggle"><input v-model="searchForm.enable" type="checkbox" />启用引擎</label><label class="wide">API Keys（每行一个，或逗号分隔）<textarea v-model="searchForm.api_keys" rows="4" :placeholder="searchEditing === 'new' ? '输入一个或多个 key' : '留空则保留原有 key；bing 可无 key'" /></label></div><div class="settings-actions"><button class="gold-button" :disabled="saving" @click="saveSearchProvider">保存引擎</button></div></div>
         </section>
 
 

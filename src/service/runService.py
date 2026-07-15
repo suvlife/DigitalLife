@@ -67,6 +67,102 @@ def _title_from_query(query: str) -> str:
     return compact[:80] or "新任务"
 
 
+async def _generate_title_with_llm(query: str, conclusion: str) -> str:
+    """用 LLM 根据讨论内容和问题生成简洁有概括力的标题。
+
+    若 LLM 不可用或调用失败，回退到 _title_from_query。
+    """
+    try:
+        from service import llmService
+        from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
+        from util import llmApiUtil
+
+        prompt = (
+            "请根据以下用户问题和讨论结论，生成一个简洁、有概括力的中文博客标题。\n"
+            "要求：\n"
+            "- 不超过 30 个字\n"
+            "- 不要使用引号、书名号等标点\n"
+            "- 不要以'分析'、'研究'等泛词开头，要突出核心主题\n"
+            "- 直接输出标题文字，不要任何解释或前缀\n\n"
+            f"用户问题：{query[:200]}\n\n"
+            f"讨论结论摘要：{conclusion[:500]}"
+        )
+        ctx = GtCoreAgentDialogContext(
+            system_prompt="你是一个标题生成助手，只输出标题文字。",
+            messages=[llmApiUtil.OpenAIMessage.text(llmApiUtil.OpenaiApiRole.USER, prompt)],
+            tools=None,
+        )
+        result = await llmService.infer(None, ctx)
+        if result.ok and result.response:
+            title = result.response.choices[0].message.content.strip()
+            # 清理可能的引号和前缀
+            title = title.strip('"\'「」【】').strip()
+            if title and len(title) <= 60:
+                return title
+    except Exception as e:
+        logger.warning("LLM 生成标题失败，回退到默认标题: %s", e)
+    return _title_from_query(query)
+
+
+async def _generate_conclusion_with_llm(query: str, messages: list[GtRoomMessage]) -> str:
+    """用 LLM 对各 Agent 的讨论内容进行综合汇总，生成结构化结论。
+
+    若 LLM 不可用或调用失败，回退到 _fallback_conclusion 的简单拼接。
+    """
+    try:
+        from service import llmService
+        from model.coreModel.gtCoreChatModel import GtCoreAgentDialogContext
+        from util import llmApiUtil
+
+        # 收集所有 Agent 发言（排除用户消息和系统消息）
+        substantive = [m for m in messages if m.sender_id > 0 and m.content.strip()]
+        if not substantive:
+            return ""
+
+        # 构建讨论记录（限制总长度避免超长）
+        discussion_parts = []
+        total_len = 0
+        for m in substantive:
+            speaker = m.sender_display_name or f"Agent {m.sender_id}"
+            entry = f"【{speaker}】\n{m.content.strip()}"
+            if total_len + len(entry) > 12000:
+                entry = entry[:12000 - total_len] + "...(内容截断)"
+            discussion_parts.append(entry)
+            total_len += len(entry)
+            if total_len >= 12000:
+                break
+
+        discussion_text = "\n\n---\n\n".join(discussion_parts)
+
+        prompt = (
+            "你是一位首席分析师。以下是一个多专家团队对用户问题的讨论记录。\n"
+            "请综合所有专家的观点，生成一份完整的结构化分析报告。\n\n"
+            "要求：\n"
+            "- 使用 Markdown 格式\n"
+            "- 以 '# 综合分析报告' 作为主标题\n"
+            "- 包含 '## 核心结论' 部分，给出明确的综合判断\n"
+            "- 包含 '## 各专家观点汇总' 部分，按主题归类整理各专家的关键观点\n"
+            "- 包含 '## 风险提示与建议' 部分\n"
+            "- 保留专家的具体数据和论据，不要笼统概括\n"
+            "- 语言专业、客观、有条理\n\n"
+            f"用户问题：{query.strip()}\n\n"
+            f"讨论记录：\n{discussion_text}"
+        )
+        ctx = GtCoreAgentDialogContext(
+            system_prompt="你是一位专业的首席分析师，负责综合多位专家的讨论意见，生成结构化的分析报告。",
+            messages=[llmApiUtil.OpenAIMessage.text(llmApiUtil.OpenaiApiRole.USER, prompt)],
+            tools=None,
+        )
+        result = await llmService.infer(None, ctx)
+        if result.ok and result.response:
+            content = result.response.choices[0].message.content.strip()
+            if content:
+                return content
+    except Exception as e:
+        logger.warning("LLM 生成综合结论失败，回退到简单拼接: %s", e)
+    return _fallback_conclusion(messages, query)
+
+
 def _dept_id_from_room(room: GtRoom) -> int | None:
     biz_id = room.biz_id or ""
     if biz_id.startswith("DEPT:"):
@@ -101,7 +197,7 @@ async def _fallback_conclusion_for_run(run: GtTaskRun, room_runs: list[GtRoomRun
         rows, _ = await gtRoomMessageManager.get_room_messages(room_run.room_id)
         messages.extend(rows)
     messages.sort(key=lambda item: (item.send_time or datetime.min, item.id or 0))
-    return _fallback_conclusion(messages, run.query)
+    return await _generate_conclusion_with_llm(run.query, messages)
 
 
 async def _write_final_report_artifact(run: GtTaskRun, content: str) -> str | None:
@@ -432,10 +528,12 @@ async def complete_final_answer(
         ghost = configUtil.get_app_config().setting.ghost
         if ghost.enabled and ghost.auto_publish:
             team = await gtTeamManager.get_team_by_id(run.team_id)
+            # 用 LLM 根据讨论结论生成简洁标题，而非直接使用用户原话
+            blog_title = await _generate_title_with_llm(run.query or run.title or "", final_answer)
             published = await ghostService.publish_run_conclusion(
                 run_id=run.id,
                 team_name=team.name if team is not None else "",
-                title=run.title or "综合分析报告",
+                title=blog_title,
                 content_markdown=final_answer,
             )
             if published.get("success"):
@@ -484,48 +582,30 @@ async def update_blog_publish_status(
 
 
 async def _find_active_run_for_room(room: GtRoom, *, run_id: int | None = None) -> GtTaskRun | None:
-    """按明确 run-room 关联定位 Run，绝不按团队“最新 Run”猜测。
+    """Find the active Run for a room. Read-only, never creates associations.
 
-    新事件应携带 run_id。为兼容旧的单 Run 事件源：若房间已有且仅有一个
-    活动关联，或团队当前只有一个活动 Run，允许确定性绑定；出现两个及以上
-    候选时返回 None，宁可忽略无法归属的事件，也不能把数据串入另一 Run。
+    Uses run_id from event payload first; then checks room_runs table;
+    falls back to team's single active Run.
     """
     if run_id is not None:
         run = await gtTaskRunManager.get_run(int(run_id))
-        if run is None or run.team_id != room.team_id or run.status in _TERMINAL_RUN_STATUSES:
-            return None
-        await gtRoomRunManager.upsert_room_run(
-            run_id=run.id, team_id=room.team_id, room_id=room.id,
-            dept_id=_dept_id_from_room(room),
-            expected_contributors=len([
-                aid for aid in (room.agent_ids or []) if SpecialAgent.value_of(aid) is None
-            ]),
-            status=RoomRunStatus.WAITING,
-        )
-        return run
+        if run is not None and run.team_id == room.team_id and run.status not in _TERMINAL_RUN_STATUSES:
+            return run
+        return None
 
     associations = await gtRoomRunManager.list_active_runs_for_room(room.id)
     if len(associations) == 1:
         return await gtTaskRunManager.get_run(associations[0].run_id)
     if len(associations) > 1:
-        logger.warning("Ambiguous active Run for room_id=%s; event ignored", room.id)
-        return None
+        # 多个关联：返回最新的一个，不再刷日志或清理（避免竞态）
+        latest = associations[-1]
+        return await gtTaskRunManager.get_run(latest.run_id)
 
+    # 没有关联记录：团队只有一个活动 Run 时才 fallback
     active_runs = await gtTaskRunManager.list_active_runs_for_team(room.team_id)
-    if len(active_runs) != 1:
-        if active_runs:
-            logger.warning("Missing explicit run_id for room_id=%s with %s active Runs", room.id, len(active_runs))
-        return None
-    run = active_runs[0]
-    await gtRoomRunManager.upsert_room_run(
-        run_id=run.id, team_id=room.team_id, room_id=room.id,
-        dept_id=_dept_id_from_room(room),
-        expected_contributors=len([
-            aid for aid in (room.agent_ids or []) if SpecialAgent.value_of(aid) is None
-        ]),
-        status=RoomRunStatus.WAITING,
-    )
-    return run
+    if len(active_runs) == 1:
+        return active_runs[0]
+    return None
 
 
 async def _on_room_status_changed(msg: EventBusMessage) -> None:
@@ -554,7 +634,7 @@ async def _on_room_status_changed(msg: EventBusMessage) -> None:
             if room.id == run.root_room_id and not run.final_answer:
                 # 根房间已经完成用户提问的接收，但尚未产生最终报告。先进入
                 # 合议态；若 Agent 没有调用 submit_conclusion，则用实际发言生成
-                # 最低限度可交付报告，避免任务永远停在“完成但无输出”。
+                # 最低限度可交付报告，避免任务永远停在"完成但无输出"。
                 await set_run_status(run.id, TaskRunStatus.SYNTHESIZING)
                 latest_room_runs = await gtRoomRunManager.list_room_runs(run.id)
                 other_active = any(

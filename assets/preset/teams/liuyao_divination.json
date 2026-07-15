@@ -1,0 +1,176 @@
+{
+  "name": "六爻研究院",
+  "uuid": "preset-liuyao-divination-v1",
+  "auto_start": false,
+  "i18n": {
+    "display_name": {
+      "zh-CN": "六爻研究院",
+      "en": "Liuyao Divination Academy"
+    }
+  },
+  "agents": [
+    {
+      "name": "chief_judge",
+      "role_template": "liuyao_chief_judge",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "总评审定断师", "en": "Chief Judge"}}
+    },
+    {
+      "name": "zhengzong",
+      "role_template": "liuyao_zhengzong",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "正宗派主断师", "en": "Orthodox Master"}}
+    },
+    {
+      "name": "zengshan",
+      "role_template": "liuyao_zengshan",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "增删卜易研判师", "en": "Zengshan Analyst"}}
+    },
+    {
+      "name": "bushi",
+      "role_template": "liuyao_bushi",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "卜筮正宗研究师", "en": "Bushi Scholar"}}
+    },
+    {
+      "name": "mangpai",
+      "role_template": "liuyao_mangpai",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "盲派变爻分析师", "en": "Blind School Analyst"}}
+    },
+    {
+      "name": "yiyin",
+      "role_template": "liuyao_yiyin",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "易隐多断师", "en": "Yiyin Multi-Reader"}}
+    },
+    {
+      "name": "taiji",
+      "role_template": "liuyao_taiji",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "太极类象师", "en": "Taiji Symbolist"}}
+    },
+    {
+      "name": "fuxun",
+      "role_template": "liuyao_fuxun",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "伏神旬空专研师", "en": "Special Pattern Specialist"}}
+    },
+    {
+      "name": "yingqi",
+      "role_template": "liuyao_yingqi",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "应期推断师", "en": "Timing Analyst"}}
+    },
+    {
+      "name": "guji",
+      "role_template": "liuyao_guji",
+      "allow_tools": ["Category:Basic", "Category:Read", "web_search", "web_fetch"],
+      "i18n": {"display_name": {"zh-CN": "古籍考据师", "en": "Textual Researcher"}}
+    }
+  ],
+  "preset_rooms": [
+    {
+      "name": "六爻综合断卦室",
+      "agents": ["OPERATOR", "chief_judge", "zhengzong", "zengshan", "bushi", "mangpai", "yiyin", "taiji", "fuxun", "yingqi", "guji"],
+      "initial_topic": "用户提出占断问题后，请提供起卦信息（如三枚铜钱摇六次的正反面记录，或报数字起卦）。起卦排盘师排出卦象后，各流派专家分别从正宗派日月旺衰、增删卜易实占经验、卜筮正宗系统规则、盲派变爻独立论、易隐一卦多断、太极类象转换等角度断卦，伏神旬空专研师检查特殊结构，应期推断师判断应验时间，古籍考据师提供典籍依据。最终由总评审定断师进行五层研判（事实层->结构层->真假层->应期层->置信度层），调用 submit_conclusion 提交综合研判报告。",
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
+      "i18n": {
+        "display_name": {"zh-CN": "六爻综合断卦室", "en": "Liuyao Comprehensive Room"},
+        "initial_topic": {
+          "zh-CN": "用户提出占断问题后，请提供起卦信息（如三枚铜钱摇六次的正反面记录，或报数字起卦）。起卦排盘师排出卦象后，各流派专家分别从正宗派日月旺衰、增删卜易实占经验、卜筮正宗系统规则、盲派变爻独立论、易隐一卦多断、太极类象转换等角度断卦，伏神旬空专研师检查特殊结构，应期推断师判断应验时间，古籍考据师提供典籍依据。最终由总评审定断师进行五层研判，调用 submit_conclusion 提交综合研判报告。",
+          "en": "After user provides divination question and hexagram casting data, experts from different schools analyze from their perspectives. Chief Judge performs five-layer analysis and submits conclusion."
+        }
+      }
+    },
+    {
+      "name": "正宗断卦研讨室",
+      "agents": ["OPERATOR", "zhengzong", "zengshan", "bushi", "fuxun", "yingqi"],
+      "initial_topic": "正宗派系深度断卦：正宗派主断师以日月旺衰定基调，增删卜易研判师以实占经验验证，卜筮正宗研究师以系统规则推导，伏神旬空专研师检查旬空月破等特殊结构，应期推断师判断应验时间。五人从正宗派视角给出一致或分歧的结论。",
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
+      "i18n": {
+        "display_name": {"zh-CN": "正宗断卦研讨室", "en": "Orthodox Lab"},
+        "initial_topic": {
+          "zh-CN": "正宗派系深度断卦：正宗派主断师以日月旺衰定基调，增删卜易研判师以实占经验验证，卜筮正宗研究师以系统规则推导，伏神旬空专研师检查旬空月破等特殊结构，应期推断师判断应验时间。",
+          "en": "Orthodox school deep analysis with five specialists."
+        }
+      }
+    },
+    {
+      "name": "变爻多断研讨室",
+      "agents": ["OPERATOR", "mangpai", "yiyin", "taiji"],
+      "initial_topic": "变爻与一卦多断对照：盲派变爻分析师以变爻独立论断变化趋势，易隐多断师以多维信息一卦多断，太极类象师以太极点转换看整体。三人从变化和多断角度给出不同于正宗派的结论。",
+      "max_rounds": 3,
+      "tags": ["STRATEGY:PARALLEL_OPINIONS"],
+      "i18n": {
+        "display_name": {"zh-CN": "变爻多断研讨室", "en": "Multi-Reading Lab"},
+        "initial_topic": {
+          "zh-CN": "变爻与一卦多断对照：盲派变爻分析师以变爻独立论断变化趋势，易隐多断师以多维信息一卦多断，太极类象师以太极点转换看整体。",
+          "en": "Multi-reading and changing line analysis from three perspectives."
+        }
+      }
+    },
+    {
+      "name": "起卦考据研讨室",
+      "agents": ["OPERATOR", "zhengzong", "guji"],
+      "initial_topic": "起卦信息识别与典籍校验：用户提供起卦信息（铜钱正反面或数字），正宗派主断师协助识别卦象，古籍考据师校验断法是否符合经典规范。此室用于确保起卦准确、断法有据。",
+      "max_rounds": 2,
+      "tags": ["STRATEGY:FAST_CONSENSUS"],
+      "i18n": {
+        "display_name": {"zh-CN": "起卦考据研讨室", "en": "Casting & Research Room"},
+        "initial_topic": {
+          "zh-CN": "起卦信息识别与典籍校验：用户提供起卦信息（铜钱正反面或数字），正宗派主断师协助识别卦象，古籍考据师校验断法是否符合经典规范。",
+          "en": "Hexagram casting identification and textual verification."
+        }
+      }
+    }
+  ],
+  "dept_tree": {
+    "dept_name": "六爻研究院",
+    "responsibility": "统筹六爻占卜各流派协作与综合研判，以多专家会诊模式断事",
+    "manager": "chief_judge",
+    "agents": ["chief_judge", "zhengzong", "zengshan", "bushi", "mangpai", "yiyin", "taiji", "fuxun", "yingqi", "guji"],
+    "children": [
+      {
+        "dept_name": "正宗断卦组",
+        "responsibility": "以正宗派日月旺衰为核心，增删卜易实战验证，卜筮正宗系统推导",
+        "manager": "zhengzong",
+        "agents": ["zhengzong", "zengshan", "bushi"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "正宗断卦组", "en": "Orthodox Group"},
+          "responsibility": {"zh-CN": "以正宗派日月旺衰为核心，增删卜易实战验证，卜筮正宗系统推导", "en": "Orthodox school with Zengshan and Bushi methods"}
+        }
+      },
+      {
+        "dept_name": "变爻多断组",
+        "responsibility": "以盲派变爻独立论、易隐一卦多断、太极类象转换为核心",
+        "manager": "mangpai",
+        "agents": ["mangpai", "yiyin", "taiji"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "变爻多断组", "en": "Multi-Reading Group"},
+          "responsibility": {"zh-CN": "以盲派变爻独立论、易隐一卦多断、太极类象转换为核心", "en": "Blind school, Yiyin, and Taiji methods"}
+        }
+      },
+      {
+        "dept_name": "格局应期考据组",
+        "responsibility": "处理旬空月破伏神等特殊结构，推断应验时间，引用经典校验断法",
+        "manager": "fuxun",
+        "agents": ["fuxun", "yingqi", "guji"],
+        "children": [],
+        "i18n": {
+          "dept_name": {"zh-CN": "格局应期考据组", "en": "Pattern, Timing & Research Group"},
+          "responsibility": {"zh-CN": "处理旬空月破伏神等特殊结构，推断应验时间，引用经典校验断法", "en": "Special patterns, timing prediction, and textual research"}
+        }
+      }
+    ],
+    "i18n": {
+      "dept_name": {"zh-CN": "六爻研究院", "en": "Liuyao Academy"},
+      "responsibility": {"zh-CN": "统筹六爻占卜各流派协作与综合研判，以多专家会诊模式断事", "en": "Coordinate all Liuyao schools for comprehensive divination analysis"}
+    }
+  }
+}

@@ -121,3 +121,13 @@ async def delete_messages_by_team(team_id: int) -> int:
         .where(GtRoomMessage.room_id.in_(room_ids))  # type: ignore[attr-defined]
         .aio_execute()
     )
+
+
+async def delete_room_messages(room_id: int) -> int:
+    """删除指定房间的所有消息记录，返回删除数量。"""
+    return await (
+        GtRoomMessage
+        .delete()
+        .where(GtRoomMessage.room_id == room_id)  # type: ignore[attr-defined]
+        .aio_execute()
+    )

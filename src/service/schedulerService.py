@@ -175,8 +175,8 @@ async def _on_room_status_changed(msg: EventBusMessage) -> None:
 
     # 用 per-agent 锁串行化 check-then-insert，防止并发事件触发重复创建 PENDING 任务
     async with _get_task_create_lock(agent_id):
-        # 去重：检查数据库中是否已有该房间的 PENDING/FAILED 任务
-        if await gtScheculeTaskManager.has_pending_room_task(agent_id, room_id, include_failed=True):
+        # 去重：只检查 PENDING 任务（不检查 FAILED），避免旧 FAILED 任务永久阻塞新任务创建
+        if await gtScheculeTaskManager.has_pending_room_task(agent_id, room_id, include_failed=False):
             logger.debug(f"跳过重复任务创建: agent_id={agent_id}, room_id={room_id}")
             agent.start_consumer_task()
             return

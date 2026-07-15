@@ -222,11 +222,16 @@ class RoomMessagesHandler(BaseHandler):
         assertUtil.assertTrue(gt_team is not None and gt_team.enabled, error_message="team is not active", error_code="team_not_active")
         room = roomService.get_room(room_id)
         assertUtil.assertNotNull(room, error_message=f"room_id '{room_id}' not found", error_code="room_not_found")
-        assertUtil.assertTrue(
-            room.state != RoomState.INIT,
-            error_message="room is in init state, not activated by runtime services",
-            error_code="room_not_ready",
-        )
+        if room.state == RoomState.INIT:
+            # 房间未激活，通常是因为 LLM 服务未配置导致调度器被阻塞
+            from service import schedulerService
+            reason = schedulerService.get_schedule_not_running_reason()
+            self.set_status(400)
+            self.return_json({
+                "error_code": "room_not_ready",
+                "error_desc": f"房间未激活，{'原因：' + reason if reason else '系统调度未启动，请检查大模型服务配置'}",
+            })
+            return
         content = request.content
         assertUtil.assertNotNull(content, error_message="content is required", error_code="invalid_request")
 
@@ -250,16 +255,79 @@ class RoomMessagesHandler(BaseHandler):
         # 每条普通用户问题建立一个可恢复 Run；立即插话属于当前 Run，不新建。
         if not request.insert_immediately and message.id is not None:
             from service import runService
-            await runService.create_run_for_user_message(
+            new_run = await runService.create_run_for_user_message(
                 team_id=gt_room.team_id,
                 root_room_id=room_id,
                 user_message_id=message.id,
                 query=content,
                 owner_user_id=self._current_user_id(),
             )
+            # 设置当前活动 Run ID，使后续调度事件能精准关联到此 Run
+            room.current_run_id = new_run.id if new_run else None
         if room.get_current_turn_agent_id() == room.OPERATOR_MEMBER_ID:
             await room.handle_finish_request(room.OPERATOR_MEMBER_ID)
         self.return_success()
+
+
+class RoomNewSessionHandler(BaseHandler):
+    """POST /rooms/{room_id}/new_session.json - 归档当前讨论，开启全新会话。"""
+
+    async def post(self, room_id_str: str) -> None:
+        room_id = int(room_id_str)
+        await self._assert_room_owned(room_id)
+        gt_room = await GtRoom.aio_get_or_none(GtRoom.id == room_id)
+        assertUtil.assertNotNull(gt_room, error_message=f"room_id '{room_id}' not found", error_code="room_not_found")
+        room = roomService.get_room(room_id)
+        assertUtil.assertNotNull(room, error_message=f"room_id '{room_id}' not found", error_code="room_not_found")
+
+        # 1. 快速归档当前活动 Run：后台异步生成结论+发布博客，API 立即返回
+        from service import runService
+        import asyncio
+        try:
+            current_run = await runService.get_current_run(gt_room.team_id)
+            if current_run and current_run.status not in ('COMPLETED', 'PARTIAL_FAILED', 'FAILED', 'CANCELLED'):
+                # 后台异步：生成 LLM 结论 -> 完成Run -> 发布博客（不阻塞 API 响应）
+                async def _archive_run_background(run_id: int, team_id: int):
+                    try:
+                        room_runs = await runService.list_room_runs(run_id)
+                        if room_runs:
+                            conclusion = await runService._fallback_conclusion_for_run(
+                                await runService.get_run(run_id), room_runs
+                            )
+                            if conclusion:
+                                await runService.complete_final_answer(
+                                    run_id=run_id, final_answer=conclusion
+                                )
+                                logger.info("归档Run %s 的结论已生成并发布", run_id)
+                                return
+                        # 没有讨论内容，直接标记完成（不发布博客）
+                        from dal.db import gtTaskRunManager
+                        from constants import TaskRunStatus
+                        from datetime import datetime
+                        await gtTaskRunManager.update_run(
+                            run_id, status=TaskRunStatus.COMPLETED,
+                            progress_percent=100, finished_at=datetime.now(),
+                        )
+                    except Exception as e:
+                        logger.warning("后台归档Run %s 失败: %s", run_id, e)
+
+                asyncio.create_task(_archive_run_background(current_run.id, gt_room.team_id))
+        except Exception as e:
+            logger.warning("归档当前Run失败（不影响新会话）: %s", e)
+
+        # 2. 重置房间调度状态：取消当前轮次，回到 IDLE
+        room.cancel_current_turn()
+        room.current_run_id = None
+
+        # 3. 清空房间旧消息（DB + 内存，旧讨论已保存在 Run 中不会丢失）
+        from dal.db import gtRoomMessageManager
+        await gtRoomMessageManager.delete_room_messages(room_id)
+        room.clear_messages()
+
+        # 4. 持久化重置状态
+        await gtRoomManager.update_room_state(room_id, {}, None)
+
+        self.return_json({"status": "ok", "message": "新会话已就绪"})
 
 
 class EscalateMessageToImmediateHandler(BaseHandler):

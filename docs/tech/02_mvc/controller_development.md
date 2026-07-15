@@ -1,6 +1,6 @@
 # Controller 开发指南
 
-本文档总结了 TogoSpace 项目中 HTTP Controller 的开发规范和最佳实践。
+本文档总结了 DigitalLife 项目中 HTTP Controller 的开发规范和最佳实践。
 
 ## 目录
 

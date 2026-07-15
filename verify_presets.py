@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-验证 /tmp/togospace preset JSON 配置文件的完整性与一致性。
+验证 /tmp/digitallife preset JSON 配置文件的完整性与一致性。
 """
 import json
 import os
 import sys
 from pathlib import Path
 
-ROOT = Path("/tmp/togospace")
+ROOT = Path("/tmp/digitallife")
 RT_DIR = ROOT / "assets/preset/role_templates"
 TEAMS_DIR = ROOT / "assets/preset/teams"
 

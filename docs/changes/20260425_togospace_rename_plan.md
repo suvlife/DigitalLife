@@ -1,3 +1,5 @@
+> **[已归档]** 本文档记录的是 TogoSpace -> DigitalLife 早期改名计划，已被后续品牌统一取代。当前产品名称为 **DigitalLife**，不再使用 TogoSpace / togospace。n
+
 # TogoSpace 改名方案
 
 ## 背景

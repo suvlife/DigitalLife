@@ -1,7 +1,7 @@
 import os
-from constants import DriverType
+from constants import DriverType, ScheduleState
 from controller.baseController import BaseHandler, format_validation_error
-from service import llmProviderService
+from service import llmProviderService, schedulerService
 from util import configUtil, assertUtil, safeHttpUtil
 import appPaths
 
@@ -129,6 +129,11 @@ class LlmServiceFromProviderHandler(BaseHandler):
                 s.default_llm_server = new_service.name
 
         configUtil.update_setting(mutator)
+
+        # 添加服务后如果系统已就绪但调度器未运行，自动启动调度
+        if configUtil.is_initialized() and schedulerService.get_schedule_state() != ScheduleState.RUNNING:
+            await schedulerService.start_schedule()
+
         self.return_json({
             "status": "ok",
             "service": new_service.model_dump(exclude_unset=True, mode="json"),

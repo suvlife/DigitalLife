@@ -143,7 +143,7 @@ class LlmServiceConfig(BaseModel):
     compact_summary_max_tokens: int = 6 * 1024
 
     # 性能与上游限流保护。每个服务拥有独立并发池；0 RPM 表示不做主动节流。
-    max_concurrency: int = Field(default=5, ge=1, le=256)
+    max_concurrency: int = Field(default=20, ge=1, le=256)
     requests_per_minute: int = Field(default=0, ge=0)
 
     @field_validator("provider_params")
@@ -280,7 +280,7 @@ class SettingConfig(BaseModel):
     default_llm_server: str | None = None
     fallback_llm_servers: list[str] = Field(default_factory=list)
     llm_services: list[LlmServiceConfig] = Field(default_factory=list)
-    default_room_max_rounds: int = 100
+    default_room_max_rounds: int = 10  # 默认讨论轮次上限，大多数任务 3-5 轮即可得出结论
     db_path: str = Field(default_factory=_default_db_path)
     workspace_root: str | None = Field(default_factory=_default_workspace_root)
     bind_host: str = "127.0.0.1"  # HTTP 服务绑定地址（默认仅本机访问，需外部访问请显式配置 0.0.0.0 并启用 auth）

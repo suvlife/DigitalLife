@@ -3,7 +3,7 @@ import * as api from '../api/client';
 import { calculateRunProgress, deriveRoomRuntime } from '../domain/status';
 import type { NormalizedEvent, RunSnapshot, WorldSnapshot } from '../domain/types';
 import { EventsSocket } from '../realtime/socket';
-const initial:WorldSnapshot={team:null,teams:[],rooms:[],agents:[],messages:{},activities:[],tasks:[],run:null,loading:false,error:'',connection:'closed',lastUpdated:null};
+const initial:WorldSnapshot={team:null,teams:[],rooms:[],agents:[],messages:{},activities:[],tasks:[],run:null,loading:false,error:'',connection:'connecting',lastUpdated:null};
 const state=reactive<WorldSnapshot>({...initial,messages:{}});let socket:EventsSocket|null=null;let loadedTeam:number|null=null;let loadGeneration=0;
 const agentName=(id:number|null)=>state.agents.find(a=>a.id===id)?.name || (id ? `大师 ${id}`:'大师');
 function fallbackRun(teamId:number,runId='live'):RunSnapshot{
@@ -20,7 +20,7 @@ export function applyEvent(e:NormalizedEvent){if(loadedTeam&&'teamId'in e&&e.tea
  else if(e.type==='publication_changed'&&state.run?.id===e.runId)state.run.publication=e.publication;
  else if(e.type==='reconcile'){void reconcile();return;}
  if(!state.run||state.run.source==='fallback')state.run=fallbackRun(loadedTeam||('teamId'in e?e.teamId:0),state.run?.id||'live');state.lastUpdated=Date.now();}
-export async function loadTeams(){state.loading=true;state.error='';try{state.teams=await api.getTeams();}catch(e){state.error=e instanceof Error?e.message:'无法载入团队';}finally{state.loading=false;}}
+export async function loadTeams(){state.loading=true;state.error='';try{state.teams=await api.getTeams();}catch(e){state.error=e instanceof Error?e.message:'无法载入团队';}finally{state.loading=false;}connect();}
 export async function loadTeam(teamId:number,runId?:string){
  const generation=++loadGeneration;loadedTeam=teamId;state.loading=true;state.error='';
  try{
@@ -64,10 +64,11 @@ export async function loadTeam(teamId:number,runId?:string){
  finally{if(generation===loadGeneration)state.loading=false;}
 }
 export async function loadRoomMessages(roomId:number){state.messages[roomId]=await api.getMessages(roomId);}
-export async function submitMessage(roomId:number,content:string,immediate=false){await api.sendMessage(roomId,content,immediate);await loadRoomMessages(roomId);if(state.run?.source==='fallback')state.run=fallbackRun(loadedTeam||0,state.run.id);}
+export async function submitMessage(roomId:number,content:string,immediate=false){await api.sendMessage(roomId,content,immediate);/* 不主动 reload，让 WebSocket 事件驱动更新；兜底延迟 reload 防止 WS 丢失 */setTimeout(()=>{if(!state.messages[roomId]||state.messages[roomId].length===0)loadRoomMessages(roomId);},2000);if(state.run?.source==='fallback')state.run=fallbackRun(loadedTeam||0,state.run.id);}
+export async function startNewSession(roomId:number){/* 调用后端归档当前讨论并重置房间状态 */await api.newSession(roomId);/* 清空前端消息显示，展示空白新会话 */state.messages[roomId]=[];/* 重置 Run 为 fallback，让新消息创建全新 Run */if(loadedTeam)state.run=fallbackRun(loadedTeam,'live');state.activities=[];state.tasks=[];state.lastUpdated=Date.now();}
 let reconciling=false;async function reconcile(){if(!loadedTeam||reconciling)return;reconciling=true;try{const teamId=loadedTeam;const [rooms,agents,activities,tasks,native]=await Promise.all([api.getRooms(teamId),api.getAgents(teamId),api.getActivities(teamId).catch(()=>[]),api.getTasks(teamId).catch(()=>[]),api.getCurrentRun(teamId)]);if(loadedTeam!==teamId)return;state.rooms=rooms;state.agents=agents;state.activities=activities;state.tasks=tasks;const loaded=await Promise.all(rooms.filter(r=>r.type==='group').map(async r=>[r.id,await api.getMessages(r.id).catch(()=>state.messages[r.id]||[])] as const));state.messages=Object.fromEntries(loaded);state.run=native?{...native,source:'native'}:fallbackRun(teamId,state.run?.id||'live');state.lastUpdated=Date.now();}finally{reconciling=false;}}
 let connecting=false;async function connect(){if(socket||connecting)return;connecting=true;try{if(socket)return;socket=new EventsSocket(applyEvent,(s,recovered)=>{state.connection=s==='auth_required'?'closed':s;if(s==='open'&&recovered)void reconcile();});socket.connect();}finally{connecting=false;}}
 export function disconnect(){socket?.close();socket=null;state.connection='closed';}
 export function reconnect(){disconnect();void connect();}
 export function retryAfterAuthentication(){if(loadedTeam)return loadTeam(loadedTeam);return loadTeams();}
-export const world={state:readonly(state),loadTeams,loadTeam,loadRoomMessages,submitMessage,applyEvent,reconnect,retryAfterAuthentication,activeRooms:computed(()=>Object.values(state.run?.roomRuns||{}).filter(r=>['discussing','synthesizing'].includes(r.status)))};
+export const world={state:readonly(state),loadTeams,loadTeam,loadRoomMessages,submitMessage,startNewSession,applyEvent,reconnect,retryAfterAuthentication,activeRooms:computed(()=>Object.values(state.run?.roomRuns||{}).filter(r=>['discussing','synthesizing'].includes(r.status)))};

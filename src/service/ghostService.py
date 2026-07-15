@@ -328,7 +328,14 @@ async def publish_run_conclusion(
 
     ghost = configUtil.get_app_config().setting.ghost
     safe_title = (title or "").strip() or "综合分析报告"
-    document = _build_final_markdown(safe_title, content_markdown or "")
+    # content_markdown 已是完整的 Markdown 结论，直接作为正文发布，不再二次包装
+    # 避免重复标题和冗余结构
+    document = content_markdown or "（结论内容为空）"
+    # 追加来源标注
+    if team_name:
+        document = document.rstrip() + f"\n\n---\n\n*本文由数字人生 · {team_name} 多智能体协作平台自动生成*"
+    else:
+        document = document.rstrip() + "\n\n---\n\n*本文由数字人生多智能体协作平台自动生成*"
 
     result = await publish_post(safe_title, document, status=ghost.publish_status)
     if result.get("success"):
@@ -435,10 +442,17 @@ async def _publish_to_ghost(
         if response.status in {200, 201}:
             data = json.loads(response_text) if response_text else {}
             post = (data.get("posts") or [{}])[0]
+            raw_url = post.get("url") or (existing or {}).get("url")
+            # Ghost 返回的 URL 可能不含 /posts/ 前缀，统一加上以匹配实际访问路径
+            if raw_url and "/posts/" not in raw_url:
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(raw_url)
+                if not parsed.path.startswith("/posts/"):
+                    raw_url = urlunparse(parsed._replace(path=f"/posts{parsed.path}"))
             return {
                 "success": True,
                 "message": "发布成功",
-                "post_url": post.get("url") or (existing or {}).get("url"),
+                "post_url": raw_url,
                 "post_id": post.get("id") or (existing or {}).get("id"),
                 "retryable": False,
             }

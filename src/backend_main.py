@@ -46,7 +46,7 @@ def _check_single_instance() -> None:
         return
     os.makedirs(_RUN_DIR, exist_ok=True)
     # Docker 环境下清理可能残留的 stale PID 文件（容器重启时旧 PID 文件可能导致误判）
-    if (os.environ.get("DIGITALLIFE_RUN_ENV") or os.environ.get("TOGOSPACE_RUN_ENV")) == "docker":
+    if os.environ.get("DIGITALLIFE_RUN_ENV") == "docker":
         if os.path.isfile(_PID_FILE):
             try:
                 os.remove(_PID_FILE)
@@ -108,7 +108,7 @@ def _handle_shutdown_signal(signum: int, _frame) -> None:
 
 def _detect_run_env() -> str:
     """检测当前运行环境：docker / mac_app / source。"""
-    if (os.environ.get("DIGITALLIFE_RUN_ENV") or os.environ.get("TOGOSPACE_RUN_ENV")) == "docker":
+    if os.environ.get("DIGITALLIFE_RUN_ENV") == "docker":
         return "docker"
     if getattr(sys, "frozen", False):
         return "mac_app"

@@ -86,6 +86,7 @@ class TestRoomTurnLogic(ServiceTestCase):
                 state=RoomState.SCHEDULING,
                 current_turn_agent_id=bob_id,
                 need_scheduling=True,
+                run_id=None,
             )
 
         with patch("service.messageBus.publish") as mock_publish:
@@ -161,6 +162,7 @@ class TestRoomTurnLogic(ServiceTestCase):
                 state=RoomState.SCHEDULING,
                 current_turn_agent_id=alice_id,
                 need_scheduling=True,
+                run_id=None,
             )
 
     async def test_idle_wakeup_by_non_current_agent_message(self):

@@ -44,6 +44,8 @@ class RoomScheduler:
         self._last_speaker_id: int | None = None
         # 结论轮标志：submit_conclusion 工具设置后，当前轮次结束即停止调度
         self._conclusion_submitted: bool = False
+        # 当前关联的活动 Run ID，由 ChatRoom 设置后在 publish_status 时传递给 runService
+        self.current_run_id: int | None = None
         # 序列化状态变更，避免 handle_finish_request 在 await persist_state() 期间
         # 被并发调用导致发言位/轮次错乱。
         self._lock: asyncio.Lock = asyncio.Lock()
@@ -184,6 +186,17 @@ class RoomScheduler:
         current_id = self.get_current_turn_agent_id()
         if sender_id == current_id:
             self.current_turn_has_content = True
+            return None
+        # OPERATOR 发消息但当前发言人是其他 Agent：重置调度，让新消息能触发新一轮讨论
+        if sender_id == self.OPERATOR_MEMBER_ID:
+            logger.info("OPERATOR 在房间 %s 发新消息，重置调度从头发起讨论", self._key)
+            self._last_speaker_id = None
+            self._round_count = 0
+            self._current_round_skipped_set = set()
+            self.current_turn_has_content = False
+            self._conclusion_submitted = False
+            self._current_speaker_index = None
+            return self._advance_to_first_dispatchable()
         return None
 
     def is_idle(self) -> bool:
@@ -264,16 +277,22 @@ class RoomScheduler:
     # ─── 外部动作 ───────────────────────────────────────────
 
     def publish_status(self, current_turn_agent_id: int | None = None, *,
-                       need_scheduling: bool = False) -> None:
-        """广播房间状态，不推送 INIT 状态。"""
+                       need_scheduling: bool = False, run_id: int | None = None) -> None:
+        """广播房间状态，不推送 INIT 状态。
+
+        run_id 优先使用参数传入值，否则回退到 self.current_run_id（由 ChatRoom 设置）。
+        传递给 runService 以精准关联活动 Run，避免多 Run 并发时 fallback 猜测失效。
+        """
         if self._state == RoomState.INIT:
             return
+        effective_run_id = run_id if run_id is not None else self.current_run_id
         messageBus.publish(
             MessageBusTopic.ROOM_STATUS_CHANGED,
             gt_room=self._gt_room,
             state=self._state,
             current_turn_agent_id=current_turn_agent_id,
             need_scheduling=need_scheduling,
+            run_id=effective_run_id,
         )
 
     async def persist_state(self) -> None:

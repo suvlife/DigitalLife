@@ -107,7 +107,7 @@ def apply_secret_environment_overrides(setting: SettingConfig) -> None:
     if os.environ.get("GHOST_AUTO_PUBLISH") is not None:
         setting.ghost.auto_publish = os.environ["GHOST_AUTO_PUBLISH"].strip().lower() in {"1", "true", "yes", "on"}
 
-    fallback = os.environ.get("TOGOSPACE_TSP_FALLBACK_NATIVE")
+    fallback = os.environ.get("DIGITALLIFE_TSP_FALLBACK_NATIVE")
     if fallback is not None:
         setting.driver_fallback.enabled = fallback.strip().lower() in {"1", "true", "yes", "on"}
         setting.driver_fallback.tsp_to_native = setting.driver_fallback.enabled

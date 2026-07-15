@@ -94,6 +94,12 @@ class RoomMessageStore:
     def mark_all_read(self) -> None:
         self._agent_seq_read = {aid: self._next_seq for aid in self._agent_ids}
 
+    def clear(self) -> None:
+        """清空所有内存消息，重置 seq 计数器和已读进度。"""
+        self._messages.clear()
+        self._next_seq = 0
+        self._agent_seq_read = {aid: 0 for aid in self._agent_ids}
+
     def _sort(self) -> None:
         """维持不变量：seq 已赋值消息在前（按 seq 升序），seq=None 消息在后（按 db_id 升序）。
 

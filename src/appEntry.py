@@ -91,7 +91,7 @@ def wait_backend_shutdown(timeout: float = 5.0) -> bool:
 def _make_icon() -> Image.Image:
     """加载图标文件，若不存在则绘制简单图形。"""
     icons_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons")
-    icon_candidates = ["togo_status_32.png", "togo_status_64.png", "togo_status_16.png"]
+    icon_candidates = ["dl_status_32.png", "dl_status_64.png", "dl_status_16.png"]
     for icon_name in icon_candidates:
         icon_path = os.path.join(icons_dir, icon_name)
         if os.path.exists(icon_path):

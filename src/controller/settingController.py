@@ -4,7 +4,7 @@ import time
 
 from pydantic import BaseModel, ValidationError
 
-from constants import LlmServiceType
+from constants import LlmServiceType, ScheduleState
 from controller.baseController import BaseHandler, format_validation_error
 from service import ghostService, llmService, schedulerService
 from util import assertUtil, configUtil, safeHttpUtil
@@ -93,7 +93,13 @@ class LlmServiceListHandler(BaseHandler):
     async def get(self) -> None:
         setting = _get_setting()
         is_admin = self._is_admin()
-        user_services = [_serialize_llm_service(service, is_admin=is_admin) for service in setting.llm_services]
+        # 为每个用户自定义服务标注其在 setting.llm_services 中的真实 index，
+        # 前端据此调用 modify/test/delete 接口，避免与内置服务混排后越界。
+        user_services = []
+        for i, service in enumerate(setting.llm_services):
+            item = _serialize_llm_service(service, is_admin=is_admin)
+            item["index"] = i
+            user_services.append(item)
 
         # 检查用户配置中是否有已启用的服务
         has_enabled_user_service = any(s.enable for s in setting.llm_services)
@@ -106,6 +112,7 @@ class LlmServiceListHandler(BaseHandler):
                 item["has_api_key"] = True
                 item["api_key"] = ""  # 内置 Key 不返回明文
                 item["is_builtin"] = True
+                item["index"] = -1  # 内置服务不可通过 index 修改/删除
                 item.setdefault("provider_params", {})
                 # M6：非管理员不暴露内置服务的 base_url
                 if not is_admin:
@@ -163,6 +170,11 @@ class LlmServiceCreateHandler(BaseHandler):
 
         configUtil.update_setting(mutator)
         llmService.reset_request_gates_for_testing()
+
+        # 添加服务后如果系统已就绪但调度器未运行，自动启动调度
+        if configUtil.is_initialized() and schedulerService.get_schedule_state() != ScheduleState.RUNNING:
+            await schedulerService.start_schedule()
+
         self.return_json({"status": "ok", "index": len(setting.llm_services) - 1})
 
 
@@ -269,6 +281,11 @@ class LlmServiceSetDefaultHandler(BaseHandler):
             s.default_llm_server = service.name
 
         configUtil.update_setting(mutator)
+
+        # 设置默认服务后如果系统已就绪但调度器未运行，自动启动调度
+        if configUtil.is_initialized() and schedulerService.get_schedule_state() != ScheduleState.RUNNING:
+            await schedulerService.start_schedule()
+
         self.return_json({"status": "ok", "default_llm_server": service.name})
 
 
@@ -292,12 +309,32 @@ class LlmServiceTestHandler(BaseHandler):
                 error_code="missing_index",
             )
             setting = _get_setting()
-            assertUtil.assertTrue(
-                0 <= request.index < len(setting.llm_services),
-                error_message=f"服务序号 {request.index} 越界",
-                error_code="index_out_of_range",
-            )
-            config = setting.llm_services[request.index]
+            if request.index == -1:
+                # index=-1 表示测试内置服务：从 builtin_keys 中查找
+                builtin_services = configUtil.get_builtin_llm_services()
+                assertUtil.assertTrue(
+                    len(builtin_services) > 0,
+                    error_message="无内置服务可测试",
+                    error_code="no_builtin_service",
+                )
+                # 取第一个启用的内置服务
+                svc = next((s for s in builtin_services if s.get("enable")), builtin_services[0])
+                config = LlmServiceConfig(
+                    name=svc.get("name", "builtin"),
+                    enable=True,
+                    base_url=svc.get("base_url", ""),
+                    api_key=svc.get("api_key", ""),
+                    api_keys=list(svc.get("api_keys", []) or []),
+                    type=LlmServiceType(svc.get("type", "openai-compatible")),
+                    model=svc.get("model", ""),
+                )
+            else:
+                assertUtil.assertTrue(
+                    0 <= request.index < len(setting.llm_services),
+                    error_message=f"服务序号 {request.index} 越界，当前共 {len(setting.llm_services)} 个服务",
+                    error_code="index_out_of_range",
+                )
+                config = setting.llm_services[request.index]
         else:
             assertUtil.assertNotNull(request.base_url, error_message="mode='temp' 时必须提供 base_url", error_code="missing_field")
             assertUtil.assertNotNull(request.api_key, error_message="mode='temp' 时必须提供 api_key", error_code="missing_field")

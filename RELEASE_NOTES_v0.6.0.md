@@ -32,7 +32,7 @@
 
 - 经典控制台和江湖书院 V2 均默认使用本地打包的霞鹜文楷，不依赖 CDN 或系统字体；
 - macOS 应用、ZIP、Docker 镜像、Compose 服务、运行目录和 CI 发布名称统一为 `digitallife` / `DigitalLife`；
-- 新桌面数据目录为 `~/.digitallife`，继续兼容旧版 `~/.togospace`；
+- 新桌面数据目录为 `~/.digitallife`，继续兼容旧版 `~/.digitallife`；
 - 更新检查指向 `suvlife/DigitalLife`。
 
 ### macOS 安装改进
