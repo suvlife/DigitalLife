@@ -59,21 +59,39 @@ async def test_owned_team_is_writable_by_owner(monkeypatch) -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "http://127.0.0.1:8080/v1",
         "http://169.254.169.254/latest/meta-data",
-        "http://[::1]/",
         "ftp://example.com/resource",
         "https://user:pass@example.com/",
     ],
 )
 def test_shared_ssrf_validator_rejects_unsafe_targets(url: str) -> None:
+    # Ghost URL 校验始终严格（不允许私有/回环地址）
     with pytest.raises(ValueError):
         ghostService.assert_safe_http_url(url)
-    with pytest.raises(Exception) as llm_error:
-        _assert_safe_llm_url(url)
-    assert getattr(llm_error.value, "error_code", None) == "unsafe_url"
     with pytest.raises(Exception) as ghost_error:
         _assert_safe_service_url(url, field_name="Ghost API URL")
+    assert getattr(ghost_error.value, "error_code", None) == "unsafe_url"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8080/v1",
+        "http://[::1]:8080/v1",
+        "http://localhost:11434/v1",
+        "http://192.168.1.100:8080/v1",
+        "http://10.0.0.5:11434/v1",
+    ],
+)
+def test_llm_url_allows_private_addresses(url: str) -> None:
+    """LLM base_url 允许私有/回环地址（用户可配置本地 Ollama 等服务）。"""
+    _assert_safe_llm_url(url)  # 不应抛异常
+
+
+def test_ghost_url_rejects_loopback() -> None:
+    """Ghost 博客地址仍拒绝回环地址。"""
+    with pytest.raises(Exception) as ghost_error:
+        _assert_safe_service_url("http://127.0.0.1:2368", field_name="Ghost API URL")
     assert getattr(ghost_error.value, "error_code", None) == "unsafe_url"
 
 

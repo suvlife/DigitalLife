@@ -250,8 +250,8 @@ class TestQuickInit(_ApiServiceCase):
         assert defaults[0]["base_url"] == "https://93.184.216.34/v2"
         assert defaults[0]["model"] == "second-model"
 
-    async def test_quick_init_rejects_private_url(self):
-        """SSRF 防护：回环地址 base_url 应被拦截，返回 unsafe_url。"""
+    async def test_quick_init_allows_private_url(self):
+        """LLM base_url 允许回环地址（用户可配置本地 LLM 如 Ollama）。"""
         async with aiohttp.ClientSession() as client:
             status_code, data = await self._quick_init(client, {
                 "base_url": "http://127.0.0.1:9999/v1",
@@ -259,5 +259,5 @@ class TestQuickInit(_ApiServiceCase):
                 "model": "model",
             }, expect_ok=False)
 
-        assert status_code == 400
-        assert data["error_code"] == "unsafe_url"
+        # allow_private=True 后不再拒绝回环地址
+        assert status_code == 200

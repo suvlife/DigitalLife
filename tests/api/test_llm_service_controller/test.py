@@ -360,19 +360,19 @@ class TestLlmServiceController(_ApiServiceCase):
             after = await self._list(client)
             assert after["llm_services"][idx]["enable"] is True
 
-    async def test_connectivity_by_index_rejects_saved_private_url(self):
-        """已保存配置测试也必须执行 SSRF 校验。"""
+    async def test_connectivity_by_index_allows_saved_private_url(self):
+        """已保存配置测试允许私有/回环地址（用户可配置本地 LLM）。"""
         async with aiohttp.ClientSession() as client:
             async with client.post(
                 f"{self.backend_base_url}/config/llm_services/test.json",
                 json={"mode": "saved", "index": 0},
             ) as resp:
                 data = await resp.json()
-        assert resp.status == 400
-        assert data["error_code"] == "unsafe_url"
+        # allow_private=True 后不再拒绝回环地址；mock server 应返回 ok 或 connection error
+        assert resp.status == 200
 
-    async def test_connectivity_by_config_rejects_private_url(self):
-        """临时配置测试拒绝回环地址。"""
+    async def test_connectivity_by_config_allows_private_url(self):
+        """临时配置测试允许回环地址（用户可配置本地 LLM）。"""
         async with aiohttp.ClientSession() as client:
             async with client.post(
                 f"{self.backend_base_url}/config/llm_services/test.json",
@@ -385,5 +385,4 @@ class TestLlmServiceController(_ApiServiceCase):
                 },
             ) as resp:
                 data = await resp.json()
-        assert resp.status == 400
-        assert data["error_code"] == "unsafe_url"
+        assert resp.status == 200
