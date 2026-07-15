@@ -405,6 +405,8 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
       BUILTIN_KEYS_JSON: ${{ secrets.BUILTIN_KEYS_JSON }}
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
     - uses: actions/checkout@v6
       with:
