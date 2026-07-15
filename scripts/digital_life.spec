@@ -26,6 +26,11 @@ import litellm
 LITELLM_PATH = os.path.dirname(litellm.__file__)
 print(f"ℹ️  litellm_path: {LITELLM_PATH}")
 
+# 获取 certifi CA 证书包路径（PyInstaller 打包后系统 CA 证书不可用）
+import certifi
+CERTIFI_PATH = os.path.dirname(certifi.__file__)
+print(f"ℹ️  certifi_path: {CERTIFI_PATH}")
+
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
 a = Analysis(
@@ -35,6 +40,7 @@ a = Analysis(
     datas=[
         (os.path.join(REPO_ROOT, "assets"), "assets"),
         (LITELLM_PATH, "litellm"),
+        (CERTIFI_PATH, "certifi"),
     ],
     hiddenimports=[
         # tornado

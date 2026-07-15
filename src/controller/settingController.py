@@ -365,9 +365,12 @@ class LlmServiceTestHandler(BaseHandler):
         # 已保存与临时配置走同一 SSRF 校验，避免旧配置绕过测试接口。
         _assert_safe_llm_url(config.base_url)
 
+        # PyInstaller 打包后可能缺少系统 CA 证书，允许跳过 SSL 验证
+        skip_ssl = bool(request.provider_params.get("skip_ssl_verify")) if request.provider_params else False
+
         # 执行可用性测试
         try:
-            result = await _test_llm_service(config)
+            result = await _test_llm_service(config, skip_ssl_verify=skip_ssl)
             self.return_json({
                 "status": "ok",
                 "message": "连接成功",
@@ -385,7 +388,7 @@ class LlmServiceTestHandler(BaseHandler):
             })
 
 
-async def _test_llm_service(config: LlmServiceConfig) -> dict:
+async def _test_llm_service(config: LlmServiceConfig, *, skip_ssl_verify: bool = False) -> dict:
     """Send a minimal provider probe through the shared SSRF-safe HTTP client.
 
     The normal LiteLLM path remains unchanged for Agent execution. Configuration
@@ -434,6 +437,7 @@ async def _test_llm_service(config: LlmServiceConfig) -> dict:
     response = await safeHttpUtil.request(
         "POST", endpoint, headers=headers, json_body=payload, timeout=timeout,
         field_name="base_url", allow_private=True,
+        ssl=False if skip_ssl_verify else None,
     )
     duration_ms = int((time.monotonic() - start_time) * 1000)
     if response.status < 200 or response.status >= 300:

@@ -19,6 +19,9 @@ print(f"ℹ️  windows build, version: {APP_VERSION}")
 import litellm
 LITELLM_PATH = os.path.dirname(litellm.__file__)
 
+import certifi
+CERTIFI_PATH = os.path.dirname(certifi.__file__)
+
 a = Analysis(
     [os.path.join(REPO_ROOT, "scripts", "windows_launcher.py")],
     pathex=[os.path.join(REPO_ROOT, "src")],
@@ -26,6 +29,7 @@ a = Analysis(
     datas=[
         (os.path.join(REPO_ROOT, "assets"), "assets"),
         (LITELLM_PATH, "litellm"),
+        (CERTIFI_PATH, "certifi"),
     ],
     hiddenimports=[
         "tornado",

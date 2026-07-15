@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import signal
+import ssl
 import sys
 
 import tornado.httpserver
@@ -28,6 +29,27 @@ import appPaths
 import route
 from version import __version__
 from dal.db import gtTeamManager
+
+
+def _patch_ssl_for_frozen() -> None:
+    """PyInstaller 打包后系统 CA 证书路径可能不可用，注入 certifi 证书包。
+
+    macOS .app 和 Linux AppImage 环境下，aiohttp/requests 默认通过系统
+    OpenSSL 查找 CA 证书，但打包后路径断裂导致 SSL 验证失败。
+    此函数在启动早期设置 SSL_CERT_FILE 环境变量，确保 HTTPS 正常工作。
+    """
+    if not getattr(sys, "frozen", False):
+        return  # 非打包环境无需处理
+    try:
+        import certifi
+        ca_path = certifi.where()
+        os.environ.setdefault("SSL_CERT_FILE", ca_path)
+        os.environ.setdefault("SSL_CERT_DIR", os.path.dirname(ca_path))
+        logger = logging.getLogger(__name__)
+        logger.info("PyInstaller 环境: 注入 CA 证书 %s", ca_path)
+    except ImportError:
+        # certifi 未安装时回退到系统默认
+        pass
 
 
 def _setup_logger() -> None:
@@ -119,6 +141,7 @@ async def main(config_dir: str = None, port: int | None = None):
     global _main_loop, _shutdown_event
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    _patch_ssl_for_frozen()
     _setup_logger()
     logger = logging.getLogger(__name__)
     _main_loop = asyncio.get_running_loop()
