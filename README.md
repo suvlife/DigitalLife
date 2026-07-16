@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.8.6-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.8.7-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">

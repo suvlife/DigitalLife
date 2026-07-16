@@ -260,10 +260,17 @@ async def request(
             raise TooManyRedirectsError(f"{field_name} redirect loop detected")
         visited.add(current_url)
         hostname, port, addresses = resolve_public_addresses(current_url, field_name=field_name, allow_private=allow_private)
-        connector = aiohttp.TCPConnector(
-            resolver=_PinnedResolver(hostname, port, addresses),
-            use_dns_cache=False,
-        )
+        # allow_private=True 时跳过 DNS pinning，使用系统默认 DNS 解析。
+        # 原因：用户可能使用代理软件（Surge/Clash），代理通过 DNS 劫持
+        # 将域名解析到 198.18.x.x 虚假 IP 再透明转发。DNS pinning 会绑定
+        # 到该虚假 IP 直连，绕过代理导致连接失败。
+        if allow_private:
+            connector = aiohttp.TCPConnector(use_dns_cache=False)
+        else:
+            connector = aiohttp.TCPConnector(
+                resolver=_PinnedResolver(hostname, port, addresses),
+                use_dns_cache=False,
+            )
         # ssl=None 时在打包环境下用 certifi 证书包，确保 SSL 验证可用
         effective_ssl = ssl if ssl is not None else _get_default_ssl_context()
         async with aiohttp.ClientSession(timeout=timeout_value, connector=connector) as session:
