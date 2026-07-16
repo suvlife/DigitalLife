@@ -157,6 +157,7 @@ def create_pinned_client_session(
     timeout: aiohttp.ClientTimeout | float | None = None,
     field_name: str = "URL",
     allow_test_loopback: bool = False,
+    allow_private: bool = False,
 ) -> aiohttp.ClientSession:
     """Create a one-origin session pinned to the URL's validated public IPs.
 
@@ -166,7 +167,23 @@ def create_pinned_client_session(
     asks aiohttp to follow one. ``trust_env=False`` also prevents environment proxy
     settings from bypassing the pinned connector. Callers own and must close the
     returned session.
+
+    When ``allow_private`` is True, private/loopback addresses are accepted and
+    DNS pinning is skipped (useful when the user's machine uses a proxy that
+    resolves domains to virtual IPs like 198.18.x.x).
     """
+    if allow_private:
+        # 代理环境：跳过 DNS pinning，用系统默认 DNS（走代理）
+        if timeout is None:
+            tv = aiohttp.ClientTimeout(total=600)
+        elif isinstance(timeout, (int, float)):
+            tv = aiohttp.ClientTimeout(total=float(timeout))
+        else:
+            tv = timeout
+        connector = aiohttp.TCPConnector(use_dns_cache=False)
+        session = aiohttp.ClientSession(timeout=tv, connector=connector)
+        return session
+
     hostname, port, addresses = resolve_public_addresses(
         url, field_name=field_name, allow_test_loopback=allow_test_loopback
     )

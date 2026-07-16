@@ -384,7 +384,7 @@ def _build_secure_litellm_client(
     if provider not in _SECURE_SESSION_PROVIDERS:
         raise ValueError(f"不支持安全固定 DNS 的 LLM provider: {provider or '未指定'}")
     session = create_pinned_client_session(
-        base_url, field_name="LLM base URL", allow_test_loopback=True
+        base_url, field_name="LLM base URL", allow_test_loopback=True, allow_private=True
     )
     # OpenAI-compatible adapters expect ``client`` to be an AsyncOpenAI object;
     # passing LiteLLM's HTTP handler there breaks the SDK path. They consume
