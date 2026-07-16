@@ -200,6 +200,25 @@ def _redirect_method(status: int, method: str) -> str:
     return upper
 
 
+def _get_default_ssl_context() -> "ssl.SSLContext | None":
+    """获取默认 SSL context，打包环境下用 certifi 证书包。
+
+    PyInstaller 打包后系统 CA 证书路径可能断裂，aiohttp 默认的
+    ssl=None 内部调用 create_default_context() 虽然会读 SSL_CERT_FILE
+    环境变量，但某些环境下可能不稳定。此处显式创建 context 确保
+    证书链完整。
+    """
+    import sys
+    if not getattr(sys, "frozen", False):
+        return None  # 非打包环境用系统默认
+    try:
+        import certifi
+        import ssl as _ssl
+        return _ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
+
+
 async def request(
     method: str,
     url: str,
@@ -245,6 +264,8 @@ async def request(
             resolver=_PinnedResolver(hostname, port, addresses),
             use_dns_cache=False,
         )
+        # ssl=None 时在打包环境下用 certifi 证书包，确保 SSL 验证可用
+        effective_ssl = ssl if ssl is not None else _get_default_ssl_context()
         async with aiohttp.ClientSession(timeout=timeout_value, connector=connector) as session:
             async with session.request(
                 current_method,
@@ -253,7 +274,7 @@ async def request(
                 json=current_json,
                 data=current_data,
                 allow_redirects=False,
-                ssl=ssl,
+                ssl=effective_ssl,
             ) as response:
                 if max_bytes is not None:
                     body = await response.content.read(max_bytes + 1)

@@ -19,7 +19,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="DigitalLife Team"
 LABEL description="DigitalLife multi-agent collaboration platform"
-ARG APP_VERSION=0.8.5
+ARG APP_VERSION=0.8.6
 LABEL version=${APP_VERSION}
 
 ENV PYTHONUNBUFFERED=1 \

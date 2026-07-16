@@ -378,14 +378,63 @@ class LlmServiceTestHandler(BaseHandler):
             })
         except Exception as e:
             logger.warning(f"LLM 可用性测试失败: {e}", exc_info=True)
-            # 不回显原始上游异常（可能含内网地址/端口/鉴权细节），返回统一下游错误码
+            # 返回分类后的错误信息，帮助用户定位问题（SSL/DNS/认证/网络等）
+            error_msg = _classify_llm_test_error(e)
             self.return_json({
                 "status": "error",
-                "message": "LLM 服务连接失败，请检查配置",
+                "message": error_msg,
                 "detail": {
                     "error_type": type(e).__name__,
                 },
             })
+
+
+def _classify_llm_test_error(e: Exception) -> str:
+    """将 LLM 测试异常分类为用户可理解的错误信息。"""
+    err_str = str(e).lower()
+    err_type = type(e).__name__
+
+    # SSL 证书相关
+    if "ssl" in err_str or "certificate" in err_str or "cert" in err_str:
+        return "SSL 证书验证失败，请在 provider_params 中设置 skip_ssl_verify=true，或检查系统 CA 证书"
+
+    # DNS 解析相关
+    if "resolve" in err_str or "dns" in err_str or "gaierror" in err_type.lower() or "hostname" in err_str:
+        return f"域名解析失败，请检查 base_url 是否正确: {e}"
+
+    # 连接超时/拒绝
+    if "timeout" in err_str or "timed out" in err_str:
+        return "连接超时，请检查网络是否可达或增加超时时间"
+    if "connection refused" in err_str or "connectionerror" in err_type.lower():
+        return "连接被拒绝，请检查服务地址和端口是否正确"
+    if "connection" in err_str and "reset" in err_str:
+        return "连接被重置，可能是网络不稳定或服务端拒绝"
+
+    # 认证相关
+    if "401" in err_str or "unauthorized" in err_str or "authentication" in err_str or "invalid api key" in err_str:
+        return "认证失败（HTTP 401），请检查 API Key 是否正确"
+
+    # 限流
+    if "429" in err_str or "rate limit" in err_str:
+        return "请求被限流（HTTP 429），请稍后重试或降低请求频率"
+
+    # 模型相关
+    if "404" in err_str or "not found" in err_str or "model" in err_str:
+        return "模型不存在或路径错误（HTTP 404），请检查 model 名称和 base_url 路径"
+
+    # SSRF 拦截
+    if "unsafe_url" in err_str or "non-public" in err_str or "ssrf" in err_str:
+        return f"URL 安全检查失败: {e}"
+
+    # 通用网络错误
+    if "network" in err_str or "unreachable" in err_str:
+        return f"网络不可达: {e}"
+
+    # HTTP 错误状态码
+    if "http" in err_str and any(c.isdigit() for c in err_str):
+        return f"服务返回错误: {e}"
+
+    return f"LLM 服务连接失败: {e}"
 
 
 async def _test_llm_service(config: LlmServiceConfig, *, skip_ssl_verify: bool = False) -> dict:
