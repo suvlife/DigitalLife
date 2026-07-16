@@ -659,7 +659,7 @@ class GhostConfigHandler(BaseHandler):
         if "api_url" in body:
             api_url = str(body["api_url"]).strip()
             if api_url:
-                _assert_safe_service_url(api_url, field_name="Ghost API URL")
+                _assert_safe_service_url(api_url, field_name="Ghost API URL", allow_private=True)
 
         # 空 key 表示保留；只有显式 clear_* 才清空保存值。
         configUtil.update_setting(lambda setting: _apply_ghost_config_patch(setting.ghost, body))
@@ -686,7 +686,7 @@ class GhostTestHandler(BaseHandler):
             api_url = api_url or ghost.api_url
             admin_api_key = admin_api_key or ghost.admin_api_key
 
-        _assert_safe_service_url(api_url, field_name="Ghost API URL")
+        _assert_safe_service_url(api_url, field_name="Ghost API URL", allow_private=True)
         skip_ssl_verify = bool(body.get("skip_ssl_verify", _get_setting().ghost.skip_ssl_verify))
         result = await ghostService.test_ghost_connection(api_url, admin_api_key, skip_ssl_verify=skip_ssl_verify)
         self.return_json(result)
