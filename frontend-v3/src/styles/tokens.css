@@ -1,0 +1,97 @@
+/* ═══ DigitalLife V3 Design Tokens ═══ */
+/* 阿凡达全息界面 - 深色宇宙底 + 玻璃半透明 + 冷青光效 */
+
+:root {
+  /* ── 全息色系 ── */
+  --holo-cyan: #00D9FF;
+  --holo-cyan-dim: rgba(0, 217, 255, 0.6);
+  --holo-teal: #00FFB3;
+  --holo-teal-dim: rgba(0, 255, 179, 0.6);
+  --holo-amber: #FFB800;
+  --holo-amber-dim: rgba(255, 184, 0, 0.6);
+  --holo-red: #FF5252;
+  --holo-red-dim: rgba(255, 82, 82, 0.6);
+  --holo-purple: #B388FF;
+  --holo-purple-dim: rgba(179, 136, 255, 0.6);
+  --holo-ice: #7EC8E3;
+  --holo-silver: #C0C8D0;
+
+  /* ── 深空背景 ── */
+  --space-darkest: #050810;
+  --space-dark: #0A0E1A;
+  --space-mid: #0F1424;
+  --space-light: #161B2E;
+  --space-grid: rgba(0, 217, 255, 0.025);
+
+  /* ── 玻璃面板 ── */
+  --glass-bg: rgba(10, 20, 35, 0.55);
+  --glass-bg-hover: rgba(15, 28, 48, 0.7);
+  --glass-bg-active: rgba(0, 217, 255, 0.06);
+  --glass-border: rgba(0, 217, 255, 0.12);
+  --glass-border-hover: rgba(0, 217, 255, 0.25);
+  --glass-border-active: rgba(0, 217, 255, 0.4);
+  --glass-blur: 16px;
+  --glass-blur-heavy: 24px;
+  --glass-radius: 14px;
+  --glass-radius-sm: 8px;
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px rgba(255, 255, 255, 0.04);
+
+  /* ── 文字层级 ── */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-muted: rgba(255, 255, 255, 0.35);
+  --text-faint: rgba(255, 255, 255, 0.15);
+  --text-cyan: var(--holo-cyan);
+  --text-teal: var(--holo-teal);
+
+  /* ── 字体 ── */
+  --font-display: 'Orbitron', 'Noto Sans SC', sans-serif;
+  --font-body: 'Inter', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --fs-xs: 11px;
+  --fs-sm: 13px;
+  --fs-base: 15px;
+  --fs-md: 17px;
+  --fs-lg: 20px;
+  --fs-xl: 26px;
+  --fs-2xl: 34px;
+  --lh-tight: 1.3;
+  --lh-normal: 1.6;
+  --lh-relaxed: 1.8;
+
+  /* ── 间距 ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── 发光效果 ── */
+  --glow-cyan: 0 0 20px rgba(0, 217, 255, 0.25);
+  --glow-cyan-strong: 0 0 30px rgba(0, 217, 255, 0.4);
+  --glow-teal: 0 0 20px rgba(0, 255, 179, 0.25);
+  --glow-amber: 0 0 20px rgba(255, 184, 0, 0.25);
+  --glow-red: 0 0 20px rgba(255, 82, 82, 0.25);
+  --glow-purple: 0 0 20px rgba(179, 136, 255, 0.25);
+
+  /* ── 动画 ── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 0.15s;
+  --dur-normal: 0.3s;
+  --dur-slow: 0.5s;
+
+  /* ── 状态色映射 ── */
+  --status-discussing: var(--holo-cyan);
+  --status-synthesizing: var(--holo-purple);
+  --status-completed: var(--holo-teal);
+  --status-failed: var(--holo-red);
+  --status-waiting: var(--holo-silver);
+  --status-retrying: var(--holo-amber);
+  --status-active: var(--holo-cyan);
+  --status-idle: var(--text-faint);
+}

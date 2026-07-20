@@ -1,0 +1,124 @@
+/* ═══ DigitalLife V3 Global Styles ═══ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  color-scheme: dark;
+  background: var(--space-darkest);
+  scroll-behavior: smooth;
+  font-size: var(--fs-base);
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--text-primary);
+  line-height: var(--lh-normal);
+  background: var(--space-darkest);
+  min-height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 深空背景层 ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(0, 217, 255, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(0, 255, 179, 0.03) 0%, transparent 50%),
+    linear-gradient(180deg, var(--space-darkest) 0%, var(--space-dark) 100%);
+}
+
+/* ── 网格层 ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(var(--space-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--space-grid) 1px, transparent 1px);
+  background-size: 60px 60px;
+  animation: grid-drift 80s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes grid-drift {
+  from { transform: translate(0, 0); }
+  to { transform: translate(60px, 60px); }
+}
+
+/* ── 滚动条 ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 217, 255, 0.15);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 217, 255, 0.3); }
+
+/* ── 通用动画 ── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in-scale {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(2); opacity: 0; }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes msg-arrive {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes data-flow {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ── 通用工具类 ── */
+.fade-in { animation: fade-in var(--dur-normal) var(--ease-out); }
+.fade-in-up { animation: fade-in-up var(--dur-normal) var(--ease-out); }
+.fade-in-scale { animation: fade-in-scale var(--dur-normal) var(--ease-out); }
+
+/* ── 链接 ── */
+a { color: var(--holo-cyan); text-decoration: none; transition: color var(--dur-fast); }
+a:hover { color: var(--holo-teal); }
+
+/* ── 输入框 ── */
+input, textarea, select {
+  font: inherit;
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  padding: var(--space-3) var(--space-4);
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--glass-border-active);
+  box-shadow: var(--glow-cyan);
+}
+input::placeholder, textarea::placeholder { color: var(--text-muted); }
+
+/* ── 选中文本 ── */
+::selection { background: rgba(0, 217, 255, 0.2); color: var(--text-primary); }

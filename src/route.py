@@ -11,9 +11,11 @@ import sys as _sys
 if getattr(_sys, "frozen", False):
     _FRONTEND_DIST = os.path.join(_sys._MEIPASS, "assets/frontend")
     _FRONTEND_V2_DIST = os.path.join(_sys._MEIPASS, "assets/frontend-v2")
+    _FRONTEND_V3_DIST = os.path.join(_sys._MEIPASS, "assets/frontend-v3")
 else:
     _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "../assets/frontend")
     _FRONTEND_V2_DIST = os.path.join(os.path.dirname(__file__), "../assets/frontend-v2")
+    _FRONTEND_V3_DIST = os.path.join(os.path.dirname(__file__), "../assets/frontend-v3")
 
 
 class _SPAHandler(tornado.web.StaticFileHandler):
@@ -236,7 +238,8 @@ application = tornado.web.Application([
     (r"/files/download.json",                        fileController.FileDownloadHandler),
     (r"/files/preview.json",                         fileController.FilePreviewHandler),
 
-    # 双前端静态文件（必须放最后）：V2 为默认入口，经典版固定在 /v1。
+    # 多前端静态文件（必须放最后）：V3 科幻界面在 /v3/，V2 为默认入口，经典版固定在 /v1。
+    (r"/v3/?(.*)", _SPAHandler, {"path": _FRONTEND_V3_DIST, "default_filename": "index.html"}),
     (r"/v2/?(.*)", _V2CompatibilityRedirectHandler),
     (r"/v1/?(.*)", _SPAHandler, {"path": _FRONTEND_DIST, "default_filename": "index.html"}),
     (r"/(.*)", _SPAHandler, {"path": _FRONTEND_V2_DIST, "default_filename": "index.html"}),
