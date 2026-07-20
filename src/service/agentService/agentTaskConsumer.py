@@ -40,6 +40,11 @@ class AgentTaskConsumer:
         self.status: AgentStatus = AgentStatus.IDLE
         self._aio_consumer_task: asyncio.Task | None = None
         self._cancel_requested: bool = False
+        self._failure_redrive_handle: asyncio.TimerHandle | None = None
+
+    # 任务执行失败后的自动重驱动延迟（秒）：避免确定性失败任务紧循环重跑（活锁）。
+    # 重跑次数仍受 task_data.retry_count 上限（消费循环内 _MAX_RETRY=3）约束。
+    _FAILURE_REDRIVE_DELAY_SECONDS = 5.0
 
     async def _set_status(self, status: AgentStatus, error_message: str | None = None) -> None:
         """统一处理 Agent 状态切换：更新运行时状态、广播事件并记录活动。"""
@@ -78,11 +83,37 @@ class AgentTaskConsumer:
 
     def stop(self) -> None:
         """停止消费协程。"""
+        if self._failure_redrive_handle is not None:
+            # 卸载/热更新/关闭路径：取消挂起的失败重驱动，避免已停 Agent 被复活。
+            self._failure_redrive_handle.cancel()
+            self._failure_redrive_handle = None
         task = self._aio_consumer_task
         self._aio_consumer_task = None
         if task is not None:
             logger.info(f"停止消费协程: {self.gt_agent.name}(agent_id={self.gt_agent.id}), task_done={task.done()}")
         asyncUtil.cancel_task_safely(task)
+
+    def _schedule_retry_after_failure(self) -> None:
+        """任务失败后的延迟重驱动：重启消费协程，让 FAILED 任务走内建重试。
+
+        没有这一看门狗时，FAILED 即 break 后该 Agent 不再消费：房间停在
+        SCHEDULING 等待一个永远不会发消息的失败 Agent，讨论永久中断（审计 H3）。
+        延迟启动避免确定性失败任务紧循环；stop() 会取消挂起的重驱动。
+        """
+        if self._failure_redrive_handle is not None:
+            return  # 已安排，避免堆叠
+        loop = asyncio.get_running_loop()
+        self._failure_redrive_handle = loop.call_later(
+            self._FAILURE_REDRIVE_DELAY_SECONDS, self._redrive_after_failure
+        )
+
+    def _redrive_after_failure(self) -> None:
+        self._failure_redrive_handle = None
+        if self.status != AgentStatus.FAILED:
+            # 状态已被外部改变（人工恢复/热更新/人工停止），不再自动重驱动。
+            return
+        logger.info(f"任务失败后自动重驱动消费: {self.gt_agent.name}(agent_id={self.gt_agent.id})")
+        self.start()
 
     def cancel_current_turn(self) -> bool:
         """人工停止当前 turn。返回 True 表示已发出取消信号，False 表示当前不可取消。"""
@@ -225,6 +256,9 @@ class AgentTaskConsumer:
                 logger.error(f"Agent 任务执行失败: {self.gt_agent.name}(agent_id={self.gt_agent.id}), task_id={claimed_task.id}, error={e}")
                 await gtScheculeTaskManager.update_task_status(claimed_task.id, AgentTaskStatus.FAILED, error_message=str(e))
                 await self._set_status(AgentStatus.FAILED, str(e))
+                # 安排延迟自动重驱动，让 FAILED 任务走内建 retry_count 重试，
+                # 避免房间永久卡在 SCHEDULING（审计 H3）。
+                self._schedule_retry_after_failure()
                 break
 
             logger.info(f"任务执行完成: {self.gt_agent.name}(agent_id={self.gt_agent.id}), task_id={claimed_task.id}")

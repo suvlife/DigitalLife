@@ -25,6 +25,21 @@ class FakeHandler:
     def get_query_argument(self, name, default=None):
         return self.arguments.get(name, default)
 
+    def get_int_argument(self, name, default=None, min_val=None, max_val=None):
+        raw = self.arguments.get(name, None)
+        if raw is None:
+            return default
+        value = int(raw)
+        if min_val is not None and value < min_val:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_argument", "error_desc": f"参数 {name} 不能小于 {min_val}"})
+            raise tornado.web.Finish()
+        if max_val is not None and value > max_val:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_argument", "error_desc": f"参数 {name} 不能大于 {max_val}"})
+            raise tornado.web.Finish()
+        return value
+
     def get_arguments(self, name):
         value = self.arguments.get(name, [])
         return value if isinstance(value, list) else [value]

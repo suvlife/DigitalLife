@@ -161,9 +161,9 @@ application = tornado.web.Application([
     # Role templates
     (r"/role_templates/list.json",                   roleTemplateController.RoleTemplateListHandler),
     (r"/role_templates/create.json",                 roleTemplateController.RoleTemplateCreateHandler),
-    (r"/role_templates/([^/]+).json",               roleTemplateController.RoleTemplateDetailHandler),
-    (r"/role_templates/([^/]+)/modify.json",         roleTemplateController.RoleTemplateModifyHandler),
-    (r"/role_templates/([^/]+)/delete.json",         roleTemplateController.RoleTemplateDeleteHandler),
+    (r"/role_templates/(\d+).json",               roleTemplateController.RoleTemplateDetailHandler),
+    (r"/role_templates/(\d+)/modify.json",         roleTemplateController.RoleTemplateModifyHandler),
+    (r"/role_templates/(\d+)/delete.json",         roleTemplateController.RoleTemplateDeleteHandler),
 
     # Agents (运行时成员)
     (r"/agents/list.json",                          agentController.AgentListHandler),

@@ -250,10 +250,7 @@ class ChatRoom:
             messageBus.publish(MessageBusTopic.ROOM_MSG_ADDED, gt_room=self.gt_room, gt_message=message)
 
         if not insert_immediately and not is_queued and update_turn_state and self._agent_ids:
-            next_agent_id = self._scheduler.on_message(sender_id)
-            if next_agent_id is not None:
-                await self._scheduler.persist_state()
-                self._scheduler.publish_status(next_agent_id, need_scheduling=True, run_id=self.current_run_id)
+            next_agent_id = await self._scheduler.handle_message(sender_id, run_id=self.current_run_id)
             if sender_id == self.OPERATOR_MEMBER_ID and next_agent_id is None:
                 await self.handle_finish_request(self.OPERATOR_MEMBER_ID)
 

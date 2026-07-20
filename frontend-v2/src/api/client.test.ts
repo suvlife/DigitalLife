@@ -38,6 +38,21 @@ describe('run snapshot API normalization', () => {
   });
 });
 
+describe('message API normalization', () => {
+  it('maps message ids from db_id first, then id', async () => {
+    mockJson({ messages: [{ db_id: 5, id: 21, sender_id: 2, content: '兼容旧版', send_time: '2026-07-20T10:00:00' }, { id: 22, sender_id: -1, content: '新标准', send_time: '2026-07-20T10:01:00' }] });
+    const messages = await api.getMessages(8);
+    expect(messages[0].id).toBe(5);
+    expect(messages[1].id).toBe(22);
+  });
+
+  it('keeps message id null when neither db_id nor id is present', async () => {
+    mockJson({ messages: [{ sender_id: 2, content: '无编号', send_time: '2026-07-20T10:02:00' }] });
+    const messages = await api.getMessages(8);
+    expect(messages[0].id).toBeNull();
+  });
+});
+
 describe('run archive API normalization', () => {
   it('normalizes list records without fetching run details', () => {
     const run = api.normalizeRunArchiveEntry({ id: 12, team_id: 3, title: '年度规划', query: '如何安排下一年度？', status: 'TaskRunStatus.COMPLETED', progress_percent: 100, blog_publish_status: 'PUBLISHED', blog_post_url: 'https://example.test/post', created_at: '2026-07-11T08:00:00' });

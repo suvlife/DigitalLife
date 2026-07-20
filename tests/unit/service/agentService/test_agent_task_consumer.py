@@ -106,6 +106,78 @@ async def test_consume_running_task_retries_and_keeps_failed_status_on_error(con
         }
 
 
+# ─── 任务失败自动重驱动（审计 H3）相关测试 ────────────────────────────
+
+
+def _failing_task_pair(task_id: int = 100):
+    pending_task = MagicMock(spec=GtScheculeTask)
+    pending_task.id = task_id
+    pending_task.status = AgentTaskStatus.PENDING
+    pending_task.task_data = {"room_id": 1}
+
+    running_task = MagicMock(spec=GtScheculeTask)
+    running_task.id = task_id
+    running_task.status = AgentTaskStatus.RUNNING
+    running_task.task_data = {"room_id": 1}
+    return pending_task, running_task
+
+
+@pytest.mark.asyncio
+async def test_failed_task_schedules_delayed_redrive(consumer, mock_gt_agent, mock_turn_runner):
+    """任务失败后安排延迟自动重驱动：到期重启消费，FAILED 任务走内建重试。"""
+    pending_task, running_task = _failing_task_pair()
+
+    with patch("service.agentService.agentTaskConsumer.gtScheculeTaskManager") as mock_manager:
+        mock_manager.get_first_unfinish_task = AsyncMock(return_value=pending_task)
+        mock_manager.transition_task_status = AsyncMock(return_value=running_task)
+        mock_manager.update_task_status = AsyncMock()
+        mock_manager.has_consumable_task = AsyncMock(return_value=False)
+        mock_turn_runner.run_task_turn = AsyncMock(side_effect=RuntimeError("inference failed"))
+
+        with patch.object(AgentTaskConsumer, "_FAILURE_REDRIVE_DELAY_SECONDS", 0.01):
+            with patch.object(consumer, "start") as mock_start:
+                await consumer.consume()
+                assert consumer.status == AgentStatus.FAILED
+                mock_start.assert_not_called()  # 延迟未到期不重启
+
+                await asyncio.sleep(0.05)
+                mock_start.assert_called_once()  # 到期自动重驱动
+                assert consumer._failure_redrive_handle is None
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_pending_failure_redrive(consumer, mock_gt_agent, mock_turn_runner):
+    """stop() 取消挂起的失败重驱动，已停 Agent（卸载/热更新/关闭）不被复活。"""
+    pending_task, running_task = _failing_task_pair()
+
+    with patch("service.agentService.agentTaskConsumer.gtScheculeTaskManager") as mock_manager:
+        mock_manager.get_first_unfinish_task = AsyncMock(return_value=pending_task)
+        mock_manager.transition_task_status = AsyncMock(return_value=running_task)
+        mock_manager.update_task_status = AsyncMock()
+        mock_manager.has_consumable_task = AsyncMock(return_value=False)
+        mock_turn_runner.run_task_turn = AsyncMock(side_effect=RuntimeError("inference failed"))
+
+        with patch.object(AgentTaskConsumer, "_FAILURE_REDRIVE_DELAY_SECONDS", 60):
+            with patch.object(consumer, "start") as mock_start:
+                await consumer.consume()
+                assert consumer._failure_redrive_handle is not None
+
+                consumer.stop()
+                assert consumer._failure_redrive_handle is None
+
+                await asyncio.sleep(0.01)
+                mock_start.assert_not_called()
+
+
+def test_redrive_skipped_when_status_changed_externally(consumer):
+    """状态已被外部改变（人工恢复/热更新/停止）时，重驱动不再生效。"""
+    consumer.status = AgentStatus.IDLE
+    with patch.object(consumer, "start") as mock_start:
+        consumer._redrive_after_failure()
+        mock_start.assert_not_called()
+    assert consumer._failure_redrive_handle is None
+
+
 
 
 # ─── cancel_current_turn 相关测试 ────────────────────────────

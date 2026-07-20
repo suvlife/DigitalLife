@@ -15,7 +15,7 @@ export function applyEvent(e:NormalizedEvent){if(loadedTeam&&'teamId'in e&&e.tea
  else if(e.type==='agent_status'){const a=state.agents.find(a=>a.id===e.agentId);if(a)a.status=e.status;}
  else if(e.type==='agent_activity'){const i=state.activities.findIndex(a=>a.id===e.activity.id);if(i>=0)state.activities[i]=e.activity;else state.activities.unshift(e.activity);}
  else if(e.type==='task_changed'){const i=state.tasks.findIndex(t=>t.id===e.task.id);if(i>=0)state.tasks[i]=e.task;else state.tasks.push(e.task);}
- else if(e.type==='run_changed'){const current=state.run||fallbackRun(e.teamId,e.run.id);state.run={...current,...e.run,source:'native'} as RunSnapshot;}
+ else if(e.type==='run_changed'){const current=state.run||fallbackRun(e.teamId,e.run.id);const patch=Object.fromEntries(Object.entries(e.run).filter(([,value])=>value!==undefined));state.run={...current,...patch,source:'native'} as RunSnapshot;}
  else if(e.type==='room_run_changed'&&state.run?.id===e.runId){state.run.roomRuns[e.roomRuntime.roomId]=e.roomRuntime;if(e.roomRuntime.status==='completed'&&!state.run.completedRoomIds.includes(e.roomRuntime.roomId))state.run.completedRoomIds=[...state.run.completedRoomIds,e.roomRuntime.roomId];}
  else if(e.type==='publication_changed'&&state.run?.id===e.runId)state.run.publication=e.publication;
  else if(e.type==='reconcile'){void reconcile();return;}

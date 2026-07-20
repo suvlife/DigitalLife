@@ -373,12 +373,15 @@ def _build_secure_litellm_client(
     base_url: str,
     custom_llm_provider: str | None,
 ) -> tuple[Any, AsyncHTTPHandler | None]:
-    """Build the pinned transport used by every normal Agent inference request.
+    """Build the secure transport used by every normal Agent inference request.
 
-    LiteLLM 1.84 routes OpenAI-compatible providers through ``shared_session``.
-    Anthropic and Gemini accept an ``AsyncHTTPHandler`` instead, so both forms
-    are supplied from the same pinned aiohttp session. Unknown provider adapters
-    are rejected because they may silently ignore both hooks and resolve DNS again.
+    Public endpoints get a DNS-pinned aiohttp session; private/loopback endpoints
+    (local LLMs, proxy fake-IPs) fall back to a plain session — see
+    ``create_pinned_client_session``. LiteLLM 1.84 routes OpenAI-compatible
+    providers through ``shared_session``. Anthropic and Gemini accept an
+    ``AsyncHTTPHandler`` instead, so both forms are supplied from the same session.
+    Unknown provider adapters are rejected because they may silently ignore both
+    hooks and resolve DNS again.
     """
     provider = (custom_llm_provider or "").strip().lower()
     if provider not in _SECURE_SESSION_PROVIDERS:
@@ -390,17 +393,17 @@ def _build_secure_litellm_client(
     # passing LiteLLM's HTTP handler there breaks the SDK path. They consume
     # ``shared_session`` directly. Anthropic/Gemini adapters accept the handler.
     #
-    # H10 (SSRF pinning fail-open) — for openai/deepseek DNS pinning relies ENTIRELY
-    # on LiteLLM (>=1.84) consuming ``shared_session`` (our pinned aiohttp session)
-    # for the outbound request. This is an internal, undocumented LiteLLM contract:
-    # if a future version stops reusing ``shared_session`` it would build its own
-    # httpx client and re-resolve DNS, silently defeating ``_PinnedResolver`` (DNS
-    # rebinding window). We cannot inject an httpx-based pinned client here because
-    # ``create_pinned_client_session`` yields an aiohttp session, not an httpx one.
-    # The assertion below at least guarantees the pinned session was created; the
-    # remaining reliance is documented and should be covered by an integration test
-    # asserting outbound traffic goes through the pinned resolver.
-    assert session is not None, "pinned aiohttp session 必须创建成功，否则 openai/deepseek DNS pinning 会 fail-open"
+    # H10 (SSRF pinning fail-open) — for openai/deepseek, when the endpoint is
+    # public, DNS pinning relies ENTIRELY on LiteLLM (>=1.84) consuming
+    # ``shared_session`` (our pinned aiohttp session) for the outbound request.
+    # This is an internal, undocumented LiteLLM contract: if a future version
+    # stops reusing ``shared_session`` it would build its own httpx client and
+    # re-resolve DNS, silently defeating ``_PinnedResolver`` (DNS rebinding
+    # window). We cannot inject an httpx-based pinned client here because
+    # ``create_pinned_client_session`` yields an aiohttp session, not an httpx
+    # one. Private endpoints intentionally get an unpinned session, so this
+    # reliance only matters for public ones.
+    assert session is not None, "aiohttp session 必须创建成功"
     safe_client = None if provider in {"openai", "deepseek"} else AsyncHTTPHandler(shared_session=session)
     return session, safe_client
 

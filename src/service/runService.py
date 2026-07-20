@@ -573,6 +573,7 @@ async def update_blog_publish_status(
     messageBus.publish(
         MessageBusTopic.BLOG_PUBLISH_CHANGED,
         run_id=run_id,
+        team_id=run.team_id,
         status=status,
         post_id=post_id,
         post_url=post_url,
@@ -597,9 +598,9 @@ async def _find_active_run_for_room(room: GtRoom, *, run_id: int | None = None) 
     if len(associations) == 1:
         return await gtTaskRunManager.get_run(associations[0].run_id)
     if len(associations) > 1:
-        # 多个关联：返回最新的一个，不再刷日志或清理（避免竞态）
-        latest = associations[-1]
-        return await gtTaskRunManager.get_run(latest.run_id)
+        # 缺少 run_id 的旧事件在多个活动关联下无法安全归属：必须丢弃，
+        # 不能按"最新关联"猜测，否则会把别的 Run 的 room_run 误改状态（串线）。
+        return None
 
     # 没有关联记录：团队只有一个活动 Run 时才 fallback
     active_runs = await gtTaskRunManager.list_active_runs_for_team(room.team_id)

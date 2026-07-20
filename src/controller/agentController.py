@@ -48,13 +48,12 @@ class AgentListHandler(BaseHandler):
     """GET /agents/list.json?team_id=<id> - 获取 team 的成员配置列表"""
 
     async def get(self):
-        team_id_raw = self.get_query_argument("team_id", None)
+        team_id = self.get_int_argument("team_id")
         include_special_raw = self.get_query_argument("include_special", "false")
-        if not team_id_raw:
+        if team_id is None:
             self.return_json({"agents": []})
             return
 
-        team_id = int(team_id_raw)
         await self._assert_team_readable(team_id)
         team = await gtTeamManager.get_team_by_id(team_id)
         assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
@@ -192,9 +191,8 @@ class AgentTasksHandler(BaseHandler):
     async def get(self, agent_id_str: str) -> None:
         agent_id = int(agent_id_str)
         await self._assert_agent_owned(agent_id)
-        limit_raw = self.get_query_argument("limit", "30")
         include_closed_raw = self.get_query_argument("include_closed", "false")
-        limit = max(1, min(int(limit_raw), 100))
+        limit = self.get_int_argument("limit", default=30, min_val=1, max_val=100)
         include_closed = include_closed_raw.strip().lower() in {"1", "true", "yes", "on"}
 
         agents = await gtAgentManager.get_agents_by_ids([agent_id])
@@ -221,9 +219,8 @@ class TeamTasksHandler(BaseHandler):
     async def get(self, team_id_str: str) -> None:
         team_id = int(team_id_str)
         await self._assert_team_owned(team_id)
-        limit_raw = self.get_query_argument("limit", "500")
         include_closed_raw = self.get_query_argument("include_closed", "false")
-        limit = max(1, min(int(limit_raw), 1000))
+        limit = self.get_int_argument("limit", default=500, min_val=1, max_val=1000)
         include_closed = include_closed_raw.strip().lower() in {"1", "true", "yes", "on"}
 
         team = await gtTeamManager.get_team_by_id(team_id)

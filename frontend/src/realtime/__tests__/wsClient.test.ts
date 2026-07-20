@@ -162,6 +162,33 @@ describe('wsClient', () => {
     expect(connectionState.value).toBe('connected');
   });
 
+  it('marks the socket connected after reauthenticating on a reconnect', () => {
+    authEnabled.value = true;
+    getTokenMock.mockReturnValue('secret-token');
+
+    startRealtimeClient();
+    sockets[0]?.emit('open');
+    sockets[0]?.emit('message', JSON.stringify({ event: 'schedule_state' }));
+    expect(connectionState.value).toBe('connected');
+
+    sockets[0]?.emit('close');
+    expect(connectionState.value).toBe('waiting_reconnect');
+
+    vi.advanceTimersByTime(3000);
+    expect(sockets).toHaveLength(2);
+    expect(connectionState.value).toBe('reconnecting');
+
+    sockets[1]?.emit('open');
+    expect(sockets[1]?.sentMessages).toEqual([
+      JSON.stringify({ type: 'auth', token: 'secret-token' }),
+    ]);
+    // 重连认证期间保持 reconnecting，第一条消息到达才确认认证成功
+    expect(connectionState.value).toBe('reconnecting');
+
+    sockets[1]?.emit('message', JSON.stringify({ event: 'schedule_state' }));
+    expect(connectionState.value).toBe('connected');
+  });
+
   it('cancels pending reconnects when stopped', () => {
     startRealtimeClient();
     sockets[0]?.emit('open');

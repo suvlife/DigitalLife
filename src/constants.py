@@ -84,7 +84,7 @@ class MessageBusTopic(EnhanceEnum):
     RUN_PROGRESS_CHANGED = auto()      # Run 阶段/真实进度变化；payload: run(dict)
     ROOM_RUN_CHANGED = auto()          # Run 内房间状态变化；payload: room_run(dict), run_id(int)
     FINAL_ANSWER_COMPLETED = auto()     # 最终回答持久化完成；payload: run(dict), final_answer(str)
-    BLOG_PUBLISH_CHANGED = auto()      # 博客发布状态变化；payload: run_id(int), status(str), post_url(str|None)
+    BLOG_PUBLISH_CHANGED = auto()      # 博客发布状态变化；payload: run_id(int), team_id(int), status(str), post_url(str|None)
 
 
 class RoomType(EnhanceEnum):

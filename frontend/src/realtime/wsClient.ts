@@ -145,8 +145,13 @@ function connectRealtimeSocket(): void {
       return;
     }
 
-    // 鉴权启用时，第一条消息到达表示认证成功
-    if (authEnabled.value && connectionState.value === 'connecting') {
+    // 鉴权启用时，第一条消息到达表示认证成功。
+    // 重连期间状态是 'reconnecting'，与首次 'connecting' 一样需要迁移，
+    // 否则重连成功后永远卡在重连态、断线期间的刷新 watcher 不再触发。
+    if (
+      authEnabled.value &&
+      (connectionState.value === 'connecting' || connectionState.value === 'reconnecting')
+    ) {
       connectionState.value = 'connected';
       reconnectAttempt = 0;
     }

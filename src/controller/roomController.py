@@ -132,10 +132,9 @@ async def _get_team_room_or_404(team_id: int, room_id: int) -> GtRoom:
 
 class RoomListHandler(BaseHandler):
     async def get(self) -> None:
-        team_id_raw = self.get_query_argument("team_id", None)
+        team_id = self.get_int_argument("team_id")
 
-        if team_id_raw:
-            team_id = int(team_id_raw)
+        if team_id is not None:
             await self._assert_team_owned(team_id)
             gt_rooms = await gtRoomManager.get_rooms_by_team(team_id)
             data = [
@@ -181,18 +180,13 @@ class RoomMessagesHandler(BaseHandler):
     async def get(self, room_id_str: str) -> None:
         room_id = int(room_id_str)
         await self._assert_room_owned(room_id)
-        limit_raw = self.get_query_argument("limit", None)
-        before_id_raw = self.get_query_argument("before_id", None)
         gt_room = await GtRoom.aio_get_or_none(GtRoom.id == room_id)
         assertUtil.assertNotNull(gt_room, error_message=f"room_id '{room_id}' not found", error_code="room_not_found")
         gt_team = await gtTeamManager.get_team_by_id(gt_room.team_id)
         team_name = gt_team.name if gt_team else ""
 
-        limit = None
-        if limit_raw is not None:
-            limit = max(1, min(int(limit_raw), 100))
-
-        before_id = int(before_id_raw) if before_id_raw is not None else None
+        limit = self.get_int_argument("limit", min_val=1, max_val=100)
+        before_id = self.get_int_argument("before_id")
 
         gt_messages, has_more = await roomService.get_room_messages_from_db(
             room_id,

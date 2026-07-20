@@ -44,6 +44,11 @@ _REMINDER_PROMPT = (
 )
 _RUN_CHAT_TURN_MAX_RETRIES = 3
 
+# SDK turn 外层 re-query 循环的总尝试硬上限：与 native 路径 _MAX_TURN_STEPS 对齐。
+# 行为异常的模型反复调用非 finish 工具时，has_tool_progress 会不断清零失败计数，
+# 没有总上限会在单个任务内无限消耗 API 配额（审计 H1）。
+_MAX_SDK_TURN_ATTEMPTS = 80
+
 # 严格审批模式（setting.security.sdk_tool_approval_strict=True）下拒绝的宿主级危险工具。
 # 这些是 claude_code 预设携带、可对宿主机造成命令执行/任意文件读写/绕过 SSRF 出网的工具。
 # 我们自建的 MCP chat 工具（mcp__chat__*）始终放行。
@@ -301,6 +306,13 @@ class ClaudeSdkAgentDriver(AgentDriver):
             attempt = 0
 
             while True:
+                if attempt >= _MAX_SDK_TURN_ATTEMPTS:
+                    # 总尝试硬上限：has_tool_progress 持续清零失败计数时防无限 re-query。
+                    # 走到这里 _turn_done 必为 False，由循环外统一抛错受控收尾。
+                    logger.error(
+                        f"SDK turn 达到总尝试硬上限，强制收尾: agent_id={self.host.gt_agent.id}, attempts={attempt}"
+                    )
+                    break
                 if attempt > 0:
                     logger.info(f"SDK 注入发言提醒: agent_id={self.host.gt_agent.id}, retry={failed_action_count}/{turn_setup.max_retries}, attempt={attempt}")
                     await client.query(hint)

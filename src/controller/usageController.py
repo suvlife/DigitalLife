@@ -8,12 +8,16 @@ class UsageSummaryHandler(BaseHandler):
     """GET /usage/summary.json — Token 用量统计面板数据"""
 
     async def get(self) -> None:
-        team_id = self.get_argument("team_id", None)
+        team_id_int = self.get_int_argument("team_id")
         agent_ids = self.get_argument("agent_ids", None)
         days = self.get_argument("days", "7")
 
-        team_id_int = int(team_id) if team_id is not None else None
-        agent_ids_list = [int(x) for x in agent_ids.split(",") if x] if agent_ids else None
+        try:
+            agent_ids_list = [int(x) for x in agent_ids.split(",") if x] if agent_ids else None
+        except ValueError:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_argument", "error_desc": "参数 agent_ids 必须是逗号分隔的整数"})
+            return
         if team_id_int is None and not agent_ids_list:
             self.set_status(400)
             self.return_json({"error_code": "resource_required", "error_desc": "必须指定 team_id 或 agent_ids"})
@@ -44,14 +48,13 @@ class UsageTotalHandler(BaseHandler):
     """GET /usage/total.json — Token 用量汇总"""
 
     async def get(self) -> None:
-        team_id = self.get_argument("team_id", None)
+        team_id_int = self.get_int_argument("team_id")
         days = self.get_argument("days", "7")
 
-        if team_id is None:
+        if team_id_int is None:
             self.set_status(400)
             self.return_json({"error_code": "resource_required", "error_desc": "必须指定 team_id"})
             return
-        team_id_int = int(team_id)
         await self._assert_team_owned(team_id_int)
 
         try:
@@ -74,8 +77,7 @@ class UsageRealtimeHandler(BaseHandler):
     """GET /usage/realtime.json — 当前会话实时 Token 统计"""
 
     async def get(self) -> None:
-        team_id = self.get_argument("team_id", None)
-        team_id_int = int(team_id) if team_id is not None else None
+        team_id_int = self.get_int_argument("team_id")
         if team_id_int is not None:
             await self._assert_team_owned(team_id_int)
         else:

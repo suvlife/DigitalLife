@@ -169,8 +169,29 @@ class RoomScheduler:
         logger.info("房间 %s 当前 turn 被人工停止，切回 IDLE 等待新消息唤醒", self._key)
         self.publish_status(current_turn_agent_id=None)
 
+    async def handle_message(self, sender_id: int, *, run_id: int | None = None) -> Optional[int]:
+        """收到消息时更新调度状态（与 finish 同锁），必要时持久化并发布下一位待调度 Agent。
+
+        on_message 的状态变更与"算 next + 持久化 + publish"必须纳入同一把锁：
+        否则 finish 在 await persist_state() 期间，on_message 可无锁重置状态并
+        先调度一位 Agent，finish 恢复后再用陈旧 next_id 调度第二位——两个 Agent
+        被同时唤醒对同一房间行动（审计 H2）。
+        """
+        async with self._lock:
+            next_id = self.on_message(sender_id)
+            if next_id is not None:
+                await self.persist_state()
+                # persist_state 期间可能被 cancel_current_turn 改为 IDLE，
+                # 若状态已变则不广播调度事件（与 finish 路径同一防御）。
+                if self._state == RoomState.SCHEDULING:
+                    self.publish_status(next_id, need_scheduling=True, run_id=run_id)
+            return next_id
+
     def on_message(self, sender_id: int) -> Optional[int]:
-        """收到消息时更新调度状态，必要时返回下一位待调度 Agent。"""
+        """收到消息时更新调度状态，必要时返回下一位待调度 Agent。
+
+        不取锁的纯状态机；并发安全由 `handle_message`（锁封装）保证，外部不应直接调用。
+        """
         if self._state != RoomState.SCHEDULING:
             logger.info("检测到房间 %s 的活动 (agent=%s)，重置轮次计数器并唤醒房间",
                         self._key, gtAgentManager.get_agent_name(sender_id))

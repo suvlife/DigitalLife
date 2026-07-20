@@ -398,7 +398,7 @@ class BaseHandler(tornado.web.RequestHandler):
         await self._assert_team_owned(agent.team_id)
 
     def parse_request(self, model_class: type[T]) -> T:
-        """解析请求体为指定的 Pydantic 模型。"""
+        """解析请求体为指定的 Pydantic 模型。JSON 非法或字段校验失败统一返回 400。"""
         self._assert_json_content_type()
         try:
             body = json.loads(self.request.body)
@@ -406,7 +406,16 @@ class BaseHandler(tornado.web.RequestHandler):
             self.set_status(400)
             self.return_json({"error_code": "invalid_json", "error_desc": f"请求体必须是合法 JSON: {e}"})
             raise tornado.web.Finish()
-        return model_class(**body)
+        if not isinstance(body, dict):
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_json", "error_desc": "请求体必须是 JSON 对象"})
+            raise tornado.web.Finish()
+        try:
+            return model_class(**body)
+        except ValidationError as e:
+            self.set_status(400)
+            self.return_json({"error_code": "validation_error", "error_desc": format_validation_error(e)})
+            raise tornado.web.Finish()
 
     def parse_request_dict(self) -> dict:
         """解析请求体为 dict（用于不需要 Pydantic 模型的简单接口）。"""
@@ -425,7 +434,7 @@ class BaseHandler(tornado.web.RequestHandler):
 
     def get_int_argument(self, name: str, default: int | None = None, min_val: int | None = None, max_val: int | None = None) -> int | None:
         """安全解析整数查询参数。非法值返回 400 并 raise Finish。"""
-        raw = self.get_argument(name, default=None)
+        raw = self.get_query_argument(name, default=None)
         if raw is None:
             return default
         try:

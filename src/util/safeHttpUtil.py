@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import socket
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 from aiohttp.abc import AbstractResolver
 from aiohttp.abc import ResolveResult
+
+logger = logging.getLogger(__name__)
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _BLOCKED_HOSTS = frozenset({"localhost", "ip6-localhost", "ip6-loopback", "metadata.google.internal"})
@@ -168,25 +171,53 @@ def create_pinned_client_session(
     settings from bypassing the pinned connector. Callers own and must close the
     returned session.
 
-    When ``allow_private`` is True, private/loopback addresses are accepted and
-    DNS pinning is skipped (useful when the user's machine uses a proxy that
-    resolves domains to virtual IPs like 198.18.x.x).
+    When ``allow_private`` is True, the URL is still validated first: targets that
+    resolve to at least one public address get the pinned treatment (only the public
+    addresses are pinned). Only targets that are genuinely private — loopback, RFC1918,
+    or proxy fake-IPs like 198.18.x.x — fall back to a plain session using system DNS,
+    since pinning is impossible there (the user's proxy resolves domains to virtual
+    IPs). The fallback therefore applies to local LLMs and proxy deployments without
+    weakening the protection of public endpoints.
     """
-    if allow_private:
-        # 代理环境：跳过 DNS pinning，用系统默认 DNS（走代理）
-        if timeout is None:
-            tv = aiohttp.ClientTimeout(total=600)
-        elif isinstance(timeout, (int, float)):
-            tv = aiohttp.ClientTimeout(total=float(timeout))
-        else:
-            tv = timeout
-        connector = aiohttp.TCPConnector(use_dns_cache=False)
-        session = aiohttp.ClientSession(timeout=tv, connector=connector)
-        return session
+    if timeout is None:
+        timeout_value: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=600)
+    elif isinstance(timeout, (int, float)):
+        timeout_value = aiohttp.ClientTimeout(total=float(timeout))
+    else:
+        timeout_value = timeout
 
-    hostname, port, addresses = resolve_public_addresses(
-        url, field_name=field_name, allow_test_loopback=allow_test_loopback
-    )
+    if allow_private:
+        try:
+            resolved = resolve_public_addresses(
+                url, field_name=field_name, allow_test_loopback=allow_test_loopback
+            )
+        except UnsafeUrlError:
+            resolved = None
+        if resolved is None:
+            # 纯私网/回环/代理假 IP 目标无法做公网固定：确认其确属私有地址后降级为
+            # 普通会话（系统 DNS；代理环境依赖 fake-IP 路由）。本机 DNS 完全不可解析
+            # 时（仅代理可解析的内网域名）同样降级以保持代理部署可用——此时没有
+            # 固定保护，安全性依赖配置方自控，故记录告警。
+            try:
+                resolve_public_addresses(
+                    url,
+                    field_name=field_name,
+                    allow_test_loopback=allow_test_loopback,
+                    allow_private=True,
+                )
+            except UnsafeUrlError:
+                logger.warning(
+                    "%s 本机 DNS 无法解析且无公网地址，DNS pinning 降级为系统 DNS（仅代理可解析？）: %s",
+                    field_name, url,
+                )
+            connector = aiohttp.TCPConnector(use_dns_cache=False)
+            return aiohttp.ClientSession(timeout=timeout_value, connector=connector)
+        hostname, port, addresses = resolved
+    else:
+        hostname, port, addresses = resolve_public_addresses(
+            url, field_name=field_name, allow_test_loopback=allow_test_loopback
+        )
+
     connector = aiohttp.TCPConnector(
         resolver=_PinnedResolver(hostname, port, addresses),
         use_dns_cache=False,
@@ -194,12 +225,6 @@ def create_pinned_client_session(
     )
     trace_config = aiohttp.TraceConfig()
     trace_config.on_request_redirect.append(_reject_redirect)
-    if timeout is None:
-        timeout_value: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=600)
-    elif isinstance(timeout, (int, float)):
-        timeout_value = aiohttp.ClientTimeout(total=float(timeout))
-    else:
-        timeout_value = timeout
     return aiohttp.ClientSession(
         timeout=timeout_value,
         connector=connector,

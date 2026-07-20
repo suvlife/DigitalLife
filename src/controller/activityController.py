@@ -15,11 +15,14 @@ class AgentActivitiesHandler(BaseHandler):
         agent_id_int = int(agent_id)
         await self._assert_agent_owned(agent_id_int)
         exclude_raw = self.get_arguments("exclude")
-        exclude_types = [AgentActivityType[name.upper()] for name in exclude_raw]
-        limit_raw = self.get_query_argument("limit", "100")
-        before_id_raw = self.get_query_argument("before_id", None)
-        limit = max(1, min(int(limit_raw), 100))
-        before_id = int(before_id_raw) if before_id_raw is not None else None
+        try:
+            exclude_types = [AgentActivityType[name.upper()] for name in exclude_raw]
+        except KeyError as e:
+            self.set_status(400)
+            self.return_json({"error_code": "invalid_argument", "error_desc": f"未知的活动类型: {e}"})
+            return
+        limit = self.get_int_argument("limit", default=100, min_val=1, max_val=100)
+        before_id = self.get_int_argument("before_id")
         activities, has_more = await gtAgentActivityManager.list_agent_activities_page(
             agent_id_int,
             limit=limit,
@@ -58,9 +61,9 @@ class ActivitiesHandler(BaseHandler):
             self.return_json({"error_code": "resource_required", "error_desc": "必须指定 room_id、team_id 或 agent_id"})
             return
 
-        room_id = int(room_id_str) if room_id_str else None
-        team_id = int(team_id_str) if team_id_str else None
-        agent_id = int(agent_id_str) if agent_id_str else None
+        room_id = self.get_int_argument("room_id")
+        team_id = self.get_int_argument("team_id")
+        agent_id = self.get_int_argument("agent_id")
         if room_id is not None:
             await self._assert_room_owned(room_id)
         if team_id is not None:
@@ -83,8 +86,7 @@ class AgentThinkingTimelineHandler(BaseHandler):
     async def get(self, agent_id: str) -> None:
         agent_id_int = int(agent_id)
         await self._assert_agent_owned(agent_id_int)
-        limit_raw = self.get_query_argument("limit", "100")
-        limit = max(1, min(int(limit_raw), 200))
+        limit = self.get_int_argument("limit", default=100, min_val=1, max_val=200)
         activities = await gtAgentActivityManager.list_agent_activities(
             agent_id_int,
             limit=limit,
