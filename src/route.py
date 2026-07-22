@@ -152,6 +152,7 @@ application = tornado.web.Application([
 
     # System Status & Quick Init (V13)
     (r"/system/status.json",                         systemController.SystemStatusHandler),
+    (r"/system/metrics.json",                        systemController.SystemMetricsHandler),
     (r"/system/check_update.json",                   systemController.CheckUpdateHandler),
     (r"/system/update_config.json",                  systemController.UpdateConfigHandler),
     (r"/system/schedule/resume.json",                systemController.SystemScheduleResumeHandler),
@@ -190,6 +191,8 @@ application = tornado.web.Application([
     (r"/runs/list.json",                            runController.RunListHandler),
     (r"/runs/dossiers/list.json",                   runController.DossierListHandler),
     (r"/runs/(\d+).json",                          runController.RunDetailHandler),
+    (r"/runs/(\d+)/cancel.json",                   runController.RunCancelHandler),
+    (r"/runs/(\d+)/rooms/(\d+)/retry.json",        runController.RoomRetryHandler),
     (r"/runs/(\d+)/rooms.json",                    runController.RunRoomsHandler),
     (r"/runs/(\d+)/timeline.json",                 runController.RunTimelineHandler),
     (r"/runs/(\d+)/final_answer.json",             runController.RunFinalAnswerHandler),

@@ -301,3 +301,32 @@ class TestRunService(ServiceTestCase):
             item.status == RoomRunStatus.COMPLETED
             for item in await runService.list_room_runs(run.id)
         )
+
+    async def test_cancel_run_marks_cancelled_and_is_idempotent(self, monkeypatch):
+        """cancel_run 把运行中的 Run 置为 CANCELLED，且对已终态的 Run 幂等。"""
+        await self._reset()
+        room = GtRoom(team_id=11, name="cancel-room", type=RoomType.GROUP, agent_ids=[1, 2], tags=[])
+        await room.aio_save()
+        message = GtRoomMessage(
+            room_id=room.id, sender_id=-1, content="待取消的问策",
+            send_time=datetime.now(timezone.utc), insert_immediately=False, seq=0,
+        )
+        await message.aio_save()
+        run = await runService.create_run_for_user_message(
+            team_id=11, root_room_id=room.id, user_message_id=message.id,
+            query=message.content, owner_user_id=3,
+        )
+        await runService.set_run_status(run.id, TaskRunStatus.DISCUSSING)
+
+        # cancel_run 内部 lazy import agentService；mock get_team_agents 返回空，
+        # fail_running_tasks 对空 agent 列表无操作，聚焦验证 Run 状态迁移。
+        from service import agentService
+        monkeypatch.setattr(agentService, "get_team_agents", lambda _team_id: [])
+
+        cancelled = await runService.cancel_run(run.id)
+        assert cancelled.status == TaskRunStatus.CANCELLED
+        assert cancelled.finished_at is not None
+
+        # 再次取消（已终态）幂等：不抛错，状态不变
+        again = await runService.cancel_run(run.id)
+        assert again.status == TaskRunStatus.CANCELLED

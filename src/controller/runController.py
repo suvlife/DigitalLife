@@ -77,6 +77,31 @@ class RunDetailHandler(_RunOwnedHandler):
         self.return_json(snapshot)
 
 
+class RunCancelHandler(_RunOwnedHandler):
+    """POST /runs/{id}/cancel.json - 取消运行中的 Run（停所有 Agent + 标 CANCELLED）。"""
+
+    async def post(self, run_id_str: str) -> None:
+        run_id = int(run_id_str)
+        run = await self._load_owned_run(run_id)
+        from constants import TaskRunStatus
+        if run.status == TaskRunStatus.CANCELLED:
+            self.return_success(status="cancelled", run_id=run_id, already_cancelled=True)
+            return
+        await runService.cancel_run(run_id)
+        self.return_success(status="cancelled", run_id=run_id)
+
+
+class RoomRetryHandler(_RunOwnedHandler):
+    """POST /runs/{run_id}/rooms/{room_id}/retry.json - 重试单个房间（重开讨论，保留历史）。"""
+
+    async def post(self, run_id_str: str, room_id_str: str) -> None:
+        run_id = int(run_id_str)
+        room_id = int(room_id_str)
+        await self._load_owned_run(run_id)
+        room_run = await runService.retry_room(run_id, room_id)
+        self.return_success(status="retrying", run_id=run_id, room_id=room_id, room_run=room_run)
+
+
 class RunRoomsHandler(_RunOwnedHandler):
     """GET /runs/{id}/rooms.json"""
 

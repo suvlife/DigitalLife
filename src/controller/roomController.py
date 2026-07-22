@@ -258,9 +258,60 @@ class RoomMessagesHandler(BaseHandler):
             )
             # 设置当前活动 Run ID，使后续调度事件能精准关联到此 Run
             room.current_run_id = new_run.id if new_run else None
+
+            # 自动跨室派发：用户在主殿（GROUP 房间）提问时，把问题派发到团队的其他
+            # GROUP 研究室，激活并行讨论。不依赖 LLM 调用 dispatch_to_room 工具
+            # （部分模型 function calling 不可靠），改为代码层自动派发。
+            if room.room_type == RoomType.GROUP:
+                await self._auto_dispatch_to_research_rooms(gt_room.team_id, room_id, content)
+
         if room.get_current_turn_agent_id() == room.OPERATOR_MEMBER_ID:
             await room.handle_finish_request(room.OPERATOR_MEMBER_ID)
         self.return_success()
+
+    @staticmethod
+    async def _auto_dispatch_to_research_rooms(team_id: int, source_room_id: int, question: str) -> None:
+        """将用户问题自动派发到团队的其他 GROUP 研究室，激活并行讨论。
+
+        以 SYSTEM 身份向每个目标研究室发送派发消息，触发该室的调度激活。
+        仅派发到 GROUP 类型且非源房间的房间，跳过 PRIVATE 单聊和空房间。
+        """
+        from constants import SpecialAgent, RoomType
+        from service import roomService as _rs
+        import logging as _lg
+        _logger = _lg.getLogger("service.roomService")
+
+        _logger.info("auto-dispatch 开始: team_id=%s, source_room=%s, question=%s", team_id, source_room_id, question[:60])
+
+        try:
+            team_rooms = await gtRoomManager.get_rooms_by_team(team_id)
+        except Exception as e:
+            _logger.warning("auto-dispatch: 获取团队房间失败: %s", e)
+            return
+        dispatch_content = f"【主问策室派发】操作者提问：{question}"
+        dispatched = 0
+        for gt_r in team_rooms:
+            if gt_r.id == source_room_id:
+                continue  # 跳过源房间（主殿）
+            if gt_r.type != RoomType.GROUP:
+                continue  # 仅派发到 GROUP 研究室
+            if not (gt_r.agent_ids or []):
+                continue  # 跳过空房间
+            target = _rs.get_room(gt_r.id)
+            if target is None:
+                try:
+                    target = await _rs.load_and_activate_room(gt_r.id)
+                except Exception:
+                    _logger.warning("auto-dispatch: 房间 %s 加载失败", gt_r.id)
+                    continue
+            if target is None:
+                continue
+            try:
+                await target.add_message(int(SpecialAgent.OPERATOR.value), dispatch_content)
+                dispatched += 1
+                _logger.info("auto-dispatch: room=%s(源=%s) 已派发问题", gt_r.name, source_room_id)
+            except Exception as e:
+                _logger.warning("auto-dispatch: 房间 %s 派发失败: %s", gt_r.name, e)
 
 
 class RoomNewSessionHandler(BaseHandler):

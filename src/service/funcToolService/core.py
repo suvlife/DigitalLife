@@ -29,6 +29,7 @@ from .tools import (
     save_role_template,
     save_room,
     send_chat_msg,
+    dispatch_to_room,
     submit_conclusion,
     update_task,
     wake_up_agent,
@@ -52,6 +53,7 @@ def load_func_tools() -> dict[str, FuncTool]:
     _registry: dict[str, Any] = {
         "get_time": get_time,
         "send_chat_msg": send_chat_msg,
+        "dispatch_to_room": dispatch_to_room,
         "finish_action": finish_action,
         "submit_conclusion": submit_conclusion,
         "get_dept_info": get_dept_info,

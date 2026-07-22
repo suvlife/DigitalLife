@@ -401,6 +401,110 @@ async def set_run_status(
     return run
 
 
+async def cancel_run(run_id: int, *, error_message: str = "用户取消运行") -> GtTaskRun:
+    """取消一个运行中的 Run：停掉该团队所有 Agent 的当前 turn 与消费协程，
+    将其 RUNNING 任务标记为 FAILED（防止重启恢复后继续），最后把 Run 置为 CANCELLED。
+
+    对已进入终态的 Run 调用是幂等的（直接返回当前状态）。
+    """
+    run = await gtTaskRunManager.get_run(run_id)
+    if run is None:
+        raise RuntimeError(f"TaskRun not found: {run_id}")
+    if run.status in _TERMINAL_RUN_STATUSES:
+        return run  # 已终态，幂等返回
+
+    # 停止该团队所有 Agent：取消在途 turn + 停止消费协程 + 标记 RUNNING 任务为 FAILED。
+    # lazy import 避免 runService <-> agentService/persistenceService 的循环依赖。
+    from service import agentService, persistenceService
+    for agent in agentService.get_team_agents(run.team_id):
+        agent.cancel_current_turn()
+        agent.stop_consumer_task()
+        await persistenceService.fail_running_tasks(agent.gt_agent.id, error_message=error_message)
+
+    return await set_run_status(run_id, TaskRunStatus.CANCELLED, error_message=error_message)
+
+
+# 可重试的房间状态：失败/跳过/已完成（对结论不满意想重谈）
+_RETRYABLE_ROOM_STATUSES = frozenset({
+    RoomRunStatus.FAILED, RoomRunStatus.SKIPPED, RoomRunStatus.COMPLETED,
+})
+
+
+async def retry_room(run_id: int, room_id: int) -> GtRoomRun:
+    """重试单个房间：在同一 Run 内重开该房间讨论。
+
+    语义（与用户确认的设计）：
+    - 旧消息保留并插入分隔系统消息标记"上一轮"，供 Agent 参考、避免复读；
+    - room_run 重置为 DISCUSSING、进度清零、completed_contributors 清零；
+    - 该房间的调度任务重置为 PENDING，大师们重新贡献；
+    - 若 Run 已终态，回退为 DISCUSSING 以恢复调度；
+    - 通过 chatRoom.handle_message 重新触发调度，其他房间不受影响。
+    """
+    from datetime import timezone
+    from peewee import fn
+    from model.dbModel.gtScheculeTask import GtScheculeTask
+    from constants import AgentTaskStatus
+    from service import roomService
+
+    run = await gtTaskRunManager.get_run(run_id)
+    if run is None:
+        raise RuntimeError(f"TaskRun not found: {run_id}")
+    room_run = await gtRoomRunManager.get_room_run(run_id, room_id)
+    if room_run is None:
+        raise RuntimeError(f"RoomRun not found: run_id={run_id}, room_id={room_id}")
+    if room_run.status not in _RETRYABLE_ROOM_STATUSES:
+        raise RuntimeError(f"房间当前状态 {room_run.status} 不可重试（仅 FAILED/SKIPPED/COMPLETED 可重试）")
+
+    # 1. 插入"上一轮"分隔系统消息，标记历史与新一轮的边界（不改 schema，用消息内容分隔）
+    sep_content = "━━━ 以上为上一轮讨论，保留供参考；新讨论自此线之下开始，请勿重复已有观点 ━━━"
+    chat_room = roomService.get_room(room_id)
+    if chat_room is not None:
+        # 走房间 store：内存+DB 一致并分配 seq、广播消息事件（前端实时看到分隔线）
+        sep_msg = GtRoomMessage(
+            room_id=room_id, sender_id=int(SpecialAgent.SYSTEM.value),
+            content=sep_content, send_time=datetime.now(timezone.utc), insert_immediately=True,
+        )
+        await chat_room._store.append_and_assign_seq(sep_msg, publish=True)
+    else:
+        # 房间未加载（如历史卷宗）：仅落 DB，下次加载时同步
+        await gtRoomMessageManager.append_room_message(
+            room_id=room_id, sender_id=int(SpecialAgent.SYSTEM.value),
+            content=sep_content, send_time=datetime.now(timezone.utc), insert_immediately=True,
+        )
+
+    # 2. 重置 room_run 为 DISCUSSING
+    await gtRoomRunManager.update_room_run(
+        room_run.id,
+        status=RoomRunStatus.DISCUSSING, progress_percent=0,
+        current_agent_id=None, current_activity=None,
+        completed_contributors=0, error_message=None, finished_at=None,
+    )
+
+    # 3. 重置该房间的调度任务为 PENDING（task_data.room_id 存于 JSON，用 json_extract 下推）
+    await (
+        GtScheculeTask
+        .update(status=AgentTaskStatus.PENDING, error_message=None)
+        .where(
+            GtScheculeTask.team_id == run.team_id,
+            fn.json_extract(GtScheculeTask.task_data, "$.room_id") == room_id,
+        )
+        .aio_execute()
+    )
+
+    # 4. 若 Run 已终态，回退为 DISCUSSING 恢复调度
+    if run.status in _TERMINAL_RUN_STATUSES:
+        await set_run_status(run_id, TaskRunStatus.DISCUSSING, error_message=None)
+
+    # 5. 重新触发该房间的调度（handle_message 会重置调度状态机并派发下一位 Agent）
+    if chat_room is not None:
+        await chat_room.handle_message(int(SpecialAgent.OPERATOR.value), run_id=run_id)
+
+    # 6. 广播 room_run 变更事件，前端实时更新
+    updated_rr = await gtRoomRunManager.get_room_run(run_id, room_id)
+    messageBus.publish(MessageBusTopic.ROOM_RUN_CHANGED, run_id=run_id, room_run=_room_run_payload(updated_rr))
+    return updated_rr
+
+
 async def update_room_status(
     *,
     run_id: int,

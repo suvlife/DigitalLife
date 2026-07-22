@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import MarkdownContent from '../components/MarkdownContent.vue';
-import { downloadFile, getDossier } from '../api/client';
+import { downloadFile, getDossier, getRun, retryRoom } from '../api/client';
 import type { DossierDetail } from '../api/client';
+import type { RunSnapshot, RoomRuntime } from '../domain/types';
 
 const route = useRoute();
+const router = useRouter();
 const teamId = computed(() => Number(route.params.teamId));
 const runId = computed(() => String(route.params.runId));
 const dossier = ref<DossierDetail | null>(null);
+const runSnapshot = ref<RunSnapshot | null>(null);
 const loading = ref(true);
 const error = ref('');
 const downloadError = ref('');
+const retryingRoomId = ref<number | null>(null);
 let requestId = 0;
 
 const phaseLabels: Record<string, string> = {
@@ -44,6 +48,7 @@ async function load() {
   try {
     const result = await getDossier(runId.value);
     if (current === requestId) dossier.value = result;
+    try { const snap = await getRun(runId.value); if (current === requestId) runSnapshot.value = snap; } catch { runSnapshot.value = null; }
   } catch (reason) {
     if (current === requestId) {
       dossier.value = null;
@@ -64,6 +69,20 @@ async function download() {
     downloadError.value = reason instanceof Error ? reason.message : '卷宗下载失败';
   }
 }
+
+async function retryRoomAction(roomId: number) {
+  if (!dossier.value || retryingRoomId.value !== null) return;
+  if (!confirm('重新讨论该房间？将保留上一轮发言供参考，诸位先生重新贡献一轮。')) return;
+  retryingRoomId.value = roomId;
+  try {
+    await retryRoom(dossier.value.run.id, roomId);
+    router.push({ name: 'room', params: { teamId: teamId.value, roomId } });
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '重试失败';
+  } finally { retryingRoomId.value = null; }
+}
+
+const roomList = computed<RoomRuntime[]>(() => Object.values(runSnapshot.value?.roomRuns || {}));
 
 onMounted(load);
 watch([teamId, runId], load);
@@ -101,6 +120,28 @@ watch([teamId, runId], load);
         <h2>本卷尚无结论</h2>
         <p>该问策尚未产出最终综合结论，待推演完成后卷宗正文将在此呈现。</p>
       </div>
+      <!-- 房间列表 + 重新讨论 -->
+      <div v-if="roomList.length" class="dossier-rooms">
+        <h3>各室研讨</h3>
+        <div v-for="rr in roomList" :key="rr.roomId" class="room-retry-row">
+          <span class="rr-name">{{ rr.roomId === runSnapshot?.rootRoomId ? '主问策室' : `研究室 ${rr.roomId}` }}</span>
+          <span class="rr-status" :class="`rr-st-${rr.status}`">{{ rr.status }}</span>
+          <span class="rr-progress">{{ rr.completedTasks }}/{{ rr.totalTasks }} 已贡献</span>
+          <button v-if="['completed','failed','skipped'].includes(rr.status)" class="gold-button small" :disabled="retryingRoomId === rr.roomId" @click="retryRoomAction(rr.roomId)">{{ retryingRoomId === rr.roomId ? '重试中…' : '重新讨论' }}</button>
+        </div>
+      </div>
     </section>
   </div>
 </template>
+<style scoped>
+.dossier-rooms{margin-top:1.5rem;padding-top:1rem;border-top:1px solid rgba(222,191,125,.18)}
+.dossier-rooms h3{font-size:1rem;color:var(--gold-light);margin:0 0 .8rem}
+.room-retry-row{display:flex;align-items:center;gap:.8rem;padding:.5rem .8rem;margin-bottom:.4rem;background:rgba(255,255,255,.03);border:1px solid var(--glass-border);border-radius:8px}
+.rr-name{font-size:.85rem;font-weight:600;color:var(--text);min-width:90px}
+.rr-status{font-size:.7rem;padding:1px 8px;border-radius:4px}
+.rr-st-completed{background:rgba(0,230,180,.12);color:var(--jade-light)}
+.rr-st-failed{background:rgba(255,82,82,.1);color:#f0b5a9}
+.rr-st-skipped{background:rgba(255,255,255,.06);color:var(--muted)}
+.rr-progress{font-size:.72rem;color:var(--muted);flex:1;font-family:var(--font-mono,"KaiTi",serif)}
+.gold-button.small{padding:4px 12px;font-size:.78rem}
+</style>
