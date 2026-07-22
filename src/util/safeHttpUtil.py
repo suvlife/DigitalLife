@@ -68,31 +68,19 @@ def _parse_target(url: str, *, field_name: str = "URL", allow_private: bool = Fa
     return hostname, port
 
 
-def resolve_public_addresses(
-    url: str, *, field_name: str = "URL", allow_test_loopback: bool = False,
-    allow_private: bool = False,
-) -> tuple[str, int, tuple[str, ...]]:
-    """Resolve one URL once and keep only globally routable addresses.
+def _filter_safe_addresses(
+    addresses: tuple[str, ...], *, field_name: str,
+    allow_test_loopback: bool, allow_private: bool,
+) -> tuple[str, ...]:
+    """从解析结果中筛出可用地址（公网 / 测试回环 / 允许的私有地址）。
 
-    A domain is accepted as long as it resolves to at least one global IP; only
-    those global IPs are returned so the pinned resolver never reaches a private
-    target. A purely private/loopback domain (no global IP) is still rejected.
-
-    When ``allow_private`` is True, private/loopback addresses are also accepted.
-    This is intended for LLM base_url configuration where users may point to
-    local services (e.g. Ollama at http://localhost:11434/v1).
+    只要存在至少一个 global IP 即视为公网域名；返回集合只保留可用 IP，
+    pinned resolver 只会连接这些 IP，实际请求不会打到内网；纯内网域名
+    （无任何 global IP）仍被拒绝。此函数纯内存计算，可在事件循环安全调用。
     """
-    hostname, port = _parse_target(url, field_name=field_name, allow_private=allow_private)
-    try:
-        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise UnsafeUrlError(f"{field_name} hostname could not be resolved") from exc
-    addresses = tuple(dict.fromkeys(item[4][0].split("%", 1)[0] for item in infos))
     if not addresses:
         raise UnsafeUrlError(f"{field_name} hostname could not be resolved")
     test_mode = os.environ.get("TEAMAGENT_ENV") == "test" or bool(os.environ.get("PYTEST_CURRENT_TEST"))
-    # 只要存在至少一个 global IP 即视为公网域名；返回集合只保留可用（global/测试回环）IP，
-    # pinned resolver 只会连接这些 IP，实际请求不会打到内网；纯内网域名（无任何 global IP）仍被拒绝。
     # 此前要求"所有 IP 必须 global"会误杀同时解析出公网+保留/ULA 地址的合法域名（DNS 拦截、双栈等场景）。
     safe_addresses: list[str] = []
     for address in addresses:
@@ -107,7 +95,67 @@ def resolve_public_addresses(
             safe_addresses.append(address)
     if not safe_addresses:
         raise UnsafeUrlError(f"{field_name} points to a non-public address")
-    return hostname, port, tuple(safe_addresses)
+    return tuple(safe_addresses)
+
+
+def resolve_public_addresses(
+    url: str, *, field_name: str = "URL", allow_test_loopback: bool = False,
+    allow_private: bool = False,
+) -> tuple[str, int, tuple[str, ...]]:
+    """Resolve one URL once and keep only globally routable addresses.
+
+    A domain is accepted as long as it resolves to at least one global IP; only
+    those global IPs are returned so the pinned resolver never reaches a private
+    target. A purely private/loopback domain (no global IP) is still rejected.
+
+    When ``allow_private`` is True, private/loopback addresses are also accepted.
+    This is intended for LLM base_url configuration where users may point to
+    local services (e.g. Ollama at http://localhost:11434/v1).
+
+    注意：本函数含同步 ``socket.getaddrinfo``，会阻塞事件循环。异步上下文请用
+    ``aresolve_public_addresses``。
+    """
+    hostname, port = _parse_target(url, field_name=field_name, allow_private=allow_private)
+    try:
+        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise UnsafeUrlError(f"{field_name} hostname could not be resolved") from exc
+    addresses = tuple(dict.fromkeys(item[4][0].split("%", 1)[0] for item in infos))
+    safe = _filter_safe_addresses(
+        addresses, field_name=field_name,
+        allow_test_loopback=allow_test_loopback, allow_private=allow_private,
+    )
+    return hostname, port, safe
+
+
+async def aresolve_public_addresses(
+    url: str, *, field_name: str = "URL", allow_test_loopback: bool = False,
+    allow_private: bool = False,
+) -> tuple[str, int, tuple[str, ...]]:
+    """``resolve_public_addresses`` 的异步版本：DNS 解析移到事件循环的
+    executor 线程，避免慢 DNS / 被劫持 DNS 冻结整个 Tornado 事件循环。
+
+    每次 LLM 推理（含每次重试）都会经 SSRF 校验解析目标地址，同步
+    ``socket.getaddrinfo`` 在 async 路径会阻塞所有并发 Agent 与 WebSocket。
+    这里用 ``loop.getaddrinfo`` 异步化，结果与同步版完全一致。
+    """
+    hostname, port = _parse_target(url, field_name=field_name, allow_private=allow_private)
+    loop = asyncio.get_running_loop()
+    try:
+        # 用 run_in_executor 显式调用模块级 socket.getaddrinfo（而非 loop.getaddrinfo），
+        # 一是与同步版解析路径完全一致（同样签名、同样可被测试 mock），二是移到 executor
+        # 线程避免慢/被劫持 DNS 阻塞事件循环。
+        infos = await loop.run_in_executor(
+            None, lambda: socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        )
+    except socket.gaierror as exc:
+        raise UnsafeUrlError(f"{field_name} hostname could not be resolved") from exc
+    addresses = tuple(dict.fromkeys(item[4][0].split("%", 1)[0] for item in infos))
+    safe = _filter_safe_addresses(
+        addresses, field_name=field_name,
+        allow_test_loopback=allow_test_loopback, allow_private=allow_private,
+    )
+    return hostname, port, safe
 
 
 def assert_safe_http_url(url: str, *, field_name: str = "URL", allow_private: bool = False) -> None:
@@ -154,70 +202,19 @@ async def _reject_redirect(
     raise UnsafeUrlError("validated upstream attempted an HTTP redirect")
 
 
-def create_pinned_client_session(
-    url: str,
-    *,
-    timeout: aiohttp.ClientTimeout | float | None = None,
-    field_name: str = "URL",
-    allow_test_loopback: bool = False,
-    allow_private: bool = False,
-) -> aiohttp.ClientSession:
-    """Create a one-origin session pinned to the URL's validated public IPs.
-
-    The original hostname remains in request URLs, preserving HTTP Host, TLS SNI,
-    and certificate hostname validation. The resolver refuses every other hostname
-    and a trace hook rejects redirects even if a downstream client accidentally
-    asks aiohttp to follow one. ``trust_env=False`` also prevents environment proxy
-    settings from bypassing the pinned connector. Callers own and must close the
-    returned session.
-
-    When ``allow_private`` is True, the URL is still validated first: targets that
-    resolve to at least one public address get the pinned treatment (only the public
-    addresses are pinned). Only targets that are genuinely private — loopback, RFC1918,
-    or proxy fake-IPs like 198.18.x.x — fall back to a plain session using system DNS,
-    since pinning is impossible there (the user's proxy resolves domains to virtual
-    IPs). The fallback therefore applies to local LLMs and proxy deployments without
-    weakening the protection of public endpoints.
-    """
+def _normalize_timeout(timeout: aiohttp.ClientTimeout | float | None, default_total: float) -> aiohttp.ClientTimeout:
     if timeout is None:
-        timeout_value: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=600)
-    elif isinstance(timeout, (int, float)):
-        timeout_value = aiohttp.ClientTimeout(total=float(timeout))
-    else:
-        timeout_value = timeout
+        return aiohttp.ClientTimeout(total=default_total)
+    if isinstance(timeout, (int, float)):
+        return aiohttp.ClientTimeout(total=float(timeout))
+    return timeout
 
-    if allow_private:
-        try:
-            resolved = resolve_public_addresses(
-                url, field_name=field_name, allow_test_loopback=allow_test_loopback
-            )
-        except UnsafeUrlError:
-            resolved = None
-        if resolved is None:
-            # 纯私网/回环/代理假 IP 目标无法做公网固定：确认其确属私有地址后降级为
-            # 普通会话（系统 DNS；代理环境依赖 fake-IP 路由）。本机 DNS 完全不可解析
-            # 时（仅代理可解析的内网域名）同样降级以保持代理部署可用——此时没有
-            # 固定保护，安全性依赖配置方自控，故记录告警。
-            try:
-                resolve_public_addresses(
-                    url,
-                    field_name=field_name,
-                    allow_test_loopback=allow_test_loopback,
-                    allow_private=True,
-                )
-            except UnsafeUrlError:
-                logger.warning(
-                    "%s 本机 DNS 无法解析且无公网地址，DNS pinning 降级为系统 DNS（仅代理可解析？）: %s",
-                    field_name, url,
-                )
-            connector = aiohttp.TCPConnector(use_dns_cache=False)
-            return aiohttp.ClientSession(timeout=timeout_value, connector=connector)
-        hostname, port, addresses = resolved
-    else:
-        hostname, port, addresses = resolve_public_addresses(
-            url, field_name=field_name, allow_test_loopback=allow_test_loopback
-        )
 
+def _pinned_session_from_addresses(
+    hostname: str, port: int, addresses: tuple[str, ...],
+    timeout_value: aiohttp.ClientTimeout,
+) -> aiohttp.ClientSession:
+    """用已校验的地址构建 pinned aiohttp session（公网固定 + 重定向拦截 + trust_env=False）。"""
     connector = aiohttp.TCPConnector(
         resolver=_PinnedResolver(hostname, port, addresses),
         use_dns_cache=False,
@@ -231,6 +228,83 @@ def create_pinned_client_session(
         trace_configs=[trace_config],
         trust_env=False,
     )
+
+
+def _fallback_plain_session(timeout_value: aiohttp.ClientTimeout, field_name: str, url: str) -> aiohttp.ClientSession:
+    """纯私网/代理假 IP 目标的降级普通会话（系统 DNS），并记录告警。"""
+    logger.warning(
+        "%s 本机 DNS 无法解析出公网地址，DNS pinning 降级为系统 DNS（本地 LLM / 代理 fake-IP）: %s",
+        field_name, url,
+    )
+    connector = aiohttp.TCPConnector(use_dns_cache=False)
+    return aiohttp.ClientSession(timeout=timeout_value, connector=connector)
+
+
+def create_pinned_client_session(
+    url: str,
+    *,
+    timeout: aiohttp.ClientTimeout | float | None = None,
+    field_name: str = "URL",
+    allow_test_loopback: bool = False,
+    allow_private: bool = False,
+) -> aiohttp.ClientSession:
+    """Create a one-origin session pinned to the URL's validated public IPs.
+
+    同步版本，含同步 ``socket.getaddrinfo``，会阻塞事件循环。异步上下文请用
+    ``acreate_pinned_client_session``。其余语义两者一致：公网地址走 pinned，
+    仅真私有（回环/RFC1918/代理假 IP）降级普通会话。
+    """
+    timeout_value = _normalize_timeout(timeout, default_total=600)
+
+    if allow_private:
+        try:
+            resolved = resolve_public_addresses(
+                url, field_name=field_name, allow_test_loopback=allow_test_loopback
+            )
+        except UnsafeUrlError:
+            resolved = None
+        if resolved is None:
+            return _fallback_plain_session(timeout_value, field_name, url)
+        hostname, port, addresses = resolved
+    else:
+        hostname, port, addresses = resolve_public_addresses(
+            url, field_name=field_name, allow_test_loopback=allow_test_loopback
+        )
+
+    return _pinned_session_from_addresses(hostname, port, addresses, timeout_value)
+
+
+async def acreate_pinned_client_session(
+    url: str,
+    *,
+    timeout: aiohttp.ClientTimeout | float | None = None,
+    field_name: str = "URL",
+    allow_test_loopback: bool = False,
+    allow_private: bool = False,
+) -> aiohttp.ClientSession:
+    """``create_pinned_client_session`` 的异步版本：DNS 解析移到 executor 线程，
+    避免每次 LLM 推理（含重试）在事件循环里同步 getaddrinfo 阻塞所有并发任务。
+
+    语义与同步版完全一致（公网 pinned / 真私有降级），仅解析方式异步化。
+    """
+    timeout_value = _normalize_timeout(timeout, default_total=600)
+
+    if allow_private:
+        try:
+            resolved = await aresolve_public_addresses(
+                url, field_name=field_name, allow_test_loopback=allow_test_loopback
+            )
+        except UnsafeUrlError:
+            resolved = None
+        if resolved is None:
+            return _fallback_plain_session(timeout_value, field_name, url)
+        hostname, port, addresses = resolved
+    else:
+        hostname, port, addresses = await aresolve_public_addresses(
+            url, field_name=field_name, allow_test_loopback=allow_test_loopback
+        )
+
+    return _pinned_session_from_addresses(hostname, port, addresses, timeout_value)
 
 
 def _redirect_method(status: int, method: str) -> str:
@@ -301,7 +375,7 @@ async def request(
         if current_url in visited:
             raise TooManyRedirectsError(f"{field_name} redirect loop detected")
         visited.add(current_url)
-        hostname, port, addresses = resolve_public_addresses(current_url, field_name=field_name, allow_private=allow_private)
+        hostname, port, addresses = await aresolve_public_addresses(current_url, field_name=field_name, allow_private=allow_private)
         # allow_private=True 时跳过 DNS pinning，使用系统默认 DNS 解析。
         # 原因：用户可能使用代理软件（Surge/Clash），代理通过 DNS 劫持
         # 将域名解析到 198.18.x.x 虚假 IP 再透明转发。DNS pinning 会绑定

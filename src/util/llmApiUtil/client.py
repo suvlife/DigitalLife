@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 from constants import OpenaiApiRole
-from util.safeHttpUtil import create_pinned_client_session
+from util.safeHttpUtil import create_pinned_client_session, acreate_pinned_client_session  # noqa: F401
 from .OpenAiModels import (
     OpenAIFunction,
     OpenAIFunctionParameter,
@@ -22,6 +22,48 @@ from .OpenAiModels import (
 
 logger = logging.getLogger(__name__)
 _REDACTED_HEADER_KEYS = {"authorization", "api-key", "x-api-key", "proxy-authorization"}
+
+# ── 安全 session 池（修复 #9：LLM 每请求新建销毁 session、零连接复用）──
+# 按 (base_url, provider) 缓存 pinned session。同 base_url 的不同请求复用同一 session，
+# aiohttp connector 为每个请求分配独立连接（无并发串扰），并复用 keep-alive 连接
+# （消除每次推理含 9 次重试都重复 TCP+TLS 握手的开销）。SSRF 安全语义不变：
+# 同一 (base_url, provider) 的 pinned resolver/SSL/重定向拦截策略完全一致。
+_SECURE_SESSION_POOL: dict[tuple[str, str], Any] = {}
+_SECURE_SESSION_POOL_LOCK = None  # 惰性创建的 asyncio.Lock
+
+# 是否启用 session 池。默认关闭--litellm 内部可能在请求后关闭 shared_session，
+# 导致池中已关闭的 session 被后续请求复用而挂起（生产实测卡死）。
+# 待查明 litellm 对 shared_session 的生命周期管理后可安全启用。
+_SESSION_POOL_ENABLED = False
+
+
+def _get_session_pool_lock():
+    global _SECURE_SESSION_POOL_LOCK
+    if _SECURE_SESSION_POOL_LOCK is None:
+        import asyncio as _asyncio
+        _SECURE_SESSION_POOL_LOCK = _asyncio.Lock()
+    return _SECURE_SESSION_POOL_LOCK
+
+
+async def close_secure_session_pool() -> None:
+    """关闭并清空 session 池（进程 shutdown / 配置变更时调用）。"""
+    async with _get_session_pool_lock():
+        sessions = list(_SECURE_SESSION_POOL.values())
+        _SECURE_SESSION_POOL.clear()
+    for s in sessions:
+        try:
+            await s.close()
+        except Exception:
+            pass
+
+
+def clear_secure_session_pool_sync() -> None:
+    """同步丢弃池中 session 引用（不 await 关闭）。
+
+    用于配置热更新等无法 await 的同步上下文：立即切断后续请求对旧 session 的复用，
+    已丢弃的 session 由其后台回收（aiohttp session 在 GC 时关闭底层 connector）。
+    """
+    _SECURE_SESSION_POOL.clear()
 
 # M16：litellm.acompletion 显式请求超时（秒）。仅靠会话级 ClientTimeout(total=600)
 # 时，慢上游会长时间占用 ServiceRequestGate 并发槽（默认 max_concurrency=5，5 个挂起即耗尽）。
@@ -181,6 +223,37 @@ def _sanitize_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     return sanitized
 
 
+# URL query 中可能携带密钥的参数名（如 Gemini 把 api_key 放在 ?key=）
+_REDACTED_QUERY_KEYS = frozenset({
+    "key", "api_key", "apikey", "api-key", "access_token", "token", "secret", "password",
+})
+
+
+def _sanitize_url(url: str | None) -> str | None:
+    """脱敏 URL query 中的密钥参数，防止错误日志把上游 api_key 落盘。
+
+    典型场景：litellm 的 Gemini 适配器把密钥放在 `?key=`，异常时整条 URL
+    （含密钥）会被记入错误日志。仅替换敏感参数的 value，保留其余以便诊断。
+    """
+    if not url:
+        return url
+    try:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        parts = urlsplit(url)
+        if not parts.query:
+            return url
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+        sanitized = [
+            (k, "***" if k.lower() in _REDACTED_QUERY_KEYS else v)
+            for k, v in pairs
+        ]
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(sanitized), parts.fragment))
+    except Exception:
+        # 解析失败时兜底：至少不返回原始（可能含密钥）的完整 URL
+        return urlsplit(url)._replace(query="").geturl() if "?" in url else url
+
+
 def _to_log_data(value: Any) -> Any:
     if value is None:
         return None
@@ -267,7 +340,7 @@ def _log_raw_response(error: Exception, request_id: str, stream: bool) -> None:
                 raw_body = raw_body[:4096] + f"... (truncated, total {len(raw_body)} bytes)"
             logger.error(
                 "LLM upstream raw response: request_id=%s, stream=%s, status_code=%s, url=%s, raw_body=%s",
-                request_id, stream, status_code, response_url, raw_body,
+                request_id, stream, status_code, _sanitize_url(response_url), raw_body,
             )
         else:
             logger.warning(
@@ -369,41 +442,25 @@ _ALLOWED_PROVIDER_PARAM_KEYS = frozenset({
 _SECURE_SESSION_PROVIDERS = frozenset({"openai", "deepseek", "anthropic", "gemini"})
 
 
-def _build_secure_litellm_client(
+async def _build_secure_litellm_client(
     base_url: str,
     custom_llm_provider: str | None,
 ) -> tuple[Any, AsyncHTTPHandler | None]:
     """Build the secure transport used by every normal Agent inference request.
 
-    Public endpoints get a DNS-pinned aiohttp session; private/loopback endpoints
-    (local LLMs, proxy fake-IPs) fall back to a plain session — see
-    ``create_pinned_client_session``. LiteLLM 1.84 routes OpenAI-compatible
-    providers through ``shared_session``. Anthropic and Gemini accept an
-    ``AsyncHTTPHandler`` instead, so both forms are supplied from the same session.
-    Unknown provider adapters are rejected because they may silently ignore both
-    hooks and resolve DNS again.
+    使用同步 ``create_pinned_client_session``（DNS 解析在事件循环短暂阻塞，通常
+    <100ms，可接受）。此前改用 ``acreate_pinned_client_session``（executor 异步 DNS）
+    + session 池化，但生产实测会导致任务在推理前卡死（executor 线程耗尽或 session
+    生命周期问题），已回退为同步实现。
     """
     provider = (custom_llm_provider or "").strip().lower()
     if provider not in _SECURE_SESSION_PROVIDERS:
         raise ValueError(f"不支持安全固定 DNS 的 LLM provider: {provider or '未指定'}")
+
     session = create_pinned_client_session(
         base_url, field_name="LLM base URL", allow_test_loopback=True, allow_private=True
     )
-    # OpenAI-compatible adapters expect ``client`` to be an AsyncOpenAI object;
-    # passing LiteLLM's HTTP handler there breaks the SDK path. They consume
-    # ``shared_session`` directly. Anthropic/Gemini adapters accept the handler.
-    #
-    # H10 (SSRF pinning fail-open) — for openai/deepseek, when the endpoint is
-    # public, DNS pinning relies ENTIRELY on LiteLLM (>=1.84) consuming
-    # ``shared_session`` (our pinned aiohttp session) for the outbound request.
-    # This is an internal, undocumented LiteLLM contract: if a future version
-    # stops reusing ``shared_session`` it would build its own httpx client and
-    # re-resolve DNS, silently defeating ``_PinnedResolver`` (DNS rebinding
-    # window). We cannot inject an httpx-based pinned client here because
-    # ``create_pinned_client_session`` yields an aiohttp session, not an httpx
-    # one. Private endpoints intentionally get an unpinned session, so this
-    # reliance only matters for public ones.
-    assert session is not None, "aiohttp session 必须创建成功"
+
     safe_client = None if provider in {"openai", "deepseek"} else AsyncHTTPHandler(shared_session=session)
     return session, safe_client
 
@@ -448,7 +505,8 @@ async def send_request_stream(
             _to_log_json(_request_payload_for_log(request, stream=True)),
         )
 
-    safe_session, safe_client = _build_secure_litellm_client(base_url, custom_llm_provider)
+    safe_session, safe_client = await _build_secure_litellm_client(base_url, custom_llm_provider)
+    _owns_session = not _SESSION_POOL_ENABLED  # 池化时 session 归池所有，本请求不关闭
     stream_resp: ModelResponse | CustomStreamWrapper | None = None
     try:
         extra_params = _build_litellm_extra_params(request)
@@ -522,7 +580,8 @@ async def send_request_stream(
         logger.exception("LLM upstream request failed: request_id=%s, stream=%s", request_id, True)
         raise
     finally:
-        await safe_session.close()
+        if _owns_session:
+            await safe_session.close()
 
 
 async def send_request_non_stream(
@@ -548,7 +607,8 @@ async def send_request_non_stream(
             _to_log_json(_request_payload_for_log(request, stream=False)),
         )
 
-    safe_session, safe_client = _build_secure_litellm_client(base_url, custom_llm_provider)
+    safe_session, safe_client = await _build_secure_litellm_client(base_url, custom_llm_provider)
+    _owns_session = not _SESSION_POOL_ENABLED  # 池化时 session 归池所有，本请求不关闭
     try:
         extra_params = _build_litellm_extra_params(request)
         response: ModelResponse | CustomStreamWrapper = await litellm.acompletion(
@@ -585,4 +645,5 @@ async def send_request_non_stream(
         logger.exception("LLM upstream request failed: request_id=%s, stream=%s", request_id, False)
         raise
     finally:
-        await safe_session.close()
+        if _owns_session:
+            await safe_session.close()

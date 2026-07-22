@@ -154,9 +154,10 @@ async def test_stream_inference_closes_wrapper_and_pinned_session(monkeypatch):
     assert captured["shared_session"].closed is True
 
 
-def test_unknown_provider_fails_closed_before_litellm_call():
+@pytest.mark.asyncio
+async def test_unknown_provider_fails_closed_before_litellm_call():
     with pytest.raises(ValueError, match="不支持安全固定 DNS"):
-        llm_client._build_secure_litellm_client("https://llm.example/v1", "unsafe-custom-provider")
+        await llm_client._build_secure_litellm_client("https://llm.example/v1", "unsafe-custom-provider")
 
 
 @pytest.mark.asyncio
@@ -190,7 +191,7 @@ async def test_supported_agent_providers_receive_secure_transport(monkeypatch, p
     monkeypatch.setattr(safeHttpUtil.socket, "getaddrinfo", lambda *a, **k: [
         (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))
     ])
-    session, client = llm_client._build_secure_litellm_client("https://llm.example/v1", provider)
+    session, client = await llm_client._build_secure_litellm_client("https://llm.example/v1", provider)
     try:
         if provider in {"openai", "deepseek"}:
             assert client is None
