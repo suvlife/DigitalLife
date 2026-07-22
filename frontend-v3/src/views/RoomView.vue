@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { world } from '../store/world';
 import { useViewMode } from '../composables/useViewMode';
+import { npcStatusFromActivity } from '../domain/status';
+import * as api from '../api/client';
 import GlassPanel from '../components/GlassPanel.vue';
 import GlowButton from '../components/GlowButton.vue';
 import StatusDot from '../components/StatusDot.vue';
@@ -14,6 +16,7 @@ import FileUpload from '../components/FileUpload.vue';
 
 const { roomId, navigate } = useViewMode();
 const room = computed(() => world.state.rooms.find(r => r.id === roomId.value));
+const team = computed(() => world.state.team);
 const messages = computed(() => roomId.value ? (world.state.messages[roomId.value] || []) : []);
 const members = computed(() => world.state.agents.filter(a => room.value?.agentIds.includes(a.id)));
 const runtime = computed(() => roomId.value ? world.state.run?.roomRuns[roomId.value] : undefined);
@@ -93,6 +96,70 @@ function jumpToMessage(key: string) {
   });
 }
 
+/** 消息发送者名字：优先消息自带，缺失时从成员列表回退，保证对话中始终显示名字 */
+function senderNameFor(senderId: number): string {
+  if (senderId < 0) return '你';
+  const agent = world.state.agents.find((a) => a.id === senderId);
+  return agent?.name || '';
+}
+
+/** 消息发送者的实时状态（用于对话内头像状态符号） */
+function senderStatusFor(senderId: number): 'idle' | 'thinking' | 'speaking' | 'working' | 'completed' {
+  if (senderId <= 0) return 'idle';
+  const latest = activities.value
+    .filter((a) => a.agentId === senderId)
+    .sort((x, y) => Date.parse(y.startedAt || '') - Date.parse(x.startedAt || ''))[0];
+  if (latest) {
+    const s = npcStatusFromActivity(latest);
+    if (s === 'thinking' || s === 'speaking' || s === 'working' || s === 'completed') return s;
+  }
+  // 已发言的大师在对话中显示「已发言」标记
+  return runtime.value?.currentAgentId === senderId ? 'speaking' : 'completed';
+}
+
+/** 时间格式化：对齐当前时区，无效时间回退占位 */
+function formatTime(sentAt: string): string {
+  if (!sentAt) return '';
+  const d = new Date(sentAt);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** 房间是否可重试：FAILED 或 COMPLETED（且 Run 未取消） */
+const canRetry = computed(() => {
+  const rs = runtime.value?.status;
+  const runPhase = run.value?.phase;
+  return (rs === 'failed' || rs === 'completed') && runPhase !== 'cancelled';
+});
+const retrying = ref(false);
+async function retryRoom() {
+  if (!roomId.value || !run.value || retrying.value) return;
+  if (!window.confirm('重试本室讨论？将保留上一轮发言供参考，大师们重新贡献一轮。')) return;
+  retrying.value = true;
+  try {
+    await api.retryRoom(run.value.id, roomId.value);
+    await world.loadRoomMessages(roomId.value).catch(() => {});
+  } catch (e: any) {
+    window.alert(e?.message || '重试失败');
+  } finally { retrying.value = false; }
+}
+
+/** 判断消息是否为"上一轮"分隔线（系统消息 + ━━━ 开头） */
+function isSeparator(content: string): boolean {
+  return content.startsWith('━━━');
+}
+
+/** 最后一条分隔线的索引：其前的消息属于"上一轮"（灰显） */
+const lastSeparatorIdx = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (isSeparator(messages.value[i].content)) return i;
+  }
+  return -1;
+});
+function isPrevRound(i: number): boolean {
+  return lastSeparatorIdx.value >= 0 && i < lastSeparatorIdx.value;
+}
+
 watch(() => messages.value.length, () => { if (!userScrolledUp.value) scrollToBottom(); });
 onMounted(load);
 watch(roomId, () => { userScrolledUp.value = false; load(); });
@@ -108,10 +175,11 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
         <StatusDot :status="runtime?.status === 'discussing' ? 'active' : runtime?.status === 'completed' ? 'completed' : 'waiting'" :label="runtime?.activityLabel || '等待中'" />
       </div>
       <GlowButton v-if="isRootRoom" variant="primary" size="sm" @click="startNewDiscussion">发起新讨论</GlowButton>
+      <GlowButton v-if="canRetry" variant="secondary" size="sm" :loading="retrying" @click="retryRoom">重试本室</GlowButton>
     </div>
 
     <!-- 发言进度 -->
-    <SpeakerProgress :members="members" :messages="messages" :current-agent-id="runtime?.currentAgentId ?? null" :room-status="runtime?.status || 'waiting'" />
+    <SpeakerProgress :members="members" :messages="messages" :activities="activities" :current-agent-id="runtime?.currentAgentId ?? null" :room-status="runtime?.status || 'waiting'" />
 
     <!-- 发言人时间轴 -->
     <TimeAxis :messages="messages" :agents="members" @jump="jumpToMessage" />
@@ -123,7 +191,7 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
         <span class="fa-toggle">{{ showFinalAnswer ? '收起 ▲' : '展开 ▼' }}</span>
       </div>
       <div v-if="showFinalAnswer" class="fa-content">
-        <MarkdownRender :content="finalAnswer" />
+        <MarkdownRender :content="finalAnswer" :team-id="team?.id ?? null" />
       </div>
     </GlassPanel>
 
@@ -131,19 +199,26 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
     <div class="room-body">
       <GlassPanel padding="none" class="chat-panel">
         <div class="chat-messages" ref="chatMessages" @scroll="onChatScroll">
-          <div v-for="(msg, i) in messages" :key="msg.id ?? i" :id="msg.id ? `message-${msg.id}` : `msg-${i}`" class="msg-item" :class="{ 'msg-operator': msg.senderId < 0 }">
-            <div class="msg-avatar">
-              <AgentOrb v-if="msg.senderId > 0" :name="msg.senderName" :size="'sm'" :status="runtime?.currentAgentId === msg.senderId ? 'speaking' : 'idle'" />
-              <div v-else class="msg-user-icon">你</div>
+          <template v-for="(msg, i) in messages" :key="msg.id ?? i">
+            <!-- 上一轮分隔线 -->
+            <div v-if="isSeparator(msg.content)" class="round-separator">
+              <span class="round-sep-text">{{ msg.content }}</span>
             </div>
-            <div class="msg-content">
-              <div class="msg-meta">
-                <span class="msg-sender">{{ msg.senderName }}</span>
-                <span class="msg-time">{{ new Date(msg.sentAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</span>
+            <!-- 普通消息（上一轮的灰显） -->
+            <div v-else :id="msg.id ? `message-${msg.id}` : `msg-${i}`" class="msg-item" :class="{ 'msg-operator': msg.senderId < 0, 'msg-prev-round': isPrevRound(i) }">
+              <div class="msg-avatar">
+                <AgentOrb v-if="msg.senderId > 0" :name="senderNameFor(msg.senderId)" :size="'sm'" :status="senderStatusFor(msg.senderId)" />
+                <div v-else class="msg-user-icon">你</div>
               </div>
-              <MarkdownRender :content="msg.content" class="msg-text" />
+              <div class="msg-content">
+                <div class="msg-meta">
+                  <span class="msg-sender">{{ senderNameFor(msg.senderId) || (msg.senderId < 0 ? '你' : `大师 ${msg.senderId}`) }}</span>
+                  <span class="msg-time">{{ formatTime(msg.sentAt) }}</span>
+                </div>
+                <MarkdownRender :content="msg.content" class="msg-text" :team-id="team?.id ?? null" />
+              </div>
             </div>
-          </div>
+          </template>
           <div ref="chatEnd" />
           <div v-if="!messages.length" class="chat-empty">
             <p class="empty-title">本室尚无对话</p>
@@ -194,6 +269,11 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
 .chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: var(--space-2); }
 .empty-title { font-size: var(--fs-md); color: var(--text-muted); }
 .empty-desc { font-size: var(--fs-sm); color: var(--text-faint); }
+/* 上一轮分隔线 */
+.round-separator { display: flex; align-items: center; justify-content: center; padding: var(--space-2) 0; margin: var(--space-1) 0; border-top: 1px dashed rgba(180,120,255,0.3); border-bottom: 1px dashed rgba(180,120,255,0.3); }
+.round-sep-text { font-size: var(--fs-xs); color: var(--holo-purple); font-style: italic; letter-spacing: 0.5px; text-align: center; }
+/* 上一轮消息灰显 */
+.msg-prev-round { opacity: 0.45; filter: saturate(0.4); }
 .chat-input-area { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--glass-border); display: flex; flex-direction: column; gap: var(--space-2); }
 .chat-error { font-size: var(--fs-xs); color: var(--holo-red); }
 .send-success { font-size: var(--fs-xs); color: var(--holo-teal); animation: fade-in var(--dur-fast); }

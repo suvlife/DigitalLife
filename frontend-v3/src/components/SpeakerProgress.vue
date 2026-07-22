@@ -4,11 +4,13 @@ import AgentOrb from './AgentOrb.vue';
 import DataPulse from './DataPulse.vue';
 import StatusDot from './StatusDot.vue';
 import GlassPanel from './GlassPanel.vue';
-import type { Agent, Message } from '../domain/types';
+import { npcStatusFromActivity, activityLabel } from '../domain/status';
+import type { Agent, Activity, Message, NpcStatus } from '../domain/types';
 
 const props = defineProps<{
   members: readonly Agent[];
   messages: readonly Message[];
+  activities: readonly Activity[];
   currentAgentId: number | null;
   roomStatus: string;
 }>();
@@ -29,12 +31,9 @@ const spokenCount = computed(
 );
 const totalCount = computed(() => props.members.length);
 
-/** 结论已提交 / 房间结束 */
 const isFinished = computed(
   () => props.roomStatus === 'completed' || props.roomStatus === 'failed' || props.roomStatus === 'skipped',
 );
-
-/** 全员已发言 */
 const allSpoken = computed(
   () => totalCount.value > 0 && spokenCount.value >= totalCount.value,
 );
@@ -44,7 +43,6 @@ const pulseLabel = computed(() => {
   if (allSpoken.value) return '全部大师已发言 · 已完成';
   return '大师发言进度';
 });
-
 const pulseColor = computed<'cyan' | 'teal'>(() =>
   isFinished.value || allSpoken.value ? 'teal' : 'cyan',
 );
@@ -55,7 +53,6 @@ const statusDotState = computed(() => {
   if (props.roomStatus === 'discussing') return 'active' as const;
   return 'waiting' as const;
 });
-
 const statusLabel = computed(() => {
   if (isFinished.value) return '本室讨论已结束';
   if (allSpoken.value) return '已完成';
@@ -63,26 +60,67 @@ const statusLabel = computed(() => {
   return '等待中';
 });
 
-/** 每位大师的 Orb 状态 */
-const orbStatus = (agent: Agent): 'idle' | 'speaking' | 'completed' => {
+/** 每位大师的最新活动（按 startedAt 降序取首条，限本室或本人） */
+function latestActivityFor(agentId: number): Activity | null {
+  const acts = props.activities
+    .filter((a) => a.agentId === agentId)
+    .sort((x, y) => Date.parse(y.startedAt || '') - Date.parse(x.startedAt || ''));
+  return acts[0] ?? null;
+}
+
+/** 每位大师的实时状态：从最新活动派生（推演/查找/发言/重试...），无活动则按发言记录 */
+function orbStatusFor(agent: Agent): NpcStatus {
+  if (isFinished.value && hasSpoken(agent.id)) return 'completed';
+  const latest = latestActivityFor(agent.id);
+  if (latest) {
+    const s = npcStatusFromActivity(latest);
+    // 已发言且当前无活跃动作 -> completed
+    if (s === 'idle' && hasSpoken(agent.id) && agent.id !== props.currentAgentId) return 'completed';
+    return s;
+  }
   if (agent.id === props.currentAgentId && !isFinished.value) return 'speaking';
   if (hasSpoken(agent.id)) return 'completed';
   return 'idle';
-};
+}
 
 const orbActive = (agent: Agent) =>
   agent.id === props.currentAgentId && !isFinished.value;
+
+/** 状态标签：当前活跃动作的中文描述 */
+function statusTextFor(agent: Agent): string {
+  const s = orbStatusFor(agent);
+  if (s === 'idle') return '';
+  if (s === 'completed') return '已发言';
+  const latest = latestActivityFor(agent.id);
+  if (latest) {
+    const name = agent.name;
+    return activityLabel(s, name);
+  }
+  return activityLabel(s, agent.name);
+}
 
 const panelGlow = computed<'cyan' | 'teal' | 'none'>(() => {
   if (isFinished.value || allSpoken.value) return 'teal';
   if (props.roomStatus === 'discussing') return 'cyan';
   return 'none';
 });
+
+/** 图例：各状态符号说明 */
+const legend = computed(() => {
+  const items = [
+    { icon: '💭', label: '推演', color: 'var(--holo-cyan)' },
+    { icon: '🔍', label: '查找', color: 'var(--holo-amber)' },
+    { icon: '▶', label: '发言', color: 'var(--holo-teal)' },
+    { icon: '✓', label: '已发言', color: 'var(--holo-teal)' },
+    { icon: '↻', label: '重试', color: 'var(--holo-amber)' },
+    { icon: '✗', label: '受阻', color: 'var(--holo-red)' },
+  ];
+  return items;
+});
 </script>
 
 <template>
   <GlassPanel :glow="panelGlow" padding="md" class="speaker-progress">
-    <!-- 顶部：状态灯 + 进度条 -->
     <div class="sp-header">
       <StatusDot :status="statusDotState" :label="statusLabel" />
       <span class="sp-count">{{ spokenCount }}/{{ totalCount }} 大师已发言</span>
@@ -95,14 +133,13 @@ const panelGlow = computed<'cyan' | 'teal' | 'none'>(() => {
       :color="pulseColor"
     />
 
-    <!-- 结束态横幅 -->
     <div class="sp-finished" v-if="isFinished || allSpoken">
       <span class="sp-finished-text">
         {{ isFinished ? '本室讨论已结束' : '全部大师已发言' }}
       </span>
     </div>
 
-    <!-- 大师头像行 -->
+    <!-- 大师头像行（实时状态符号 + 标签） -->
     <div class="sp-orbs">
       <div
         v-for="agent in members"
@@ -115,22 +152,28 @@ const panelGlow = computed<'cyan' | 'teal' | 'none'>(() => {
       >
         <AgentOrb
           :name="agent.name"
-          :status="orbStatus(agent)"
+          :status="orbStatusFor(agent)"
           :active="orbActive(agent)"
+          :status-label="statusTextFor(agent)"
           size="md"
         />
-        <span class="sp-orb-tag" v-if="orbActive(agent)">执言中</span>
       </div>
+    </div>
+
+    <!-- 状态图例 -->
+    <div class="sp-legend">
+      <span v-for="item in legend" :key="item.label" class="legend-item">
+        <span class="legend-icon" :style="{ color: item.color }">{{ item.icon }}</span>
+        <span class="legend-text">{{ item.label }}</span>
+      </span>
     </div>
   </GlassPanel>
 </template>
 
 <style scoped>
 .speaker-progress { display: flex; flex-direction: column; gap: var(--space-3); }
-
 .sp-header { display: flex; justify-content: space-between; align-items: center; }
 .sp-count { font-size: var(--fs-xs); color: var(--text-secondary); font-family: var(--font-mono); }
-
 .sp-finished {
   display: flex; justify-content: center;
   padding: var(--space-2) var(--space-3);
@@ -139,29 +182,15 @@ const panelGlow = computed<'cyan' | 'teal' | 'none'>(() => {
   background: rgba(0, 255, 179, 0.06);
   box-shadow: var(--glow-teal);
 }
-.sp-finished-text {
-  font-size: var(--fs-sm); color: var(--holo-teal);
-  font-family: var(--font-display); letter-spacing: 1px;
-}
-
-.sp-orbs {
-  display: flex; flex-wrap: wrap; gap: var(--space-3);
-  padding-top: var(--space-2);
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
+.sp-finished-text { font-size: var(--fs-sm); color: var(--holo-teal); font-family: var(--font-display); letter-spacing: 1px; }
+.sp-orbs { display: flex; flex-wrap: wrap; gap: var(--space-4); padding-top: var(--space-2); border-top: 1px solid rgba(255, 255, 255, 0.05); }
 .sp-orb-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-
-/* 未发言：暗色 */
-.sp-orb-item { opacity: 0.45; filter: saturate(0.5); transition: opacity var(--dur-normal) var(--ease-out), filter var(--dur-normal) var(--ease-out); }
-/* 已发言：亮起 */
+.sp-orb-item { opacity: 0.5; filter: saturate(0.5); transition: opacity var(--dur-normal) var(--ease-out), filter var(--dur-normal) var(--ease-out); }
 .sp-orb-item.orb-spoken { opacity: 1; filter: none; }
-/* 当前执言者：高亮脉冲 */
 .sp-orb-item.orb-current { opacity: 1; filter: none; }
 .sp-orb-item.orb-current :deep(.orb-core) { box-shadow: var(--glow-cyan-strong); }
-
-.sp-orb-tag {
-  font-size: 10px; color: var(--holo-cyan);
-  font-family: var(--font-mono); letter-spacing: 0.5px;
-  animation: pulse-glow 1.5s ease-in-out infinite;
-}
+.sp-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); padding-top: var(--space-2); border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-icon { font-size: 11px; font-weight: 700; }
+.legend-text { font-size: 10px; color: var(--text-muted); }
 </style>

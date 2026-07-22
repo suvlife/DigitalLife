@@ -176,3 +176,7 @@ export async function getRecentActivities(limit=20):Promise<Activity[]>{const d=
 export async function getUsageRealtime():Promise<{realtimeTokens:number;activeAgents:number}>{const d=await json<any>('/usage/realtime.json');return{realtimeTokens:Number(d.realtime_tokens||d.tokens_per_second||0),activeAgents:Number(d.active_agents||0)};}
 export async function getRunDetail(runId:string|number):Promise<any>{return json<any>(`/runs/${encodeURIComponent(String(runId))}.json`);}
 export async function getRunFinalAnswer(runId:string|number):Promise<{finalAnswer:string;publication:any}>{const d=await json<any>(`/runs/${encodeURIComponent(String(runId))}/final_answer.json`);return{finalAnswer:String(d.final_answer||''),publication:d.publication||{}};}
+export async function getMetrics():Promise<any>{return json<any>('/system/metrics.json');}
+export async function resumeSchedule():Promise<{status:string}> {return json<{status:string}>('/system/schedule/resume.json',{method:'POST'});}
+export async function cancelRun(runId:string|number):Promise<{status:string;run_id:number;already_cancelled?:boolean}>{return json(`/runs/${encodeURIComponent(String(runId))}/cancel.json`,{method:'POST'});}
+export async function retryRoom(runId:string|number,roomId:number):Promise<{status:string;run_id:number;room_id:number}>{return json(`/runs/${encodeURIComponent(String(runId))}/rooms/${roomId}/retry.json`,{method:'POST'});}
