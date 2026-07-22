@@ -276,16 +276,24 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
             self._sender_task = None
 
     def on_message(self, message):
-        """处理旧式服务连接的首帧认证消息。"""
+        """处理旧式服务连接的首帧认证消息与客户端心跳。"""
+        try:
+            data = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            data = None
+
+        # 客户端应用层心跳（frontend wsClient 每 25s 发送）：任意状态下都安全忽略，
+        # 仅用于保活/探测死连接，不触发认证或订阅逻辑。
+        if isinstance(data, dict) and data.get("type") == "ping":
+            return
+
         auth_config = configUtil.get_app_config().setting.auth
 
         # 鉴权未启用或已认证：忽略后续消息，避免重复订阅/身份切换。
         if not auth_config.enabled or self._subscribed:
             return
 
-        try:
-            data = json.loads(message)
-        except (json.JSONDecodeError, TypeError):
+        if not isinstance(data, dict):
             logger.warning("[ws] Invalid message format")
             self.close(code=1008, reason="Invalid message")
             return

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import yaml
 import service.skillService as skillService
 from dal.db import gtAgentManager, gtDeptManager
@@ -19,6 +20,15 @@ from service.agentService.prompts import (
     REVIEW_TASK_TURN_PROMPT_TEMPLATE,
 )
 from util import configUtil
+
+
+def _current_time_context() -> str:
+    """当前时间上下文：注入每个 turn，让 Agent 推演时对齐真实时间戳，
+    避免使用历史数据或凭空猜测日期。含星期与时区，便于时间敏感的研判。
+    """
+    now = datetime.now()
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    return f"[当前时间] {now.strftime('%Y-%m-%d %H:%M:%S')} {weekdays[now.weekday()]}（推理与检索请以此时点为准，勿使用历史过期数据）\n\n"
 
 
 class _PromptYamlDumper(yaml.Dumper):
@@ -198,8 +208,12 @@ async def build_agent_system_prompt(
     )
     workdir_prompt = WORKDIR_PROMPT.format(workdir=workdir)
     language_context_prompt = LANGUAGE_CONTEXT_PROMPT.format(language=configUtil.get_language())
+    # 注入当前时间到系统提示，让 Agent 推演与检索对齐真实时间戳，避免使用历史过期数据。
+    # 长会话中时间可能漂移，Agent 仍可通过 get_time 工具获取精确当前时间。
+    time_context = _current_time_context()
     full_prompt = (
-        base_prompt_tmpl
+        time_context
+        + base_prompt_tmpl
         + "\n\n"
         + language_context_prompt
         + "\n\n"

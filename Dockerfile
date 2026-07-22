@@ -1,5 +1,6 @@
 # DigitalLife multi-stage image.
-# Both web apps are built here: V2 is served at / and the classic console at /v1/.
+# All web apps are built here: V2 is served at / , the classic console at /v1/,
+# and the V3 holographic console at /v3/.
 
 FROM node:20-bookworm-slim AS frontend-builder
 
@@ -15,11 +16,16 @@ RUN cd frontend-v2 && npm ci
 COPY frontend-v2/ ./frontend-v2/
 RUN cd frontend-v2 && npm run build
 
+COPY frontend-v3/package.json frontend-v3/package-lock.json ./frontend-v3/
+RUN cd frontend-v3 && npm ci
+COPY frontend-v3/ ./frontend-v3/
+RUN cd frontend-v3 && npm run build
+
 FROM ubuntu:24.04
 
 LABEL maintainer="DigitalLife Team"
 LABEL description="DigitalLife multi-agent collaboration platform"
-ARG APP_VERSION=0.8.9
+ARG APP_VERSION=0.9.0
 LABEL version=${APP_VERSION}
 
 ENV PYTHONUNBUFFERED=1 \
@@ -53,6 +59,7 @@ COPY src/ ${DIGITALLIFE_HOME}/src/
 COPY assets/ ${DIGITALLIFE_HOME}/assets/
 COPY --from=frontend-builder /build/frontend/dist ${DIGITALLIFE_HOME}/assets/frontend
 COPY --from=frontend-builder /build/frontend-v2/dist ${DIGITALLIFE_HOME}/assets/frontend-v2
+COPY --from=frontend-builder /build/frontend-v3/dist ${DIGITALLIFE_HOME}/assets/frontend-v3
 
 RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 digitallife \
     && mkdir -p ${STORAGE_ROOT} \

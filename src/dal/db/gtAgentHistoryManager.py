@@ -182,7 +182,9 @@ async def get_agent_history_after_compact(agent_id: int) -> list[GtAgentHistory]
 
     这样可以避免加载已被 compact 压缩的旧数据到内存。
     """
-    # SQLite 没有 json_contains，使用 json_each 展开数组查询
+    # SQLite 没有 json_contains，使用 json_each 展开数组查询。
+    # 取 seq 最大（最新）的一条 COMPACT_SUMMARY：历史可能经历多轮 compact，
+    # 恢复应基于最近一次压缩视图，与 persistenceService._trim_to_latest_compact 语义一致。
     compact_summaries = await (
         GtAgentHistory
         .select()
@@ -190,7 +192,7 @@ async def get_agent_history_after_compact(agent_id: int) -> list[GtAgentHistory]
             GtAgentHistory.agent_id == agent_id,
             SQL("EXISTS (SELECT 1 FROM json_each(tags) WHERE value = 'COMPACT_SUMMARY')"),
         )
-        .order_by(GtAgentHistory.seq.asc())
+        .order_by(GtAgentHistory.seq.desc())  # type: ignore[attr-defined]
         .limit(1)
         .aio_execute()
     )

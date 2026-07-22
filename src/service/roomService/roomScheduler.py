@@ -12,6 +12,7 @@ from model.dbModel.gtRoom import GtRoom
 from service import messageBus
 from constants import MessageBusTopic
 from util import configUtil
+from .roomConfig import resolve_room_max_rounds
 
 logger = logging.getLogger("service.roomService")
 
@@ -84,9 +85,9 @@ class RoomScheduler:
         return strategy
 
     def _effective_max_rounds(self) -> int:
-        configured = self._gt_room.max_rounds
-        if configured is None:
-            configured = configUtil.get_app_config().setting.default_room_max_rounds
+        # 取值统一走共享 helper（显式配置优先，缺省回落全局默认）；
+        # 此处在其基础上追加快速共识/并行观点的单轮 clamp。
+        configured = resolve_room_max_rounds(self._gt_room.max_rounds)
         # 快速共识/并行观点入口采用单轮收集：每位专家至多发言一次，随后结束。
         # 这保持现有串行状态机的正确性，同时显著缩短尾部；跨房间仍可并行。
         if self.discussion_strategy() in {"FAST_CONSENSUS", "PARALLEL_OPINIONS"}:

@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 _INFER_RETRY_DELAYS_SECONDS = (3, 5, 10, 15, 30, 30, 60, 60)  # 默认退避
 _RATE_LIMIT_RETRY_DELAYS = (10, 20, 30, 60, 60, 60, 90, 90)  # RateLimitError 专用退避（更长）
+# 网络/超时类错误（黑洞上游：连接建立但不响应）的快速失败退避链。
+# 每个 attempt 都可能吃满 180s 读超时，若沿用默认 8 次退避，单服务可卡住约 27 分钟
+# 才走 failover，多 Agent 房间会整体僵死。NETWORK_ERROR 用短链（最多 3 次尝试，
+# 最坏 ~6 分钟含读超时 + 短退避）快速判定该服务不可用，尽早切换兜底服务。
+_NETWORK_ERROR_RETRY_DELAYS = (3, 8)
 
 
 @dataclass
@@ -106,7 +111,7 @@ def _service_gate_key(llm_config: "LlmServiceConfig") -> str:
 
 def _get_service_request_gate(llm_config: "LlmServiceConfig") -> ServiceRequestGate:
     key = _service_gate_key(llm_config)
-    max_concurrency = int(getattr(llm_config, "max_concurrency", 5) or 5)
+    max_concurrency = int(getattr(llm_config, "max_concurrency", 20) or 20)
     requests_per_minute = int(getattr(llm_config, "requests_per_minute", 0) or 0)
     gate = _SERVICE_REQUEST_GATES.get(key)
     if gate is None or (gate.max_concurrency, gate.requests_per_minute) != (max_concurrency, requests_per_minute):
@@ -118,6 +123,13 @@ def _get_service_request_gate(llm_config: "LlmServiceConfig") -> ServiceRequestG
 def reset_request_gates_for_testing() -> None:
     """清空进程内请求门；配置热更新和测试隔离可调用。"""
     _SERVICE_REQUEST_GATES.clear()
+    # 同步清空 LLM 安全 session 池：配置变更后旧 base_url/provider 的 pinned session
+    # 不应继续复用（其中 pinned 的解析结果可能已过期）。异步关闭由调用方按需触发。
+    try:
+        from util.llmApiUtil import client as _llm_client
+        _llm_client.clear_secure_session_pool_sync()
+    except Exception:
+        pass
 
 
 @dataclass
@@ -261,7 +273,7 @@ def _get_builtin_llm_service() -> "LlmServiceConfig | None":
                 context_window_tokens=svc.get("context_window_tokens", 131072),
                 reserve_output_tokens=svc.get("reserve_output_tokens", 16384),
                 compact_trigger_ratio=svc.get("compact_trigger_ratio", 0.85),
-                max_concurrency=svc.get("max_concurrency", 5),
+                max_concurrency=svc.get("max_concurrency", 20),
                 requests_per_minute=svc.get("requests_per_minute", 0),
             )
     # 如果默认服务未启用，取第一个启用的
@@ -278,7 +290,7 @@ def _get_builtin_llm_service() -> "LlmServiceConfig | None":
                 context_window_tokens=svc.get("context_window_tokens", 131072),
                 reserve_output_tokens=svc.get("reserve_output_tokens", 16384),
                 compact_trigger_ratio=svc.get("compact_trigger_ratio", 0.85),
-                max_concurrency=svc.get("max_concurrency", 5),
+                max_concurrency=svc.get("max_concurrency", 20),
                 requests_per_minute=svc.get("requests_per_minute", 0),
             )
     return None
@@ -373,11 +385,14 @@ async def _send_with_retry(
     should_block_retry: Callable[[], bool] | None = None,
 ) -> llmApiUtil.OpenAIResponse:
     last_error: Exception | None = None
-    total_attempts = len(_INFER_RETRY_DELAYS_SECONDS) + 1
+    max_attempts = len(_INFER_RETRY_DELAYS_SECONDS) + 1
     request_id = kwargs.get("request_id", "")
     request_name = getattr(send_request, "__name__", repr(send_request))
+    # 当前错误类别对应的实际最大尝试次数：NETWORK_ERROR（黑洞/超时）用短链快速失败，
+    # 其余（限流/服务端错误）保留完整长链。初始为上限，遇错后按类别收紧。
+    effective_attempts = max_attempts
 
-    for attempt in range(1, total_attempts + 1):
+    for attempt in range(1, effective_attempts + 1):
         metrics.attempts = attempt
         try:
             async with request_gate.slot() as (queue_wait_seconds, rate_wait_seconds):
@@ -392,7 +407,7 @@ async def _send_with_retry(
         except Exception as e:
             last_error = e
             error_category = classify_llm_error(e)
-            if error_category not in RETRYABLE_CATEGORIES or attempt >= total_attempts:
+            if error_category not in RETRYABLE_CATEGORIES or attempt >= effective_attempts:
                 raise
 
             # M10：流式已产出增量后不整体重试。已 yield / 落库的文本无法回撤，
@@ -407,6 +422,24 @@ async def _send_with_retry(
             if error_category == LlmErrorCategory.RATE_LIMITED:
                 delay = _RATE_LIMIT_RETRY_DELAYS[min(attempt - 1, len(_RATE_LIMIT_RETRY_DELAYS) - 1)]
                 logger.warning("LLM RateLimit 退避: request_id=%s, attempt=%s, delay=%ss", request_id, attempt, delay)
+                # 主动告警：LLM 持续限流/配额耗尽（节流推送，不刷屏）
+                try:
+                    from service import alertService
+                    alertService.alert_llm_rate_limited(
+                        getattr(request_gate, "service_name", "unknown"),
+                        f"request_id={request_id}, attempt={attempt}",
+                    )
+                except Exception:
+                    pass
+            elif error_category == LlmErrorCategory.NETWORK_ERROR:
+                # 黑洞/超时快速失败：收紧本次请求的尝试上限并缩短退避，
+                # 避免单个不可用服务拖住整个 failover 链。
+                effective_attempts = min(max_attempts, len(_NETWORK_ERROR_RETRY_DELAYS) + 1)
+                delay = _NETWORK_ERROR_RETRY_DELAYS[min(attempt - 1, len(_NETWORK_ERROR_RETRY_DELAYS) - 1)]
+                logger.warning(
+                    "LLM 网络错误快速失败: request_id=%s, attempt=%s/%s, delay=%ss（该服务疑似不可达，将尽快切换兜底）",
+                    request_id, attempt, effective_attempts, delay,
+                )
             else:
                 delay = _INFER_RETRY_DELAYS_SECONDS[attempt - 1]
 
@@ -418,7 +451,7 @@ async def _send_with_retry(
                     state=InferRequestStateType.RETRY_SCHEDULED,
                     request_id=request_id,
                     attempt=attempt,
-                    max_attempts=total_attempts,
+                    max_attempts=effective_attempts,
                     retry_delay_seconds=delay,
                     error_message=str(e),
                     queue_wait_ms=metrics.queue_wait_ms,
@@ -427,7 +460,7 @@ async def _send_with_retry(
                     retry_wait_ms=metrics.retry_wait_ms,
                 ),
             )
-            logger.warning("LLM infer retry scheduled: request_id=%s, request_name=%s, attempt=%s/%s, delay=%s, error=%r", request_id, request_name, attempt, total_attempts, delay, e)
+            logger.warning("LLM infer retry scheduled: request_id=%s, request_name=%s, attempt=%s/%s, delay=%s, error=%r", request_id, request_name, attempt, effective_attempts, delay, e)
             jittered_delay = delay + random.uniform(0, delay * 0.1)
             retry_wait_started = time.monotonic()
             await asyncio.sleep(jittered_delay)
@@ -438,7 +471,7 @@ async def _send_with_retry(
                     state=InferRequestStateType.RETRYING,
                     request_id=request_id,
                     attempt=attempt + 1,
-                    max_attempts=total_attempts,
+                    max_attempts=effective_attempts,
                     queue_wait_ms=metrics.queue_wait_ms,
                     rate_limit_wait_ms=metrics.rate_limit_wait_ms,
                     infer_duration_ms=metrics.infer_duration_ms,
@@ -518,6 +551,11 @@ async def infer(
                 request_id, False, llm_config.name, response.request_id, _usage_to_log_json(response.usage),
                 metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
             )
+            try:
+                from service import metricsService
+                metricsService.inc_counter("llm_infer_success_total")
+            except Exception:
+                pass
             return InferResult.success(response, request_id=request_id, performance=metrics)
         assert last_error is not None  # 循环内要么 return 要么 raise，不会正常退出
         raise last_error
@@ -526,6 +564,11 @@ async def infer(
             "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
             request_id, False, resolved_model, resolved_provider,
         )
+        try:
+            from service import metricsService
+            metricsService.inc_counter("llm_infer_failures_total")
+        except Exception:
+            pass
         return InferResult.failure(e, request_id=request_id, performance=metrics)
 
 
@@ -661,6 +704,11 @@ async def infer_stream(
                 request_id, True, llm_config.name, response.request_id, _usage_to_log_json(response.usage),
                 metrics.queue_wait_ms, metrics.rate_limit_wait_ms, metrics.infer_duration_ms, metrics.retry_wait_ms, metrics.attempts,
             )
+            try:
+                from service import metricsService
+                metricsService.inc_counter("llm_infer_success_total")
+            except Exception:
+                pass
             return InferResult.success(response, request_id=request_id, performance=metrics)
         assert last_error is not None  # 循环内要么 return 要么 raise，不会正常退出
         raise last_error
@@ -669,4 +717,9 @@ async def infer_stream(
             "LLM infer failed: request_id=%s, stream=%s, model=%s, provider=%s",
             request_id, True, resolved_model, resolved_provider,
         )
+        try:
+            from service import metricsService
+            metricsService.inc_counter("llm_infer_failures_total")
+        except Exception:
+            pass
         return InferResult.failure(e, request_id=request_id, performance=metrics)

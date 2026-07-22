@@ -15,6 +15,7 @@ from model.dbModel.gtRoom import GtRoom
 from constants import RoomState, MessageBusTopic, RoomType, SpecialAgent
 from .messageStore import RoomMessageStore
 from .roomScheduler import RoomScheduler
+from .roomConfig import resolve_room_max_rounds
 
 logger = logging.getLogger("service.roomService")
 
@@ -112,9 +113,7 @@ class ChatRoom:
 
     @property
     def _max_rounds(self) -> int:
-        if self.gt_room.max_rounds is not None:
-            return self.gt_room.max_rounds
-        return configUtil.get_app_config().setting.default_room_max_rounds
+        return resolve_room_max_rounds(self.gt_room.max_rounds)
 
     @property
     def initial_topic(self) -> str:

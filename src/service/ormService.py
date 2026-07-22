@@ -23,6 +23,11 @@ _SQLITE_BUSY_TIMEOUT_MS = 5000
 _SQLITE_LOCK_RETRY_DELAYS = (0.05, 0.15, 0.35)
 _T = TypeVar("_T")
 
+# 定时自动备份配置（环境变量可调）：默认每 6 小时备份一次，保留最近 12 份。
+_AUTO_BACKUP_INTERVAL_SECONDS = float(os.environ.get("DIGITALLIFE_BACKUP_INTERVAL_SECONDS", str(6 * 3600)))
+_BACKUP_KEEP_COUNT = int(os.environ.get("DIGITALLIFE_BACKUP_KEEP_COUNT", "12"))
+_auto_backup_task: "asyncio.Task | None" = None
+
 
 def is_sqlite_locked_error(exc: BaseException) -> bool:
     """Return whether an exception represents SQLite BUSY/LOCKED contention."""
@@ -262,10 +267,12 @@ async def startup(db_path: str) -> None:
         raise
 
     logger.info("ORM service started: db=%s", abs_path)
+    _start_auto_backup()
 
 
 async def shutdown() -> None:
     global _db, _db_path
+    await _stop_auto_backup()
     if _db is not None:
         await _db.aio_close()
     _db = None
@@ -306,3 +313,74 @@ def backup_database() -> str:
 
     logger.info("Database backup created: source=%s, backup=%s", source_path, backup_path)
     return backup_path
+
+
+def prune_old_backups(keep: int | None = None) -> int:
+    """按保留数清理旧备份（轮转），返回删除的份数。默认保留 _BACKUP_KEEP_COUNT 份。"""
+    keep = _BACKUP_KEEP_COUNT if keep is None else keep
+    backup_dir = os.path.join(appPaths.DATA_DIR, "backups")
+    if not os.path.isdir(backup_dir):
+        return 0
+    try:
+        backups = sorted(
+            (os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")),
+            key=os.path.getmtime,
+        )
+    except OSError:
+        return 0
+    removed = 0
+    # 旧的在前，删除超出保留数的最早备份
+    for path in backups[:-keep] if keep > 0 else backups:
+        try:
+            os.remove(path)
+            removed += 1
+        except OSError:
+            logger.warning("Failed to remove old backup: %s", path)
+    if removed:
+        logger.info("Pruned %d old database backup(s), keeping latest %d", removed, keep)
+    return removed
+
+
+async def _auto_backup_loop() -> None:
+    """后台定时备份循环：到点执行备份并轮转旧备份。间隔<=0 时禁用。"""
+    if _AUTO_BACKUP_INTERVAL_SECONDS <= 0:
+        logger.info("Automatic database backup disabled (interval<=0)")
+        return
+    logger.info(
+        "Automatic database backup enabled: interval=%.0fs, keep=%d",
+        _AUTO_BACKUP_INTERVAL_SECONDS, _BACKUP_KEEP_COUNT,
+    )
+    while True:
+        await asyncio.sleep(_AUTO_BACKUP_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(backup_database)
+            await asyncio.to_thread(prune_old_backups)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Automatic database backup failed")
+
+
+def _start_auto_backup() -> None:
+    """启动后台定时备份任务（幂等）。"""
+    global _auto_backup_task
+    if _auto_backup_task is not None or _AUTO_BACKUP_INTERVAL_SECONDS <= 0:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _auto_backup_task = loop.create_task(_auto_backup_loop())
+
+
+async def _stop_auto_backup() -> None:
+    """停止后台定时备份任务。"""
+    global _auto_backup_task
+    if _auto_backup_task is None:
+        return
+    _auto_backup_task.cancel()
+    try:
+        await _auto_backup_task
+    except asyncio.CancelledError:
+        pass
+    _auto_backup_task = None

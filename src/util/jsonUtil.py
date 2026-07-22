@@ -34,7 +34,7 @@ default_json_config: Dict[JSONConfig, Any] = {
     JSONConfig.sort_key: True,
     JSONConfig.indent: 4,
     JSONConfig.ensure_ascii: False,
-    JSONConfig.datetime_format: "%Y-%m-%d %H:%M:%S.%f",
+    JSONConfig.datetime_format: "%Y-%m-%dT%H:%M:%S.%f",  # ISO 8601（T 分隔），前端 Safari 可正确解析
     JSONConfig.date_format: "%Y-%m-%d",
     JSONConfig.time_format: "%H:%M:%S.%f",
     JSONConfig.enum_use_name: True,
@@ -52,6 +52,23 @@ def get_format_from_type(cls: type, config: dict) -> str:
         date_format = config.get(JSONConfig.time_format)
 
     return date_format
+
+
+def _parse_datetime_flexible(data: str, date_format: str) -> dt.datetime:
+    """解析 datetime 字符串，兼容 ISO（T 分隔）与旧的空格分隔格式。
+
+    序列化已切换为 ISO 8601（T 分隔），但历史数据/旧客户端可能仍用空格分隔，
+    解析侧需同时容忍两种，保证向后兼容。
+    """
+    try:
+        return dt.datetime.strptime(data, date_format)
+    except ValueError:
+        # 空格分隔的旧格式
+        legacy = date_format.replace("T", " ")
+        if legacy != date_format:
+            return dt.datetime.strptime(data, legacy)
+        # 最后兜底：fromisoformat（Py3.11+ 支持广泛 ISO 变体）
+        return dt.datetime.fromisoformat(data)
 
 
 def _resolve_forward_ref(type_annotation, context_class: type = None) -> type:
@@ -232,7 +249,7 @@ def json_data_to_object(data: Union[Dict, List, str], cls: Type[T] = Dict, confi
             assert type(data) == str
 
             date_format = get_format_from_type(cls, final_config)
-            datetime = dt.datetime.strptime(data, date_format)
+            datetime = _parse_datetime_flexible(data, date_format)
 
             if issubclass(cls, dt.datetime):
                 return datetime

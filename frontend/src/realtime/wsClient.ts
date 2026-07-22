@@ -7,6 +7,8 @@ type RealtimeListener = (event: FrontendRealtimeEvent) => void;
 
 const reconnectDelayMs = 3000;
 const connectTimeoutMs = 2000;
+// 应用层心跳间隔：探测 NAT/代理空闲断连（比 Tornado 服务端 30s ping 更早发现死连接）。
+const heartbeatIntervalMs = 25000;
 
 const listeners = new Set<RealtimeListener>();
 
@@ -14,6 +16,7 @@ let ws: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let reconnectCountdownTimer: number | null = null;
 let connectTimeoutTimer: number | null = null;
+let heartbeatTimer: number | null = null;
 let reconnectAttempt = 0;
 let activeSocketToken = 0;
 let started = false;
@@ -30,6 +33,26 @@ function clearConnectTimeout(): void {
   if (connectTimeoutTimer !== null) {
     window.clearTimeout(connectTimeoutTimer);
     connectTimeoutTimer = null;
+  }
+}
+
+function startHeartbeat(socket: WebSocket): void {
+  stopHeartbeat();
+  heartbeatTimer = window.setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({ type: 'ping' }));
+      } catch {
+        // 发送失败说明连接已死，交由 close/超时逻辑处理
+      }
+    }
+  }, heartbeatIntervalMs);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer !== null) {
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 }
 
@@ -96,7 +119,12 @@ function connectRealtimeSocket(): void {
   ws = socket;
 
   connectTimeoutTimer = window.setTimeout(() => {
-    if (socketToken !== activeSocketToken || connectionState.value !== 'reconnecting') {
+    // 首连（connecting）与重连（reconnecting）都需要超时保护：
+    // 此前守卫只放行 reconnecting，导致首次连接卡住时永不触发重连。
+    if (
+      socketToken !== activeSocketToken ||
+      (connectionState.value !== 'reconnecting' && connectionState.value !== 'connecting')
+    ) {
       return;
     }
 
@@ -113,6 +141,7 @@ function connectRealtimeSocket(): void {
     }
 
     clearConnectTimeout();
+    startHeartbeat(socket);
 
     // 鉴权启用时，发送认证消息
     if (authEnabled.value) {
@@ -167,12 +196,30 @@ function connectRealtimeSocket(): void {
     }
   });
 
-  socket.addEventListener('close', () => {
+  socket.addEventListener('close', (closeEvent?: CloseEvent) => {
     if (socketToken !== activeSocketToken) {
       return;
     }
 
     ws = null;
+    stopHeartbeat();
+
+    // 1008 (Policy Violation)：后端用于鉴权失败。此时无限重连无意义，
+    // 清除无效 token 并弹出输入框，等待用户提供新凭据后手动重连。
+    if (closeEvent?.code === 1008) {
+      clearConnectTimeout();
+      clearReconnectCountdown();
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectAttempt = 0;
+      connectionState.value = 'disconnected';
+      clearToken();
+      showTokenDialog.value = true;
+      return;
+    }
+
     if (isReconnectAttempt && connectTimeoutTimer !== null && connectionState.value === 'reconnecting') {
       return;
     }
@@ -215,6 +262,7 @@ export function stopRealtimeClient(): void {
 
   clearConnectTimeout();
   clearReconnectCountdown();
+  stopHeartbeat();
 
   if (ws) {
     ws.close();
@@ -247,6 +295,10 @@ export function __resetWsClientForTests(): void {
   if (connectTimeoutTimer !== null) {
     window.clearTimeout(connectTimeoutTimer);
     connectTimeoutTimer = null;
+  }
+  if (heartbeatTimer !== null) {
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
   if (ws) {
     ws.close();

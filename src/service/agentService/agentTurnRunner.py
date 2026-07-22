@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import List
+from typing import Any, List
 
 from constants import (
     AgentActivityStatus, AgentActivityType,
@@ -25,9 +25,12 @@ from service import agentActivityService, llmService, roomService
 from service.agentActivityService import AgentActivityMeta
 from service.agentService.agentHistoryStore import AgentHistoryStore
 from service.agentService import compact, promptBuilder
+from service.agentService.compactManager import CompactManager
+from service.agentService.toolExecutor import ToolExecutor
 from service.agentService.driver import AgentDriverConfig, AgentTurnSetup
 from service.agentService.driver.factory import build_agent_driver
 from service.agentService.toolRegistry import AgentToolRegistry, RegisteredTool, ToolExecutionResult
+from service.agentService import toolResultUtils
 from service.roomService import ChatRoom, ToolCallContext
 from util import configUtil, llmApiUtil
 from util.configTypes import LlmServiceConfig
@@ -41,44 +44,6 @@ logger = logging.getLogger(__name__)
 # 模型反复调用非 finish 工具而永不结束，导致单轮无限推进、烧尽 API 配额（审计 C2）。
 # 超限时以受控方式结束（标 ROOM_TURN_FINISH），而非抛 RuntimeError 走 FAILED→重试放大。
 _MAX_TURN_STEPS = 80
-
-
-# 高危命令模式：公网部署时拦截可能危害服务器的命令
-_DANGEROUS_COMMAND_PATTERNS = [
-    "rm -rf", "rmdir", "mkfs", "dd if=", "shutdown", "reboot", "halt",
-    "curl ", "wget ", "nc ", "netcat", "ssh ", "scp ", "rsync ",
-    "pip install", "npm install", "apt ", "yum ", "brew ",
-    "chmod 777", "chown ", ">/dev/", "mkfifo",
-    "python -c", "python3 -c", "eval ", "exec ",
-    "`rm", "$(", "base64 -d", "curl|", "wget|",
-    "crontab", "systemctl", "service ",
-    "kill -9", "pkill", "killall",
-    "iptables", "ufw", "firewall",
-    "/etc/", "/root/", "/var/", "/tmp/.",
-]
-
-
-def _is_dangerous_command(command: str) -> bool:
-    """检查命令是否含高危操作。公网部署时拦截可能危害服务器的命令。"""
-    cmd_lower = command.lower()
-    for pattern in _DANGEROUS_COMMAND_PATTERNS:
-        if pattern in cmd_lower:
-            return True
-    return False
-
-
-def _detect_json_tool_call_in_content(content: str | None) -> bool:
-    """检测 LLM 是否将工具调用以 JSON 对象形式写入了 content 字段（而非 tool_calls）。"""
-    if not content:
-        return False
-    stripped = content.strip()
-    if not (stripped.startswith("{") and stripped.endswith("}")):
-        return False
-    try:
-        data = json.loads(stripped)
-        return isinstance(data, dict)
-    except (json.JSONDecodeError, ValueError):
-        return False
 
 
 class AgentTurnRunner:
@@ -104,11 +69,35 @@ class AgentTurnRunner:
         self.driver = build_agent_driver(self, driver_config or AgentDriverConfig(driver_type=DriverType.NATIVE))
         self._current_room: ChatRoom | None = None
         self._current_task: GtScheculeTask | None = None
-        # compact 互斥锁：防止 pre-check/post-check/overflow 三条路径并发 compact
-        self._compact_lock: asyncio.Lock = asyncio.Lock()
         # 团队级配置缓存（含 llm_service_name），由 _resolve_compact_config 懒加载
         self._team_config: dict | None = None
         self._team_config_loaded: bool = False
+        # CompactManager：compact 职责协作组件（拆分 #18 P2）。
+        # _compact_lock 随其私有化；主类的 _resolve_compact_config/_execute_compact 等
+        # 保留为 delegate 转发到这里，保持既有调用方与测试契约不变。
+        self._compact_manager = CompactManager(
+            gt_agent=self.gt_agent,
+            system_prompt=self.system_prompt,
+            # 延迟解析：调用时才取当前 _history/_finish_activity/agentActivityService，
+            # 兼容测试在构造后替换 runner._history / patch agentActivityService 的用法。
+            history_provider=lambda: self._history,
+            tool_registry=self.tool_registry,
+            base_metadata=self._base_metadata,
+            finish_activity=self._finish_activity,
+            team_config_provider=self._get_team_config_async,
+            add_activity_provider=lambda: agentActivityService.add_activity,
+        )
+        # ToolExecutor：工具执行职责协作组件（拆分 #18 P3）。
+        # _run_tool_to_item / execute_pending_tools 保留为 delegate（后者是 host 协议入口）。
+        self._tool_executor = ToolExecutor(
+            gt_agent=self.gt_agent,
+            history_provider=lambda: self._history,
+            tool_registry=self.tool_registry,
+            base_metadata=self._base_metadata,
+            finish_activity=self._finish_activity,
+            add_activity_provider=lambda: agentActivityService.add_activity,
+            current_task_provider=lambda: self._current_task,
+        )
 
     def _base_metadata(self, **extra) -> AgentActivityMeta:
         """构建活动记录 metadata，自动附加 task_room_id（本次 turn 所在的任务房间）。"""
@@ -117,28 +106,6 @@ class AgentTurnRunner:
             **extra,
         )
         return meta
-
-    def _extract_tool_command(self, tool_call: llmApiUtil.OpenAIToolCall) -> str | None:
-        if tool_call.function_name != "execute_bash":
-            return None
-        try:
-            parsed_args = json.loads(tool_call.function_args)
-        except Exception:
-            return None
-        command = parsed_args.get("command")
-        if not isinstance(command, str):
-            return None
-        command = command.strip()
-        return command if len(command) > 0 else None
-
-    def _extract_tool_arguments(self, tool_call: llmApiUtil.OpenAIToolCall):
-        raw_args = tool_call.function_args.strip()
-        if not raw_args:
-            return None
-        try:
-            return json.loads(raw_args)
-        except Exception:
-            return raw_args
 
     async def _finish_activity(
         self,
@@ -481,7 +448,7 @@ class AgentTurnRunner:
     ) -> TurnStepResult:
         """执行推理并按结果分类返回。"""
         assistant_message = await self._infer_to_item(output_item, tools, tool_choice=tool_choice)
-        if _detect_json_tool_call_in_content(assistant_message.content):
+        if toolResultUtils.detect_json_tool_call_in_content(assistant_message.content):
             for tc in (assistant_message.tool_calls or []):
                 await self._history.append_history_message(GtAgentHistory.build(
                     llmApiUtil.OpenAIMessage.tool_result(tc.id, '{"success": false, "message": "工具调用被跳过：模型输出格式异常"}'),
@@ -652,7 +619,7 @@ class AgentTurnRunner:
                     f"agent_id={self.gt_agent.id}, completion_tokens={usage.completion_tokens if usage else '?'}"
                 )
             assistant_message = choice.message
-            usage_data = self._build_usage(
+            usage_data = toolResultUtils.build_usage(
                 estimated_prompt_tokens=estimated_tokens,
                 prompt_tokens=usage.prompt_tokens if usage else None,
                 completion_tokens=usage.completion_tokens if usage else None,
@@ -712,7 +679,7 @@ class AgentTurnRunner:
                     history_id=output_item.id,
                     message=None,
                     status=AgentHistoryStatus.SUCCESS,
-                    usage=self._build_usage(
+                    usage=toolResultUtils.build_usage(
                         estimated_prompt_tokens=estimated_tokens,
                         prompt_tokens=usage.prompt_tokens if usage else None,
                         completion_tokens=usage.completion_tokens if usage else None,
@@ -730,7 +697,7 @@ class AgentTurnRunner:
                         history_id=output_item.id,
                         message=None,
                         status=AgentHistoryStatus.SUCCESS,
-                        usage=self._build_usage(
+                        usage=toolResultUtils.build_usage(
                             estimated_prompt_tokens=estimated_tokens,
                             prompt_tokens=usage.prompt_tokens,
                             completion_tokens=usage.completion_tokens,
@@ -741,7 +708,7 @@ class AgentTurnRunner:
                     )
                 raise
 
-            usage_data = self._build_usage(
+            usage_data = toolResultUtils.build_usage(
                 estimated_prompt_tokens=estimated_tokens or None,
                 prompt_tokens=usage.prompt_tokens if usage else None,
                 completion_tokens=usage.completion_tokens if usage else None,
@@ -767,156 +734,11 @@ class AgentTurnRunner:
             raise
 
     async def _run_tool_to_item(self, tool_call: llmApiUtil.OpenAIToolCall, output_item: GtAgentHistory, room: ChatRoom | None) -> TurnStepResult:
-        """执行单个工具调用，结果写入 output_item。
+        """执行单个工具调用（delegate → ToolExecutor，拆分 #18 P3）。
 
-        返回：
-            `TURN_DONE`：turn 结束类工具（marks_turn_finish）执行成功。
-            `ERROR_ACTION`：turn 结束类工具执行失败，触发 failed_action_count 计数（防止死循环）。
-            `CONTINUE`：普通工具执行完毕，继续下一步。
+        保留同名方法以保持既有调用方与测试契约不变；实际逻辑在 ToolExecutor。
         """
-        tool_name = tool_call.function_name
-        tool_metadata = self._base_metadata(
-            tool_name=tool_name,
-            tool_arguments=self._extract_tool_arguments(tool_call),
-            tool_call_id=tool_call.id,
-            command=self._extract_tool_command(tool_call),
-        )
-        tool_activity = await agentActivityService.add_activity(
-            gt_agent=self.gt_agent, activity_type=AgentActivityType.TOOL_CALL,
-            detail=tool_name, metadata=tool_metadata,
-        )
-        registered_tool: RegisteredTool | None = self.tool_registry.get_registered_tool(tool_name)
-        if registered_tool is None:
-            error_msg = f"工具 '{tool_name}' 未找到，请使用已有工具完成行动。"
-            logger.warning("tool not registered: agent_id=%d, tool=%s", self.gt_agent.id, tool_name)
-
-            final_message = llmApiUtil.OpenAIMessage.tool_result(
-                output_item.tool_call_id, json.dumps({"success": False, "message": error_msg}, ensure_ascii=False)
-            )
-
-            await self._history.finalize_history_item(
-                history_id=output_item.id, message=final_message, status=AgentHistoryStatus.FAILED, error_message=error_msg
-            )
-            await self._finish_activity(tool_activity.id, status=AgentActivityStatus.FAILED, error_message=error_msg)
-            return TurnStepResult.TOOL_EXECUTE_FAILED_FINISH
-
-        if registered_tool.self_interrupt:
-            if AgentHistoryTag.SELF_INTERRUPT in output_item.tags:
-                # 重启后：output_item 已有 SELF_INTERRUPT tag，说明上次已触发过，直接自动成功。
-                logger.info(
-                    "[self-interrupt] 重启后自动完成自中断工具: agent_id=%d, tool=%s",
-                    self.gt_agent.id, tool_name,
-                )
-                auto_result = {"success": True, "message": f"已完成重启，并恢复原历史任务运行"}
-                final_message = llmApiUtil.OpenAIMessage.tool_result(
-                    output_item.tool_call_id,
-                    json.dumps(auto_result, ensure_ascii=False),
-                )
-                await self._history.finalize_history_item(
-                    history_id=output_item.id,
-                    message=final_message,
-                    status=AgentHistoryStatus.SUCCESS,
-                )
-                await self._finish_activity(
-                    tool_activity.id,
-                    status=AgentActivityStatus.SUCCEEDED,
-                    metadata_patch=AgentActivityMeta(tool_result=auto_result),
-                )
-                return TurnStepResult.TOOL_EXECUTE_SUCCESS
-            else:
-                # 第一次执行：写入 tag 后继续执行 handler。
-                # handler 会触发 agent 中断（CancelledError），item 以 INIT+tag 留在 DB。
-                await self._history.mark_self_interrupt_tag(output_item.id)
-
-        team_id = room.team_id if room is not None else self.gt_agent.team_id
-        context = ToolCallContext(
-            agent_id=self.gt_agent.id,
-            team_id=team_id,
-            chat_room=room,
-            schedule_task=self._current_task,
-        )
-
-        # 命令审批网关：拦截 execute_bash 中的高危命令
-        if tool_name == "execute_bash":
-            command = self._extract_tool_command(tool_call)
-            if command and _is_dangerous_command(command):
-                error_msg = f"命令被安全网关拦截（含高危操作）: {command[:100]}"
-                logger.warning("命令审批拦截: agent_id=%d, command=%s", self.gt_agent.id, command[:100])
-                final_message = llmApiUtil.OpenAIMessage.tool_result(
-                    output_item.tool_call_id,
-                    json.dumps({"success": False, "message": error_msg}, ensure_ascii=False),
-                )
-                await self._history.finalize_history_item(
-                    history_id=output_item.id, message=final_message,
-                    status=AgentHistoryStatus.FAILED, error_message=error_msg,
-                )
-                await self._finish_activity(
-                    tool_activity.id, status=AgentActivityStatus.FAILED, error_message=error_msg,
-                )
-                return TurnStepResult.TOOL_EXECUTE_FAILED_FINISH
-
-        exec_result:ToolExecutionResult = await self.tool_registry.execute_tool_call(tool_call, context)
-
-        # 工具结果截断：过长的原始内容会显著增加后续 prompt token，按策略截断后存入 history
-        # 完整结果保留在 activity 记录中备查
-        history_result = self._truncate_tool_result_for_history(exec_result.result, tool_name=tool_name)
-        final_message = llmApiUtil.OpenAIMessage.tool_result(
-            exec_result.tool_call_id,
-            json.dumps(history_result, ensure_ascii=False),
-        )
-        await self._history.finalize_history_item(
-            history_id=output_item.id,
-            message=final_message,
-            status=AgentHistoryStatus.SUCCESS if exec_result.success else AgentHistoryStatus.FAILED,
-            error_message=exec_result.error_message,
-            tags=[AgentHistoryTag.ROOM_TURN_FINISH] if (registered_tool.marks_turn_finish and exec_result.success) else None,
-        )
-
-        # 活动记录：TOOL_CALL SUCCEEDED / FAILED
-        await self._finish_activity(
-            tool_activity.id,
-            status=AgentActivityStatus.SUCCEEDED if exec_result.success else AgentActivityStatus.FAILED,
-            error_message=exec_result.error_message,
-            metadata_patch=AgentActivityMeta(tool_result=exec_result.result),
-        )
-
-        if registered_tool.marks_turn_finish:
-            if exec_result.success:
-                return TurnStepResult.TURN_DONE
-            # finish 类工具失败：触发 failed_action_count，防止 LLM 反复重试导致死循环
-            return TurnStepResult.TOOL_EXECUTE_FAILED_FINISH
-        return TurnStepResult.TOOL_EXECUTE_SUCCESS
-
-    @staticmethod
-    def _truncate_tool_result_for_history(result: dict[str, Any], tool_name: str, max_length: int = 6000) -> dict[str, Any]:
-        """对需要存入 history 的工具结果进行截断，避免消耗过多 token。
-
-        完整结果仍保留在 activity 记录中。
-        主要截断对象：web_search / web_fetch / read_file / execute_bash / process_output
-        """
-        if not isinstance(result, dict):
-            return result
-
-        truncatable_tools = {"web_search", "web_fetch", "read_file", "execute_bash", "process_output", "grep_search"}
-        if tool_name not in truncatable_tools:
-            return result
-
-        content_keys = {"content", "message", "results", "stdout", "output"}
-        truncated = dict(result)
-        was_truncated = False
-
-        for key in content_keys:
-            value = truncated.get(key)
-            if value is None:
-                continue
-            text = str(value)
-            if len(text) > max_length:
-                truncated[key] = text[:max_length] + "\n\n[内容已截断，完整结果可在活动记录中查看]"
-                was_truncated = True
-
-        if was_truncated:
-            truncated["_history_truncated"] = True
-        return truncated
+        return await self._tool_executor.run_tool_to_item(tool_call, output_item, room)
 
 
     async def execute_pending_tools(self) -> None:
@@ -941,29 +763,28 @@ class AgentTurnRunner:
     # ─── 内部辅助方法 ─────────────────────────────
 
     def _resolve_compact_config(self) -> tuple[str, LlmServiceConfig, int, int]:
-        """获取 compact 相关配置：(resolved_model, llm_config, trigger_tokens, hard_limit_tokens)。
-
-        优先级：agent.model + team.config.llm_service_name → 全局 current_llm_service。
-        team_config 在同步上下文中无法异步获取，这里直接用全局服务（团队级在 infer_stream 中处理）。
-        """
-        llm_config = configUtil.get_app_config().setting.current_llm_service
-        if llm_config is None:
-            raise ValueError("未配置可用的 LLM 服务（llm_services 全部被禁用或为空）")
-        resolved_model = self.gt_agent.model or llm_config.model
-        trigger_tokens = compact.calc_compact_trigger_tokens(resolved_model, llm_config)
-        hard_limit_tokens = compact.calc_hard_limit_tokens(resolved_model, llm_config)
-        return resolved_model, llm_config, trigger_tokens, hard_limit_tokens
+        """获取 compact 相关配置（delegate → CompactManager，拆分 #18 P2）。"""
+        return self._compact_manager.resolve_compact_config()
 
     async def _get_team_config_async(self) -> dict | None:
-        """异步获取团队配置（含 DB 查询）。失败时返回 None（降级到全局默认服务）。"""
+        """异步获取团队配置（含 DB 查询）。失败时返回 None（降级到全局默认服务）。
+
+        结果按实例缓存（_team_config/_team_config_loaded），避免 pre-check/post-check/
+        overflow 多条 compact 路径与每次推理都重复查询同一团队配置（N+1）。
+        """
+        if self._team_config_loaded:
+            return self._team_config
+        self._team_config_loaded = True
         if self.gt_agent.team_id <= 0:
+            self._team_config = None
             return None
         try:
             from dal.db import gtTeamManager
             team = await gtTeamManager.get_team_by_id(self.gt_agent.team_id)
-            return team.config if team else None
+            self._team_config = team.config if team else None
         except Exception:
-            return None
+            self._team_config = None
+        return self._team_config
 
     async def _call_infer_stream(self, ctx: GtCoreAgentDialogContext, **kwargs) -> llmService.InferResult:
         """Call infer_stream while remaining compatible with narrow test/mocking handlers.
@@ -979,25 +800,6 @@ class AgentTurnRunner:
         if infer_callable is llmService.core.infer_stream:
             kwargs["team_config"] = await self._get_team_config_async()
         return await infer_callable(self.gt_agent.model, ctx, **kwargs)
-
-    @staticmethod
-    def _build_usage(
-        *,
-        estimated_prompt_tokens: int | None = None,
-        prompt_tokens: int | None = None,
-        completion_tokens: int | None = None,
-        total_tokens: int | None = None,
-        compact_stage: CompactStage = "none",
-        overflow_retry: bool = False,
-    ) -> HistoryUsage:
-        return HistoryUsage(
-            estimated_prompt_tokens=estimated_prompt_tokens,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            compact_stage=compact_stage,
-            overflow_retry=overflow_retry,
-        )
 
     async def _check_compact(
         self,
@@ -1037,66 +839,8 @@ class AgentTurnRunner:
         return messages, estimated_tokens, True
 
     async def _execute_compact(self) -> None:
-        """执行一次 compact：生成摘要 → 插入 COMPACT_SUMMARY → 内存裁剪 → 清理 DB 旧前缀。
+        """执行一次 compact（delegate → CompactManager，拆分 #18 P2）。
 
-        使用 agent 级互斥锁防止并发 compact（pre-check/post-check/overflow 三条路径）。
-        失败时 raise，不修改内存状态。
+        保留同名方法以保持既有调用方与测试契约不变；实际逻辑在 CompactManager。
         """
-        async with self._compact_lock:
-            await self._execute_compact_locked()
-
-    async def _execute_compact_locked(self) -> None:
-        resolved_model, llm_config, _, hard_limit_tokens = self._resolve_compact_config()
-
-        compact_activity = await agentActivityService.add_activity(
-            gt_agent=self.gt_agent, activity_type=AgentActivityType.COMPACT, metadata=self._base_metadata(),
-        )
-
-        compact_plan = self._history.build_compact_plan()
-        if compact_plan is None:
-            logger.warning("compact 跳过：无可压缩消息, agent_id=%d", self.gt_agent.id)
-            await self._finish_activity(compact_activity.id, status=AgentActivityStatus.FAILED, error_message="无可压缩消息")
-            raise RuntimeError("compact 跳过：无可压缩消息")
-
-        # 摘要 token 上限动态设为上下文长度的 10%，随模型配置自动伸缩
-        compact_max_tokens = max(1, int(llm_config.context_window_tokens * 0.1))
-        # 单条源消息 token 硬上限：防止超长单条消息（如巨型工具结果）使 compact
-        # 请求本身无法收敛并触发下游 400（审计 M14）。取硬上限的一半作为单条预算。
-        per_message_max_tokens = max(1, hard_limit_tokens // 2)
-        try:
-            summary_text = await compact.compact_messages(
-                messages=compact_plan.source_messages,
-                system_prompt=self.system_prompt,
-                model=resolved_model,
-                tools=self.tool_registry.export_openai_tools(),
-                max_tokens=compact_max_tokens,
-                team_config=await self._get_team_config_async(),
-                per_message_max_tokens=per_message_max_tokens,
-            )
-        except Exception as e:
-            error_detail = str(e)
-            logger.warning("compact 失败: %s, agent_id=%d", error_detail, self.gt_agent.id)
-            await self._finish_activity(compact_activity.id, status=AgentActivityStatus.FAILED, error_message=error_detail)
-            raise
-
-        old_prefix_seq = compact_plan.insert_seq
-        await self._history.insert_compact_summary(
-            llmApiUtil.OpenAIMessage.text(llmApiUtil.OpenaiApiRole.USER, summary_text),
-            seq=compact_plan.insert_seq,
-        )
-
-        # compact 成功后物理删除 DB 中旧前缀消息，防止 DB 持续膨胀
-        try:
-            deleted = await gtAgentHistoryManager.delete_history_before_seq(
-                self.gt_agent.id, old_prefix_seq,
-            )
-            if deleted > 0:
-                logger.info("compact 清理 DB 旧前缀: agent_id=%d, deleted=%d, before_seq=%d",
-                            self.gt_agent.id, deleted, old_prefix_seq)
-        except Exception as del_err:
-            # 清理失败不影响 compact 主流程（内存已正确），仅记录日志
-            logger.warning("compact 清理 DB 旧前缀失败（不影响运行）: agent_id=%d, error=%s",
-                           self.gt_agent.id, del_err)
-
-        # 活动记录：COMPACT SUCCEEDED
-        await self._finish_activity(compact_activity.id, status=AgentActivityStatus.SUCCEEDED)
+        await self._compact_manager.execute_compact()

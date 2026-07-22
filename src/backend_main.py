@@ -249,11 +249,20 @@ async def main(config_dir: str = None, port: int | None = None):
     else:
         await schedulerService.start_schedule()
 
-    # xheaders=True: 信任 Nginx 的 X-Forwarded-For，使 remote_ip 正确（限流/审计生效）
-    # max_buffer_size: 限制请求体大小，防止大文件 DoS
+    # xheaders：仅在配置可信反向代理时信任 X-Forwarded-For，使 remote_ip 正确（限流/审计生效）。
+    # 直连部署时必须为 False，否则攻击者可伪造/轮换 XFF 绕过按 IP 的限流并污染审计日志。
+    trust_proxy = bool(getattr(getattr(app_config.setting, "security", None), "trust_proxy_headers", False))
+    if bind_host not in _loopback_hosts and not trust_proxy:
+        logger.warning(
+            "[安全] 当前为非回环监听（%s）且未开启 security.trust_proxy_headers，"
+            "将忽略 X-Forwarded-For。若部署在可信反向代理（Nginx 等）之后，"
+            "请在 setting.json 设置 security.trust_proxy_headers=true 以还原真实客户端 IP。",
+            bind_host,
+        )
+    # max_buffer_size / max_body_size: 限制请求体大小，防止大文件 DoS
     web_server = tornado.httpserver.HTTPServer(
         route.application,
-        xheaders=True,
+        xheaders=trust_proxy,
         max_buffer_size=10 * 1024 * 1024,   # 10MB
         max_body_size=20 * 1024 * 1024,      # 20MB
     )
@@ -261,7 +270,21 @@ async def main(config_dir: str = None, port: int | None = None):
         web_server.listen(bind_port, bind_host)
         await _shutdown_event.wait()
     finally:
+        # 优雅停机：先停止接受新连接，给在途 HTTP/WS 一个短暂排空窗口，
+        # 再关闭所有连接，最后才关停各业务服务与数据库。
         web_server.stop()
+        drain_seconds = float(os.environ.get("DIGITALLIFE_SHUTDOWN_DRAIN_SECONDS", "3"))
+        if drain_seconds > 0:
+            logger.info("[停机] 等待在途请求排空（%.1fs）...", drain_seconds)
+            try:
+                await asyncio.sleep(drain_seconds)
+            except asyncio.CancelledError:
+                pass
+        try:
+            await web_server.close_all_connections()
+        except Exception:
+            logger.exception("[停机] 关闭连接异常")
+        logger.info("[停机] 连接已关闭，开始关停业务服务")
         schedulerService.shutdown()
         runService.shutdown()
         await agentService.shutdown()

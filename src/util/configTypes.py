@@ -143,7 +143,7 @@ class LlmServiceConfig(BaseModel):
     compact_summary_max_tokens: int = 6 * 1024
 
     # 性能与上游限流保护。每个服务拥有独立并发池；0 RPM 表示不做主动节流。
-    max_concurrency: int = Field(default=20, ge=1, le=256)
+    max_concurrency: int = Field(default=50, ge=1, le=256)
     requests_per_minute: int = Field(default=0, ge=0)
 
     @field_validator("provider_params")
@@ -251,6 +251,16 @@ class DevConfig(BaseModel):
     latest_release: str = ""
 
 
+class AlertConfig(BaseModel):
+    """主动告警配置：关键异常事件推送到外部 Webhook。"""
+    model_config = ConfigDict(extra="ignore")
+
+    # 总开关
+    enabled: bool = False
+    # 钉钉/企业微信/Slack incoming-webhook 地址（留空则不推送）
+    webhook_url: str = ""
+
+
 class SecurityConfig(BaseModel):
     """安全可配置加固开关。
 
@@ -264,6 +274,10 @@ class SecurityConfig(BaseModel):
     enforce_content_type: bool = False
     # WebSocket 严格校验 Origin（审计 H3）
     ws_strict_origin: bool = False
+    # 信任反向代理转发的 X-Forwarded-For / X-Real-IP（xheaders）。
+    # 仅在确认前面有可信反向代理（Nginx/Cloudflare 等）时开启；直连部署必须保持 False，
+    # 否则攻击者可轮换 XFF 绕过按 remote_ip 的限流并污染审计 IP。
+    trust_proxy_headers: bool = False
 
 
 class SettingConfig(BaseModel):
@@ -277,6 +291,7 @@ class SettingConfig(BaseModel):
     driver_fallback: DriverFallbackConfig = Field(default_factory=DriverFallbackConfig)
     search: SearchToolsConfig = Field(default_factory=SearchToolsConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    alert: AlertConfig = Field(default_factory=AlertConfig)
     default_llm_server: str | None = None
     fallback_llm_servers: list[str] = Field(default_factory=list)
     llm_services: list[LlmServiceConfig] = Field(default_factory=list)

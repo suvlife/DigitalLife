@@ -1,3 +1,6 @@
-/* LXGW WenKai / 霞鹜文楷，SIL Open Font License 1.1。Vite 从 npm 依赖中打包到网站静态资源，不依赖 CDN。 */
-@font-face{font-family:'LXGW WenKai';font-style:normal;font-display:swap;font-weight:300 600;src:url('@fontsource/lxgw-wenkai/files/lxgw-wenkai-latin-500-normal.woff2') format('woff2')}
-@font-face{font-family:'LXGW WenKai';font-style:normal;font-display:swap;font-weight:700 900;src:url('@fontsource/lxgw-wenkai/files/lxgw-wenkai-latin-700-normal.woff2') format('woff2')}
+/* LXGW WenKai / 霞鹜文楷，SIL Open Font License 1.1。
+   字体子集化（性能优化 #20）：源 @fontsource woff2 含 3 万+ 字形（2 万+ CJK），单权重约 7MB。
+   改为引用 scripts/subset_fonts.py 生成的本地子集（项目字符集 ∪ GB2312 一级字，约 0.84MB/权重）。
+   子集文件位于 public/fonts/，随构建原样拷贝到 dist/fonts/，不经 npm 打包。 */
+@font-face{font-family:'LXGW WenKai';font-style:normal;font-display:swap;font-weight:300 600;src:url('/fonts/lxgw-wenkai-subset-500.woff2') format('woff2')}
+@font-face{font-family:'LXGW WenKai';font-style:normal;font-display:swap;font-weight:700 900;src:url('/fonts/lxgw-wenkai-subset-700.woff2') format('woff2')}

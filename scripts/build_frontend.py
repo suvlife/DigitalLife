@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""构建并同步 DigitalLife 的旧版与 V2 Web 前端。"""
+"""构建并同步 DigitalLife 的旧版、V2 与 V3 Web 前端。"""
 
 from __future__ import annotations
 
@@ -35,6 +35,11 @@ TARGETS = {
         name="V2 武侠前端",
         source_dir=os.path.join(REPO_ROOT, "frontend-v2"),
         asset_dir=os.path.join(REPO_ROOT, "assets", "frontend-v2"),
+    ),
+    "v3": FrontendTarget(
+        name="V3 科幻全息前端",
+        source_dir=os.path.join(REPO_ROOT, "frontend-v3"),
+        asset_dir=os.path.join(REPO_ROOT, "assets", "frontend-v3"),
     ),
 }
 
@@ -79,17 +84,54 @@ def _sync(target: FrontendTarget) -> None:
     print(f"✅ {target.name} 同步完成（{size_mb:.1f} MB）")
 
 
+def _prepare_subset_fonts() -> None:
+    """构建前生成 LXGW 子集字体并放入各端 public/fonts/（性能优化 #20）。
+
+    源 @fontsource woff2 含 3 万+ 字形（单权重约 7MB），子集化后约 0.84MB。
+    字体内容变化（文案/预设新增字符）时重跑即可更新。需要 fontTools + brotli。
+    子集失败不阻断构建（回退为使用已存在的子集文件）。
+    """
+    import shutil
+    import subprocess
+
+    subset_script = os.path.join(REPO_ROOT, "scripts", "subset_fonts.py")
+    out_dir = os.path.join(REPO_ROOT, "assets", "fonts")
+    try:
+        print("\n--- 字体子集化（LXGW 文楷）---")
+        subprocess.run(
+            [sys.executable, subset_script, "--out-dir", out_dir],
+            check=True, cwd=REPO_ROOT,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"⚠️  字体子集化失败（{exc}），使用已存在的子集文件继续")
+
+    # 将子集字体分发到各端 public/fonts/（vite 会原样拷贝到 dist/fonts/）
+    for name in ("500", "700"):
+        src = os.path.join(out_dir, f"lxgw-wenkai-subset-{name}.woff2")
+        if not os.path.isfile(src):
+            continue
+        for frontend_dir in ("frontend", "frontend-v2"):
+            dst_dir = os.path.join(REPO_ROOT, frontend_dir, "public", "fonts")
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copy2(src, os.path.join(dst_dir, os.path.basename(src)))
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="构建旧版与 V2 Web 前端")
+    parser = argparse.ArgumentParser(description="构建旧版、V2 与 V3 Web 前端")
     parser.add_argument("--install", action="store_true", help="构建前安装依赖")
     parser.add_argument("--no-sync", action="store_true", help="仅构建，不同步到 assets")
     parser.add_argument(
         "--target",
-        choices=("all", "legacy", "v2"),
+        choices=("all", "legacy", "v2", "v3"),
         default="all",
         help="要构建的前端，默认 all",
     )
     args = parser.parse_args()
+
+    # 旧版与 V2 使用 LXGW 子集字体（V3 用系统字体，无需子集化）
+    if args.target in ("all", "legacy", "v2"):
+        _prepare_subset_fonts()
 
     selected = list(TARGETS.values()) if args.target == "all" else [TARGETS[args.target]]
     for target in selected:

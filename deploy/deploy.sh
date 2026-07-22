@@ -4,6 +4,8 @@
 # 前提：Ubuntu 22.04+ / Debian 12+，root 权限
 
 set -e
+# 管道左端命令失败时让整条管道返回非零，配合 set -e 在构建/安装失败时立即中止。
+set -o pipefail
 
 # ===== 配置 =====
 APP_NAME="digitallife"
@@ -70,6 +72,13 @@ npm run build 2>&1 | tail -3
 cd ..
 mkdir -p assets/frontend-v2
 cp -r frontend-v2/dist/* assets/frontend-v2/
+
+cd frontend-v3
+npm install --silent 2>/dev/null
+npm run build 2>&1 | tail -3
+cd ..
+mkdir -p assets/frontend-v3
+cp -r frontend-v3/dist/* assets/frontend-v3/
 echo "  前端构建完成"
 
 # ===== 6. 创建数据目录 =====

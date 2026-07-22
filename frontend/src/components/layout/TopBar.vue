@@ -2,11 +2,12 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import i18n from '../../i18n';
-import { setLanguage } from '../../api';
+import { setLanguage, logout as apiLogout } from '../../api';
 import { clearToken } from '../../authStore';
 import { showTokenDialog } from '../../appUiState';
 import { clearTeams } from '../../teamStore';
 import { clearRuntimeStore } from '../../realtime/runtimeStore';
+import { stopRealtimeClient } from '../../realtime/wsClient';
 import { safeExternalUrl } from '../../utils/safeUrl';
 import LabeledSwitch from '../ui/LabeledSwitch.vue';
 import ConfirmDialog from '../ui/ConfirmDialog.vue';
@@ -203,6 +204,12 @@ function handleLogout(): void {
 
 function confirmLogout(): void {
   logoutConfirmOpen.value = false;
+  // 先断开实时连接（停止重连/超时定时器并释放旧 token），
+  // 再调用服务端登出使 session 失效，最后清理本地状态。
+  stopRealtimeClient();
+  void apiLogout().catch(() => {
+    // 服务端登出失败（如网络断开）不阻塞本地登出流程
+  });
   clearRuntimeStore();
   clearTeams();
   clearToken();

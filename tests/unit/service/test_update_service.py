@@ -20,6 +20,22 @@ from service.updateService import (
 )
 
 
+def _stub_app_config(latest_release=None):
+    """构造一个不依赖真实配置文件的 AppConfig 桩，仅提供 updateService 用到的
+    setting.dev.latest_release 字段（默认 None → 走 GitHub 路径）。
+
+    updateService.check_for_update 内部调用 configUtil.get_app_config()，
+    单测环境下全局 AppConfig 未初始化会抛 RuntimeError，这里统一打桩隔离。
+    """
+    dev = mock.MagicMock()
+    dev.latest_release = latest_release
+    setting = mock.MagicMock()
+    setting.dev = dev
+    app_config = mock.MagicMock()
+    app_config.setting = setting
+    return app_config
+
+
 # ───────────────────── _parse_version ─────────────────────
 
 class TestParseVersion:
@@ -100,12 +116,18 @@ class TestCheckForUpdateCache:
     """check_for_update 的缓存行为。"""
 
     def setup_method(self):
-        """每个测试前重置全局缓存。"""
+        """每个测试前重置全局缓存，并打桩 AppConfig（依赖 dev.latest_release）。"""
         updateService._cached_result = None
         updateService._cached_at = 0.0
+        self._config_patcher = mock.patch(
+            "service.updateService.configUtil.get_app_config",
+            return_value=_stub_app_config(),
+        )
+        self._config_patcher.start()
 
     def teardown_method(self):
-        """每个测试后重置全局缓存。"""
+        """每个测试后重置全局缓存并还原 AppConfig 桩。"""
+        self._config_patcher.stop()
         updateService._cached_result = None
         updateService._cached_at = 0.0
 
@@ -228,8 +250,14 @@ class TestFetchGithubRelease:
     def setup_method(self):
         updateService._cached_result = None
         updateService._cached_at = 0.0
+        self._config_patcher = mock.patch(
+            "service.updateService.configUtil.get_app_config",
+            return_value=_stub_app_config(),
+        )
+        self._config_patcher.start()
 
     def teardown_method(self):
+        self._config_patcher.stop()
         updateService._cached_result = None
         updateService._cached_at = 0.0
 

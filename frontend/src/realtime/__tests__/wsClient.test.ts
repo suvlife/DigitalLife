@@ -33,7 +33,7 @@ import {
 
 type ListenerMap = {
   open: Array<() => void>;
-  close: Array<() => void>;
+  close: Array<(event?: CloseEvent) => void>;
   error: Array<() => void>;
   message: Array<(event: MessageEvent<string>) => void>;
 };
@@ -61,6 +61,13 @@ class FakeWebSocket {
   close(): void {
     this.closeCount += 1;
     this.emit('close');
+  }
+
+  /** 模拟带状态码的服务端关闭（如 1008 鉴权失败）。 */
+  closeWithCode(code: number): void {
+    this.closeCount += 1;
+    const event = { code } as CloseEvent;
+    this.listeners.close.forEach((listener) => listener(event));
   }
 
   emit(type: 'open' | 'close' | 'error'): void;
@@ -201,5 +208,41 @@ describe('wsClient', () => {
 
     expect(sockets).toHaveLength(1);
     expect(connectionState.value).toBe('disconnected');
+  });
+
+  it('reconnects when the initial connection times out', () => {
+    // 首连（connecting 态）也应受超时保护：connectTimeoutMs 内未 open 即触发重连。
+    startRealtimeClient();
+    expect(connectionState.value).toBe('connecting');
+    expect(sockets).toHaveLength(1);
+
+    // 不触发 open，推进超过 connectTimeoutMs(2000)
+    vi.advanceTimersByTime(2100);
+
+    expect(connectionState.value).toBe('waiting_reconnect');
+
+    // 推进超过首次退避（3000ms），分步推进以正确处理高频 countdown interval
+    vi.advanceTimersByTime(30000);
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    expect(connectionState.value).not.toBe('connecting');
+  });
+
+  it('stops reconnecting and prompts for token on 1008 auth failure', () => {
+    authEnabled.value = true;
+    getTokenMock.mockReturnValue('bad-token');
+
+    startRealtimeClient();
+    sockets[0]?.emit('open');
+    expect(connectionState.value).toBe('connecting');
+
+    // 后端鉴权失败以 1008 关闭：应停止重连、清 token 并弹出输入框，而非无限重试
+    sockets[0]?.closeWithCode(1008);
+
+    expect(connectionState.value).toBe('disconnected');
+    expect(showTokenDialog.value).toBe(true);
+
+    // 推进较长时间也不应自动重连
+    vi.advanceTimersByTime(60000);
+    expect(sockets).toHaveLength(1);
   });
 });

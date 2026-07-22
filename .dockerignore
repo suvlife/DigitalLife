@@ -8,7 +8,9 @@
 # 开发环境
 .venv
 node_modules
+frontend/node_modules
 frontend-v2/node_modules
+frontend-v3/node_modules
 
 # 测试
 tests/

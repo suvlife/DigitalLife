@@ -37,9 +37,10 @@ async def load_agent_history_message(agent_id: int) -> list[GtAgentHistory]:
     """加载 Agent 的对话历史，启动恢复时按 compact 规则裁剪加载范围。
 
     若存在 compact 记录，只返回恢复当前 compact 视图所需的最小消息窗口。
+    统一走 SQL 级裁剪（get_agent_history_after_compact，取最新 compact 之后的数据），
+    与 agentHistoryStore.reload_from_db 同一口径，避免全量拉取+内存裁剪的双实现分叉。
     """
-    items = await gtAgentHistoryManager.get_agent_history(agent_id)
-    return _trim_to_latest_compact(items)
+    return await gtAgentHistoryManager.get_agent_history_after_compact(agent_id)
 
 
 async def fail_running_tasks(
@@ -65,7 +66,12 @@ async def fail_running_tasks(
 
 
 def _trim_to_latest_compact(items: list[GtAgentHistory]) -> list[GtAgentHistory]:
-    """按 compact 视图规则裁剪恢复窗口。从 DB 加载时 COMPACT_SUMMARY 可在任意位置，需扫描定位。"""
+    """按 compact 视图规则裁剪恢复窗口。从 DB 加载时 COMPACT_SUMMARY 可在任意位置，需扫描定位。
+
+    注：主恢复路径（load_agent_history_message / agentHistoryStore.reload_from_db）
+    已统一走 SQL 级裁剪（get_agent_history_after_compact）。本函数保留作语义参照与
+    单元测试对照，行为与 SQL 版一致（取最新 COMPACT_SUMMARY 起的后缀）。
+    """
     for idx in range(len(items) - 1, -1, -1):
         if AgentHistoryTag.COMPACT_SUMMARY in items[idx].tags:
             return items[idx:]

@@ -211,6 +211,15 @@ class AgentTaskConsumer:
                             task.id, AgentTaskStatus.CANCELLED,
                             error_message=f"达到最大重试次数({_MAX_RETRY})，自动取消",
                         )
+                        # 主动告警：任务最终失败（达到最大重试），需人工介入
+                        try:
+                            from service import alertService
+                            alertService.alert_task_failed(
+                                self.gt_agent.id, task.id,
+                                (task.error_message or "达到最大重试次数自动取消"),
+                            )
+                        except Exception:
+                            pass
                         continue  # 重新取下一个任务
                     # 自增 retry_count 并持久化
                     task_data = dict(task.task_data or {})

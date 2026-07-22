@@ -20,14 +20,9 @@ from model.dbModel.gtTeam import GtTeam
 from model.dbModel.gtAgent import GtAgent
 from constants import MessageBusTopic, RoomState, RoomType, SpecialAgent
 from .chatRoom import ChatRoom
+from .roomConfig import resolve_room_max_rounds  # noqa: F401  (re-export，保持既有调用方兼容)
 
 logger = logging.getLogger("service.roomService")
-
-
-def resolve_room_max_rounds(max_rounds: int | None) -> int:
-    if max_rounds is not None:
-        return max_rounds
-    return configUtil.get_app_config().setting.default_room_max_rounds
 
 
 @dataclass

@@ -140,6 +140,10 @@ class BaseHandler(tornado.web.RequestHandler):
     # 安全头（所有响应自动携带）
     def set_default_headers(self) -> None:
         set_security_headers(self)
+        # 请求关联 ID 回写响应头，便于端到端追踪与排障。
+        request_id = getattr(self, "request_id", None)
+        if request_id:
+            self.set_header("X-Request-ID", request_id)
 
     def check_xsrf_cookie(self) -> None:
         """XSRF 检查：仅对 Cookie 会话鉴权生效。
@@ -166,15 +170,28 @@ class BaseHandler(tornado.web.RequestHandler):
     }
 
     def __init__(self, *args, **kwargs):
+        # 请求级当前用户缓存字段必须在 super().__init__() 之前初始化：
+        # Tornado 在 super().__init__() 内的 clear()→set_default_headers() 会经
+        # xsrf_token 调用 get_current_user()，那时就需要这些字段已存在。
+        self._current_user_cache = None
+        self._current_user_loaded = False
         super().__init__(*args, **kwargs)
         self.enhance = {}
 
     def prepare(self) -> None:
         """统一处理鉴权检查和演示模式只读闸门。
 
-        顺序：先鉴权（确认身份），再 demo 闸门（业务态）。
+        顺序：先生成请求关联 ID，再鉴权（确认身份），再 demo 闸门（业务态）。
         避免未鉴权调用方通过响应差异探测 read_only 状态。
         """
+        # 0. 请求关联 ID：优先沿用上游 X-Request-ID，否则生成，贯穿日志与响应头。
+        import uuid
+        self.request_id = (
+            self.request.headers.get("X-Request-ID")
+            or self.request.headers.get("X-Correlation-ID")
+            or uuid.uuid4().hex[:16]
+        )
+
         # 1. 鉴权检查
         self._check_auth()
 
@@ -233,7 +250,23 @@ class BaseHandler(tornado.web.RequestHandler):
                 raise tornado.web.Finish()
 
     def get_current_user(self):
-        """获取当前登录用户（通过 Cookie session）。返回 GtUser 或 None。"""
+        """获取当前登录用户（通过 Cookie session）。返回 GtUser 或 None。
+
+        结果按请求缓存（self._current_user_cache），同一请求内多次调用仅查询一次 DB。
+
+        注意：用 getattr 读取缓存标志而非直接访问实例属性。Tornado 在 __init__ 早期的
+        clear()→set_default_headers() 就会经 xsrf_token 间接调用本方法，那时 __init__
+        里赋值的缓存字段尚未初始化，直接访问会 AttributeError。
+        """
+        if getattr(self, "_current_user_loaded", False):
+            return self._current_user_cache
+        user = self._load_current_user()
+        self._current_user_cache = user
+        self._current_user_loaded = True
+        return user
+
+    def _load_current_user(self):
+        """实际查询当前登录用户（每个请求最多调用一次，结果由 get_current_user 缓存）。"""
         token = self.get_cookie("dl_session")
         if not token:
             return None
@@ -537,3 +570,15 @@ class BaseHandler(tornado.web.RequestHandler):
 
         ret_str = jsonUtil.json_dump(ret)
         self.write(ret_str)
+
+    def on_finish(self) -> None:
+        """请求结束时记录 HTTP 指标（路径归一化 + 状态码维度计数）。"""
+        try:
+            from service import metricsService
+            status = self.get_status()
+            metricsService.inc_counter("http_requests_total")
+            metricsService.inc_labeled(
+                "http_requests_by_status", status_class=f"{status // 100}xx"
+            )
+        except Exception:
+            pass

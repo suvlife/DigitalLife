@@ -121,11 +121,13 @@ jobs:
         cache-dependency-path: |
           frontend/package-lock.json
           frontend-v2/package-lock.json
+          frontend-v3/package-lock.json
 
     - name: Install frontend dependencies
       run: |
         npm ci --prefix frontend
         npm ci --prefix frontend-v2
+        npm ci --prefix frontend-v3
 
     - name: Audit production npm dependencies
       shell: bash
@@ -135,10 +137,13 @@ jobs:
         classic_exit=$?
         npm audit --registry=https://registry.npmjs.org --prefix frontend-v2 --omit=dev --audit-level=high --json > npm-audit-v2.json
         v2_exit=$?
+        npm audit --registry=https://registry.npmjs.org --prefix frontend-v3 --omit=dev --audit-level=high --json > npm-audit-v3.json
+        v3_exit=$?
         set -e
-        node scripts/check-npm-audit.mjs npm-audit-classic.json npm-audit-v2.json
+        node scripts/check-npm-audit.mjs npm-audit-classic.json npm-audit-v2.json npm-audit-v3.json
         test "$classic_exit" -eq 0
         test "$v2_exit" -eq 0
+        test "$v3_exit" -eq 0
 
     - name: Upload npm audit reports
       if: always()
@@ -156,6 +161,12 @@ jobs:
 
     - name: Test and build V2 frontend
       working-directory: frontend-v2
+      run: |
+        npm run test:run
+        npm run build
+
+    - name: Test and build V3 frontend
+      working-directory: frontend-v3
       run: |
         npm run test:run
         npm run build
@@ -187,12 +198,14 @@ jobs:
         cache-dependency-path: |
           frontend/package-lock.json
           frontend-v2/package-lock.json
+          frontend-v3/package-lock.json
           tests/e2e/package-lock.json
 
     - name: Install and build frontends
       run: |
         npm ci --prefix frontend
         npm ci --prefix frontend-v2
+        npm ci --prefix frontend-v3
         python scripts/build_frontend.py
 
     - name: Install browser test dependencies

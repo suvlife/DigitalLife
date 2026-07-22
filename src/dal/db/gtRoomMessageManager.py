@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 import peewee
 from peewee import fn
 
 from model.dbModel.gtRoomMessage import GtRoomMessage
 from . import gtRoomManager
+
+logger = logging.getLogger(__name__)
+
+# 内部无 limit 全量载入的保护性告警阈值（正常讨论远低于此量级）
+_FULL_LOAD_WARN_THRESHOLD = 5000
 
 
 async def append_room_message(
@@ -70,6 +76,15 @@ async def get_room_messages(
         return rows, has_more
 
     rows = await query.order_by(GtRoomMessage.seq.asc(nulls='last'), GtRoomMessage.id.asc()).aio_execute()
+    # 内部无 limit 调用（恢复运行时/持久化/结论生成）的保护性上限告警：
+    # 正常讨论远低于该量级；超过说明房间消息异常膨胀，整表载入内存有 OOM 与时延风险。
+    # 这里不截断（结论/恢复等路径需要完整语义），仅记录告警提示后续做分页/窗口化。
+    if len(rows) > _FULL_LOAD_WARN_THRESHOLD:
+        logger.warning(
+            "[room_message] get_room_messages 无 limit 全量载入超限: room_id=%s, rows=%d (>=%d)，"
+            "建议调用方改用分页或窗口化加载，避免内存膨胀",
+            room_id, len(rows), _FULL_LOAD_WARN_THRESHOLD,
+        )
     return rows, False
 
 

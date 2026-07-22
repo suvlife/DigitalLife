@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from util import jsonUtil, llmApiUtil
 
@@ -205,6 +206,21 @@ _RULES: tuple[LlmRequestRule, ...] = (
 )
 
 
+def _sanitize_provider_params(params: Any) -> Any:
+    """脱敏 provider_params 中疑似密钥的字段，避免规则命中日志把 api_key 落盘。
+
+    白名单允许 `tavily_api_key` 等随 provider_params 透传，这里对 key 名含
+    key/token/secret/password 的 value 一律打码，其余原样保留用于诊断。
+    """
+    if not isinstance(params, dict):
+        return params
+    redacted_tokens = ("key", "token", "secret", "password")
+    return {
+        k: ("***" if any(t in str(k).lower() for t in redacted_tokens) else v)
+        for k, v in params.items()
+    }
+
+
 def apply_llm_request_rules(
     request: llmApiUtil.OpenAIRequest,
 ) -> tuple[llmApiUtil.OpenAIRequest, tuple[str, ...]]:
@@ -219,7 +235,7 @@ def apply_llm_request_rules(
             rule.__class__.__name__,
             current_request.model,
             current_request.tool_choice,
-            current_request.provider_params,
+            _sanitize_provider_params(current_request.provider_params),
         )
         current_request = rule.apply(current_request)
         applied_rules.append(rule.__class__.__name__)

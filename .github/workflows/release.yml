@@ -161,6 +161,7 @@ jobs:
       run: |
         npm ci --prefix frontend
         npm ci --prefix frontend-v2
+        npm ci --prefix frontend-v3
 
     - name: Import Apple certificate
       if: ${{ env.APPLE_CERTIFICATE_P12 != '' }}

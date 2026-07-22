@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.8.9-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.9.0-blue">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-Tornado-orange">
@@ -57,11 +57,12 @@
 5. 汇总角色提交最终结论；
 6. 可选地将最终结论持久化并发布到 Ghost CMS。
 
-项目同时提供三种交互入口：
+项目同时提供四种交互入口：
 
 | 入口 | 路径/目录 | 适用场景 |
 |---|---|---|
-| 江湖书院 V2 | `/`、`frontend-v2/` | 默认入口；2.5D 团队/房间视图、问策、卷宗与完整设置 |
+| 江湖书院 V2 | `/`、`frontend-v2/` | 默认入口；武侠 2.5D 团队/房间视图、问策、卷宗与完整设置 |
+| 科幻全息 V3 | `/v3/`、`frontend-v3/` | 全息界面；实时大师状态指示、房间重试、运行取消、专属模型配置 |
 | 经典 Web 控制台 | `/v1/`、`frontend/` | 兼容入口；经典团队配置、聊天室、设置与用量管理 |
 | TUI | `tui/` | 终端环境、远程服务器与轻量操作 |
 
@@ -70,6 +71,20 @@
 工具执行层支持 [TSP（Tool Service Protocol）](https://github.com/alexazhou/TSP)，也保留原生 Function Calling 驱动。通过 `driver_fallback.tsp_to_native` 可以在外部 TSP/GTSP 不可用时回退到原生工具调用，避免单一工具驱动阻塞整个任务。
 
 ---
+
+## v0.9.0 重点更新
+
+- **跨室自动派发（auto-dispatch）**：用户在主殿提问时，系统**自动**将问题派发到团队的所有 GROUP 研究室，各室大师并行讨论后结果回流主殿综合研判。代码层实现，不依赖 LLM 工具调用，对所有团队生效。
+- **科幻全息 V3 前端**：新增 `/v3/` 全息界面，含五页面完整功能（总览/团队/房间/卷宗/设置）。实时大师状态指示（推演/查找/发言/议毕符号+颜色）、房间重试（FAILED/COMPLETED 房间一键重开、旧消息灰显分隔）、运行取消、专属模型配置、表单组件库。vue-router 深链支持。
+- **运行取消与房间重试**：新增 `POST /runs/{id}/cancel.json`（停所有 Agent + 标 CANCELLED）和 `POST /runs/{run_id}/rooms/{room_id}/retry.json`（保留历史重开单房间讨论）。
+- **可观测性**：`GET /system/metrics.json` 进程内指标（HTTP/LLM 计数、运行时长）；`GET /system/status.json` 增加运行时健康探针（DB 连通、内存、调度）；HTTP 请求关联 ID（X-Request-ID）贯穿日志与响应。
+- **主动告警**：`alertService` 支持任务失败/LLM 限流/调度卡死时推送到外部 Webhook（钉钉/企业微信/Slack 兼容，节流防刷屏），配置 `setting.alert.webhook_url`。
+- **数据库自动备份**：默认每 6 小时自动备份 SQLite 并轮转保留最近 12 份（`DIGITALLIFE_BACKUP_INTERVAL_SECONDS` / `DIGITALLIFE_BACKUP_KEEP_COUNT` 可调）。
+- **LLM 调用链稳定修复**：回退为同步 `create_pinned_client_session`，修复 session 池化/异步 DNS 导致的推理卡死问题；Agent 正常响应、任务正常分发。
+- **架构拆分**：`agentTurnRunner` 拆分为 ToolExecutor/CompactManager/toolResultUtils 协作组件（主类减 23%）；`funcToolService/tools.py` 按域拆分为 7 个文件。
+- **字体子集化**：LXGW 文楷字体从 14MB 精简到 1.68MB（-88%），V1/V2 首屏大幅提速，纳入 `build_frontend.py` 可复现构建。
+- **前端性能与稳定**：V2/V3 配色和谐调整（WCAG 对比度达标）、WS 客户端首连超时/心跳/1008 处理、旧版登出闭环、ISO 日期格式。
+- 以下为 v0.8.4 起的核心能力（本版本一并包含）：
 
 ## v0.8.4 重点更新
 

@@ -39,10 +39,13 @@ frontend-v2/node_modules/
 frontend-v2/dist/
 assets/frontend-v2/
 
+frontend-v3/node_modules/
+frontend-v3/dist/
+assets/frontend-v3/
+
 # Browser E2E local artifacts
 tests/e2e/node_modules/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 
 .DS_Store
-frontend-v3/node_modules/

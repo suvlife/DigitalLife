@@ -42,9 +42,25 @@ EXTRA_ACTIONS = ["check"]
 VALID_ACTIONS = ALL_ACTIONS + EXTRA_ACTIONS
 
 
+def _redact_command(command):
+    """打印命令前对密钥类参数值打码，避免 Apple 应用专用密码等进入终端/CI 日志。"""
+    sensitive_flags = {"--password", "--api-key", "--secret", "--token"}
+    redacted = []
+    skip_next = False
+    for i, arg in enumerate(command):
+        if skip_next:
+            redacted.append("***")
+            skip_next = False
+            continue
+        redacted.append(arg)
+        if arg in sensitive_flags and i + 1 < len(command):
+            skip_next = True
+    return redacted
+
+
 def run_command(command, check=True, capture_output=False, timeout=None, env=None):
     """执行 shell 命令，实时打印输出。"""
-    print(f"🚀 执行: {' '.join(command)}")
+    print(f"🚀 执行: {' '.join(_redact_command(command))}")
     try:
         if capture_output:
             result = subprocess.run(
