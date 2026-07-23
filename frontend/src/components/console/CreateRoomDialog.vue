@@ -121,6 +121,8 @@ async function loadDialogData(): Promise<void> {
       loadRoleTemplates(),
       loadTeamAgents(teamId.value, { includeSpecial: true }),
     ]);
+    // 默认勾选全部专家成员（排除系统发送者，保留操作者可手动勾选）
+    selectedMemberIds.value = members.value.map((m) => m.id);
   } catch (error) {
     errorMessage.value = t('createRoom.loadFailed');
     console.error(error);

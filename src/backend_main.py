@@ -219,6 +219,9 @@ async def main(config_dir: str = None, port: int | None = None):
     await schedulerService.startup()
     await presetService.startup()
     skillService.startup()
+    # 启动时清理过期 session，防止 user_sessions 表无界增长
+    from controller import authController
+    await authController.cleanup_expired_sessions()
     logger.info("[启动] 阶段 1/4 完成")
 
     # ── 阶段 2：导入配置 ──────────────────────────────────────────────────────

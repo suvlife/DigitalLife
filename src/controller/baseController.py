@@ -420,6 +420,53 @@ class BaseHandler(tornado.web.RequestHandler):
             raise tornado.web.Finish()
         await self._assert_team_owned(room.team_id)
 
+    async def _assert_rooms_owned_batch(self, room_ids: list[int]) -> None:
+        """批量校验房间归属（两次查询：rooms IN + teams IN），语义与逐房间
+        调用 _assert_room_owned 一致：房间不存在 404；团队不存在 404；
+        无权限 403。读方法按可读校验，写方法按可写校验。"""
+        from model.dbModel.gtRoom import GtRoom
+        from model.dbModel.gtTeam import GtTeam
+        from model.dbModel.gtUser import UserRole
+
+        if not room_ids:
+            return
+
+        rooms = await GtRoom.select().where(GtRoom.id.in_(room_ids)).aio_execute()
+        id_to_room = {room.id: room for room in rooms}
+
+        team_ids = {room.team_id for room in id_to_room.values()}
+        teams = await GtTeam.select().where(GtTeam.id.in_(team_ids), GtTeam.deleted == 0).aio_execute() if team_ids else []
+        id_to_team = {team.id: team for team in teams}
+
+        writable = self.request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+        user = self.get_current_user()
+        is_admin = user is not None and user.role == UserRole.ADMIN
+        legacy_authed = user is None and self._is_authed()
+
+        # 按入参顺序逐个校验，保持与逐房间调用 _assert_room_owned 相同的报错优先级
+        for rid in room_ids:
+            room = id_to_room.get(rid)
+            if room is None:
+                self.set_status(404)
+                self.return_json({"error_code": "room_not_found", "error_desc": "房间不存在"})
+                raise tornado.web.Finish()
+            team = id_to_team.get(room.team_id)
+            if team is None:
+                self.set_status(404)
+                self.return_json({"error_code": "team_not_found", "error_desc": "团队不存在"})
+                raise tornado.web.Finish()
+            if is_admin or legacy_authed:
+                continue
+            if not writable and team.owner_user_id is None:
+                # 公共团队对任意已认证用户可读
+                continue
+            if user is not None and team.owner_user_id == user.id:
+                continue
+            self.set_status(403)
+            desc = "无权修改该团队" if writable else "无权访问该团队"
+            self.return_json({"error_code": "forbidden", "error_desc": desc})
+            raise tornado.web.Finish()
+
     async def _assert_agent_owned(self, agent_id: int) -> None:
         """校验 Agent 归属：通过 agent.team_id 链式校验。"""
         from model.dbModel.gtAgent import GtAgent

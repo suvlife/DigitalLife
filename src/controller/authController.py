@@ -1,6 +1,7 @@
 """用户认证控制器 — 登录/登出/注册/当前用户信息。"""
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta
@@ -16,6 +17,24 @@ logger = logging.getLogger(__name__)
 
 _SESSION_TTL_DAYS = 7
 _SESSION_COOKIE_NAME = "dl_session"
+
+# 注册串行化：消除"查首个用户 → 定 role → 写入"的 TOCTOU 窗口（并发注册出多 ADMIN）
+_register_lock = asyncio.Lock()
+
+
+async def cleanup_expired_sessions() -> int:
+    """删除已过期的 session（单语句 indexed DELETE），防止表无界增长（审计 L 项）。
+
+    调用时机：后端 startup、每次登录成功时；不新增后台循环。
+    """
+    deleted = await (
+        GtSession.delete()
+        .where(GtSession.expires_at < datetime.now())
+        .aio_execute()
+    )
+    if deleted:
+        logger.info("已清理过期 session: %d 条", deleted)
+    return deleted
 
 # 固定的 dummy 哈希，用于用户不存在时执行等价耗时校验，消除时序侧信道（审计 L3）。
 # 在模块加载时生成一次（真实 PBKDF2 结构），不对应任何真实账户。
@@ -60,6 +79,9 @@ class LoginHandler(BaseHandler):
             user_agent=self.request.headers.get("User-Agent", "")[:200],
         )
         await session.aio_save()
+
+        # 顺带清理过期 session（indexed DELETE，代价可忽略）
+        await cleanup_expired_sessions()
 
         # 更新最后登录时间
         user.last_login = datetime.now()
@@ -133,34 +155,36 @@ class RegisterHandler(BaseHandler):
             self.return_json({"error_code": "weak_password", "error_desc": "密码至少 6 位"})
             return
 
-        # 检查用户名是否已存在
-        existing = await GtUser.aio_get_or_none(GtUser.username == username)
-        if existing is not None:
-            self.set_status(409)
-            self.return_json({"error_code": "username_exists", "error_desc": "用户名已被注册"})
-            return
-
-        # 判断是否首个用户（自动成为 admin）
-        # 用 aio_get_or_none 查任意用户判断是否已有用户（兼容 peewee-async 无 aio_count）
-        any_user = await GtUser.aio_get_or_none()
-        is_first_user = any_user is None
-        role = UserRole.ADMIN if is_first_user else UserRole.USER
-
-        # 如果已有用户，需要 admin 权限才能注册新用户
-        if not is_first_user:
-            current = self.get_current_user()
-            if current is None or current.role != UserRole.ADMIN:
-                self.set_status(403)
-                self.return_json({"error_code": "forbidden", "error_desc": "仅管理员可注册新用户"})
+        # 注册全程串行化（模块级锁）：消除并发注册时"首个用户"判定的 TOCTOU 窗口
+        async with _register_lock:
+            # 检查用户名是否已存在
+            existing = await GtUser.aio_get_or_none(GtUser.username == username)
+            if existing is not None:
+                self.set_status(409)
+                self.return_json({"error_code": "username_exists", "error_desc": "用户名已被注册"})
                 return
 
-        user = GtUser(
-            username=username,
-            password_hash=hash_password(password),
-            role=role,
-            display_name=display_name or username,
-        )
-        await user.aio_save()
+            # 判断是否首个用户（自动成为 admin）
+            # 用 aio_get_or_none 查任意用户判断是否已有用户（兼容 peewee-async 无 aio_count）
+            any_user = await GtUser.aio_get_or_none()
+            is_first_user = any_user is None
+            role = UserRole.ADMIN if is_first_user else UserRole.USER
+
+            # 如果已有用户，需要 admin 权限才能注册新用户
+            if not is_first_user:
+                current = self.get_current_user()
+                if current is None or current.role != UserRole.ADMIN:
+                    self.set_status(403)
+                    self.return_json({"error_code": "forbidden", "error_desc": "仅管理员可注册新用户"})
+                    return
+
+            user = GtUser(
+                username=username,
+                password_hash=hash_password(password),
+                role=role,
+                display_name=display_name or username,
+            )
+            await user.aio_save()
         logger.info("用户注册: username=%s, role=%s, user_id=%d", username, role.name, user.id)
 
         self.return_json({

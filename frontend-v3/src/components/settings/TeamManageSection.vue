@@ -99,7 +99,7 @@ async function saveRoom() {
   savingRoom.value = true; error.value = ''; notice.value = '';
   try {
     if (roomForm.value.id === null) {
-      await api.createTeamRoom(activeTeamId.value, { name: roomForm.value.name.trim(), agent_ids: [], initial_topic: roomForm.value.initial_topic || null, max_rounds: roomForm.value.max_rounds });
+      await api.createTeamRoom(activeTeamId.value, { name: roomForm.value.name.trim(), agent_ids: members.value.filter(m => m.id > 0).map(m => m.id), initial_topic: roomForm.value.initial_topic || null, max_rounds: roomForm.value.max_rounds });
       notice.value = '房间已创建';
     } else {
       await api.updateTeamRoom(activeTeamId.value, roomForm.value.id, { name: roomForm.value.name.trim(), initial_topic: roomForm.value.initial_topic || null, max_rounds: roomForm.value.max_rounds });

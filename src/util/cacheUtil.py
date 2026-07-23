@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import OrderedDict
 from typing import Generic, TypeVar, Callable, Iterable
 
 K = TypeVar("K")
@@ -17,7 +18,8 @@ class CacheStore(Generic[K, V]):
 
     线程安全：所有操作通过 threading.Lock 保护。
     TTL：缓存项在 ttl_seconds 后自动过期。
-    容量上限：达到 max_size 时淘汰最旧条目（简易 LRU）。
+    容量上限：达到 max_size 时淘汰最近最少使用（LRU）条目，get/set 命中均刷新热度，
+              OrderedDict 保证 O(1) 淘汰（替代旧的按写入时间 min() 全扫）。
 
     使用示例：
         # 简单缓存（key 为 int，value 为任意对象）
@@ -44,9 +46,9 @@ class CacheStore(Generic[K, V]):
             key_extractor: 可选的 key 提取函数，用于 add/add_many 方法自动提取 key。
                            若不提供，则必须显式调用 set/set_many 并传入 key。
             ttl_seconds: 缓存项存活时间（秒）。<=0 表示永不过期。
-            max_size: 缓存最大条目数，超出时淘汰最旧条目。
+            max_size: 缓存最大条目数，超出时淘汰最近最少使用条目。
         """
-        self._store: dict[K, V] = {}
+        self._store: OrderedDict[K, V] = OrderedDict()
         self._timestamps: dict[K, float] = {}
         self._key_extractor = key_extractor
         self._ttl_seconds = ttl_seconds
@@ -58,6 +60,7 @@ class CacheStore(Generic[K, V]):
         with self._lock:
             self._evict_if_needed()
             self._store[key] = value
+            self._store.move_to_end(key)
             self._timestamps[key] = time.monotonic()
 
     def get(self, key: K) -> V | None:
@@ -69,6 +72,7 @@ class CacheStore(Generic[K, V]):
                 self._store.pop(key, None)
                 self._timestamps.pop(key, None)
                 return None
+            self._store.move_to_end(key)
             return self._store[key]
 
     def contains(self, key: K) -> bool:
@@ -101,6 +105,7 @@ class CacheStore(Generic[K, V]):
             for key, value in items.items():
                 self._evict_if_needed()
                 self._store[key] = value
+                self._store.move_to_end(key)
                 self._timestamps[key] = now
 
     def get_many(self, keys: Iterable[K]) -> dict[K, V]:
@@ -109,6 +114,7 @@ class CacheStore(Generic[K, V]):
             result: dict[K, V] = {}
             for k in keys:
                 if k in self._store and not self._is_expired(k):
+                    self._store.move_to_end(k)
                     result[k] = self._store[k]
                 elif k in self._store:
                     self._store.pop(k, None)
@@ -140,6 +146,7 @@ class CacheStore(Generic[K, V]):
                 key = self._key_extractor(value)
                 self._evict_if_needed()
                 self._store[key] = value
+                self._store.move_to_end(key)
                 self._timestamps[key] = now
 
     def size(self) -> int:
@@ -157,11 +164,7 @@ class CacheStore(Generic[K, V]):
         return (time.monotonic() - ts) > self._ttl_seconds
 
     def _evict_if_needed(self) -> None:
-        """达到容量上限时淘汰最旧条目（调用方须持有锁）。"""
+        """达到容量上限时淘汰最近最少使用条目（调用方须持有锁，O(1)）。"""
         while len(self._store) >= self._max_size:
-            # 找到 timestamp 最小的 key（最旧）
-            oldest_key = min(self._timestamps, key=self._timestamps.get, default=None)  # type: ignore[arg-type]
-            if oldest_key is None:
-                break
-            self._store.pop(oldest_key, None)
-            self._timestamps.pop(oldest_key, None)
+            evicted_key, _ = self._store.popitem(last=False)
+            self._timestamps.pop(evicted_key, None)

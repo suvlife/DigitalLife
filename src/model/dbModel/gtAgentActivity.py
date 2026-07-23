@@ -13,6 +13,8 @@ class GtAgentActivity(DbModelBase):
     """Agent 活动记录：独立于消息历史的运行态观测数据。"""
     agent_id: int = peewee.IntegerField(index=True)
     team_id: int = peewee.IntegerField(index=True)
+    # 本次 turn 所在的任务房间（与 metadata.task_room_id 同源，冗余列用于索引查询）
+    room_id: int | None = peewee.IntegerField(null=True, index=True)
     activity_type: AgentActivityType = EnumField(AgentActivityType, null=False)
     status: AgentActivityStatus = EnumField(AgentActivityStatus, null=False)
     title: str = peewee.CharField()

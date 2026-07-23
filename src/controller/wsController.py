@@ -3,6 +3,7 @@ import hmac
 import json
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable
@@ -182,6 +183,34 @@ class _ScopeCache:
 
 
 _SCOPE_CACHE = _ScopeCache()
+
+# 多连接广播时同一事件只序列化一次：按 event_id 缓存序列化结果（有界 LRU）。
+# 事件分发在单事件循环内同步执行（无 await），OrderedDict 操作无需加锁。
+_SERIALIZED_EVENT_CACHE_MAX = 512
+_serialized_event_cache: "OrderedDict[int, str]" = OrderedDict()
+
+# WS 广播使用紧凑 JSON（无缩进）减小帧体积；HTTP 响应保留默认缩进配置不变。
+_WS_JSON_CONFIG = {jsonUtil.JSONConfig.indent: None}
+
+
+def _serialize_event(msg: messageBus.EventBusMessage) -> str:
+    """序列化事件 payload；同一 event_id 的序列化结果在所有连接间复用。"""
+    event_id = msg.event_id
+    if event_id is not None:
+        cached = _serialized_event_cache.get(event_id)
+        if cached is not None:
+            _serialized_event_cache.move_to_end(event_id)
+            return cached
+    payload = dict(msg.payload)
+    payload["event"] = _EVENT_NAMES[msg.topic]
+    if event_id is not None:
+        payload["event_id"] = event_id
+    serialized = jsonUtil.json_dump(payload, config=_WS_JSON_CONFIG)
+    if event_id is not None:
+        _serialized_event_cache[event_id] = serialized
+        while len(_serialized_event_cache) > _SERIALIZED_EVENT_CACHE_MAX:
+            _serialized_event_cache.popitem(last=False)
+    return serialized
 
 
 def _field(value: Any, name: str) -> Any:
@@ -444,12 +473,8 @@ class EventsWsHandler(tornado.websocket.WebSocketHandler):
             logger.debug("[ws] event dropped by tenant scope: topic=%s user_id=%s", msg.topic.name, self._user_id)
             return
 
-        payload = dict(msg.payload)
-        payload["event"] = _EVENT_NAMES[msg.topic]
-        if msg.event_id is not None:
-            payload["event_id"] = msg.event_id
         logger.debug("[ws] event: topic=%s", msg.topic.name)
-        serialized = jsonUtil.json_dump(payload)
+        serialized = _serialize_event(msg)
         try:
             self._send_queue.put_nowait(serialized)
         except asyncio.QueueFull:

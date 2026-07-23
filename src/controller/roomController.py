@@ -145,13 +145,12 @@ class RoomListHandler(BaseHandler):
             # 多租户：只查当前用户的团队 + 公共团队
             user_id = self._current_user_id()
             all_teams = await gtTeamManager.get_all_teams(owner_user_id=user_id)
-            data = []
-            for team in all_teams:
-                gt_rooms = await gtRoomManager.get_rooms_by_team(team.id)
-                data.extend(
-                    RoomApiResponse.from_gt_room(gt_room, roomService.get_room(gt_room.id)).model_dump()
-                    for gt_room in gt_rooms
-                )
+            # 单条 IN 查询替代按团队串行查询（N+1）
+            gt_rooms = await gtRoomManager.get_rooms_by_team_ids([team.id for team in all_teams])
+            data = [
+                RoomApiResponse.from_gt_room(gt_room, roomService.get_room(gt_room.id)).model_dump()
+                for gt_room in gt_rooms
+            ]
 
         self.return_json({"rooms": data})
 
@@ -166,9 +165,8 @@ class RoomLastMessagesHandler(BaseHandler):
             self.return_json({"messages": []})
             return
 
-        # 多租户：校验每个 room_id 归属当前用户
-        for rid in room_ids:
-            await self._assert_room_owned(rid)
+        # 多租户：批量校验房间归属（两次查询，替代逐房间 2N 次查询）
+        await self._assert_rooms_owned_batch(room_ids)
 
         last_messages = await gtRoomMessageManager.get_last_messages_by_room_ids(room_ids)
         self.return_json({"messages": last_messages})

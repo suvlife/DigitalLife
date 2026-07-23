@@ -66,3 +66,35 @@ class TestAuthController(_AuthServiceCase):
                 data = await resp.json()
 
         assert data["auth_enabled"] is True
+    async def test_concurrent_first_registration_yields_single_admin(self):
+        """并发首用户注册：注册串行化（模块级锁）保证至多产生一个 ADMIN（TOCTOU 修复）。
+
+        无锁时多个并发请求可同时通过"无用户"检查而都获得 ADMIN；
+        有锁后第 1 个注册成功为 ADMIN，其余因无 admin 会话被 403。
+        """
+        import asyncio
+
+        # 仅在干净的 users 表上执行（本测试类共享后端，其他用例不注册用户）
+        async with aiohttp.ClientSession() as client:
+            async def register(i: int):
+                return await client.post(
+                    f"{self.backend_base_url}/auth/register.json",
+                    json={"username": f"concurrent_user_{i}", "password": "passw0rd"},
+                )
+
+            responses = await asyncio.gather(*[register(i) for i in range(5)])
+            try:
+                results = []
+                for resp in responses:
+                    body = await resp.json()
+                    results.append((resp.status, body))
+            finally:
+                for resp in responses:
+                    resp.close()
+
+        ok = [b for status, b in results if status == 200]
+        forbidden = [b for status, b in results if status == 403]
+        assert len(ok) == 1, f"应恰好 1 个注册成功，实际 {len(ok)}: {results}"
+        assert ok[0]["user"]["role"] == "ADMIN"
+        assert len(forbidden) == len(results) - 1, "其余并发注册应因无 admin 权限被拒绝"
+        assert all(b["error_code"] == "forbidden" for b in forbidden)

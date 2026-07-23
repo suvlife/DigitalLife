@@ -300,3 +300,43 @@ describe('runtimeStore message history state', () => {
     expect(getRoomMessages(5)).toHaveLength(2);
   });
 });
+
+describe('runtimeStore message list bounding (审计性能项)', () => {
+  beforeEach(() => {
+    clearRuntimeStore();
+    setActiveRealtimeContext(2, 4);
+  });
+  afterEach(() => {
+    clearRuntimeStore();
+  });
+
+  it('keeps messages ordered and caps at the limit, dropping oldest', () => {
+    seedTeamRooms(2, [createRoom({ room_id: 4, agents: [5] })]);
+    // 依次推送 seq 递增的消息，命中 fast path（跳过全量排序）
+    for (let i = 1; i <= 2050; i++) {
+      applyRealtimeEvent({
+        type: 'message',
+        teamId: 2,
+        roomId: 4,
+        roomName: 'general',
+        message: createMessage({ db_id: i, seq: i, content: `m${i}`, time: `2026-05-04 22:2${i % 10}:00` }),
+      });
+    }
+    const messages = getRoomMessages(4);
+    expect(messages.length).toBe(2000);
+    // 丢弃最旧的 1~50，保留 51~2050
+    expect(messages[0].db_id).toBe(51);
+    expect(messages[messages.length - 1].db_id).toBe(2050);
+    // 仍有序
+    expect(messages.every((m, idx) => idx === 0 || (m.seq ?? 0) >= (messages[idx - 1].seq ?? 0))).toBe(true);
+  });
+
+  it('falls back to full sort when a message arrives out of order', () => {
+    seedTeamRooms(2, [createRoom({ room_id: 4, agents: [5] })]);
+    applyRealtimeEvent({ type: 'message', teamId: 2, roomId: 4, roomName: 'general', message: createMessage({ db_id: 3, seq: 3 }) });
+    // 乱序到达：seq=1 晚于 seq=3，应触发全量排序而非简单 append
+    applyRealtimeEvent({ type: 'message', teamId: 2, roomId: 4, roomName: 'general', message: createMessage({ db_id: 1, seq: 1 }) });
+    applyRealtimeEvent({ type: 'message', teamId: 2, roomId: 4, roomName: 'general', message: createMessage({ db_id: 2, seq: 2 }) });
+    expect(getRoomMessages(4).map((m) => m.db_id)).toEqual([1, 2, 3]);
+  });
+});

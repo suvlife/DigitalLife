@@ -34,6 +34,17 @@ function createApiProxy(target: string): ProxyOptions {
 export default defineConfig({
   base: '/v1/',
   plugins: [vue()],
+  build: {
+    rollupOptions: {
+      output: {
+        // vendor 分包：消除 >500KB 单 chunk 警告，改善首屏并行加载与缓存命中（审计性能项）
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-router', 'vue-i18n'],
+          'vendor-markdown': ['markdown-it', 'markdown-it-task-lists', 'highlight.js'],
+        },
+      },
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: 8181,

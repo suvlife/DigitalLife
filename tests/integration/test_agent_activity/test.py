@@ -177,24 +177,55 @@ class TestAgentActivityDAL(ServiceTestCase):
     # ── list_activities with room_id filter ──
 
     async def test_list_activities_filters_by_room_id(self):
+        """room_id 冗余列过滤：列值与 metadata.task_room_id 同源（审计修复前
+        查询侧读 $.room_id、写入侧写 task_room_id，按房间过滤恒为空）。"""
         await self._reset()
         await gtAgentActivityManager.create_activity(GtAgentActivity(
-            agent_id=1, team_id=1,
+            agent_id=1, team_id=1, room_id=42,
             activity_type=AgentActivityType.LLM_INFER,
             status=AgentActivityStatus.STARTED,
             title="推理", started_at=datetime.now(),
-            metadata={"room_id": 42},
+            metadata={"task_room_id": 42},
         ))
+        await gtAgentActivityManager.create_activity(GtAgentActivity(
+            agent_id=1, team_id=1, room_id=99,
+            activity_type=AgentActivityType.LLM_INFER,
+            status=AgentActivityStatus.STARTED,
+            title="推理", started_at=datetime.now(),
+            metadata={"task_room_id": 99},
+        ))
+        # 无 room 归属的活动不应被房间过滤命中
         await gtAgentActivityManager.create_activity(GtAgentActivity(
             agent_id=1, team_id=1,
             activity_type=AgentActivityType.LLM_INFER,
             status=AgentActivityStatus.STARTED,
-            title="推理", started_at=datetime.now(),
-            metadata={"room_id": 99},
+            title="推理", started_at=datetime.now(), metadata={},
         ))
         rows = await gtAgentActivityManager.list_activities(room_id=42)
         assert len(rows) == 1
-        assert rows[0].metadata["room_id"] == 42
+        assert rows[0].room_id == 42
+        assert rows[0].metadata["task_room_id"] == 42
+
+    async def test_add_activity_populates_room_id_column_from_metadata(self):
+        """service 写入路径：metadata.task_room_id 自动落入 room_id 冗余列。"""
+        await self._reset()
+        activity = await agentActivityService.add_activity(
+            gt_agent=_fake_agent(agent_id=7, team_id=1),
+            activity_type=AgentActivityType.LLM_INFER,
+            metadata=AgentActivityMeta(task_room_id=42),
+        )
+        assert activity.room_id == 42
+        assert activity.metadata["task_room_id"] == 42
+        rows = await gtAgentActivityManager.list_activities(room_id=42)
+        assert [row.id for row in rows] == [activity.id]
+
+        # 无 task_room_id 的 metadata → room_id 列为 NULL
+        activity2 = await agentActivityService.add_activity(
+            gt_agent=_fake_agent(agent_id=7, team_id=1),
+            activity_type=AgentActivityType.TOOL_CALL,
+            metadata=AgentActivityMeta(),
+        )
+        assert activity2.room_id is None
 
     async def test_list_activities_with_limit(self):
         await self._reset()

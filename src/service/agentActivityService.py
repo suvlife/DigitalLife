@@ -136,6 +136,8 @@ async def add_activity(
     item = GtAgentActivity(
         agent_id=gt_agent.id,
         team_id=gt_agent.team_id,
+        # room_id 冗余列与 metadata.task_room_id 同源，供按房间过滤走索引
+        room_id=metadata.task_room_id if metadata is not None else None,
         activity_type=activity_type,
         status=status,
         title=resolved_title,

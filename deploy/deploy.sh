@@ -81,13 +81,21 @@ mkdir -p assets/frontend-v3
 cp -r frontend-v3/dist/* assets/frontend-v3/
 echo "  前端构建完成"
 
-# ===== 6. 创建数据目录 =====
-echo "[6/10] 创建数据目录..."
+# ===== 6. 创建专用系统用户 + 数据目录 =====
+echo "[6/10] 创建专用用户与数据目录..."
+# 后端以非 root 专用用户运行（与 Dockerfile uid 10001 的非 root 约定一致）
+APP_USER="digitallife"
+if ! id -u ${APP_USER} >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin ${APP_USER}
+    echo "  已创建系统用户: ${APP_USER}"
+fi
 mkdir -p /opt/digitallife-data
 # 如果已有 setting.json 保留，否则从模板复制
 if [ ! -f /opt/digitallife-data/setting.json ]; then
     cp assets/config_template.json /opt/digitallife-data/setting.json
 fi
+# 数据目录（数据库/日志/工作区）归属专用用户；应用目录保持 root 所有、只读运行
+chown -R ${APP_USER}:${APP_USER} /opt/digitallife-data
 
 # ===== 7. 创建 systemd 服务 =====
 echo "[7/10] 创建 systemd 服务..."
@@ -98,7 +106,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=${APP_USER}
+Group=${APP_USER}
 WorkingDirectory=${APP_DIR}/src
 ExecStart=${APP_DIR}/.venv/bin/python backend_main.py --config-dir /opt/digitallife-data --port ${APP_PORT}
 Restart=always

@@ -195,8 +195,13 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
       </div>
     </GlassPanel>
 
-    <!-- 对话流 -->
+    <!-- 三栏讨论工作台：信息 / 主对话 / 运行状态 -->
     <div class="room-body">
+      <GlassPanel padding="md" class="room-side room-side-left">
+        <h3>讨论信息</h3>
+        <p>{{ room.initialTopic || run?.question || '暂无议题' }}</p>
+        <div class="member-list"><span v-for="member in members" :key="member.id">{{ member.name }}</span></div>
+      </GlassPanel>
       <GlassPanel padding="none" class="chat-panel">
         <div class="chat-messages" ref="chatMessages" @scroll="onChatScroll">
           <template v-for="(msg, i) in messages" :key="msg.id ?? i">
@@ -238,10 +243,11 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
           </div>
         </div>
       </GlassPanel>
+      <GlassPanel padding="md" class="room-side room-side-right">
+        <h3>运行状态</h3>
+        <RunProgress :run="run" :room-id="roomId || 0" />
+      </GlassPanel>
     </div>
-
-    <!-- 运行进度 -->
-    <RunProgress :run="run" :room-id="roomId || 0" />
   </div>
   <div v-else class="loading-state"><GlassPanel padding="lg"><p>正在加载房间...</p></GlassPanel></div>
 </template>
@@ -251,9 +257,12 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
 .room-header { display: flex; align-items: center; gap: var(--space-4); flex-shrink: 0; }
 .room-header-info { display: flex; align-items: center; gap: var(--space-3); flex: 1; }
 .room-title { font-size: var(--fs-lg); font-weight: 600; color: var(--text-primary); margin: 0; }
-.room-body { flex: 1; display: flex; overflow: hidden; min-height: 300px; }
-.chat-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.chat-messages { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+.room-body { flex: 1; display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) minmax(220px, 280px); gap: var(--space-3); overflow: hidden; min-height: clamp(620px, 72vh, 980px); }
+.room-side { min-width: 0; overflow-y: auto; font-size: var(--fs-xs); line-height: 1.55; }
+.room-side h3 { margin: 0 0 var(--space-3); font-size: var(--fs-sm); color: var(--text-secondary); }
+.member-list { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-4); color: var(--text-muted); }
+.chat-panel { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.chat-messages { flex: 1; overflow-y: auto; padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
 .msg-item { display: flex; gap: var(--space-3); animation: msg-arrive var(--dur-normal) var(--ease-out); transition: background var(--dur-fast); border-radius: var(--glass-radius-sm); padding: var(--space-2); }
 .msg-highlight { background: rgba(0, 217, 255, 0.06); border: 1px solid var(--glass-border-active); }
 .msg-operator { flex-direction: row-reverse; }
@@ -287,4 +296,6 @@ watch(roomId, () => { userScrolledUp.value = false; load(); });
 .fa-toggle { font-size: var(--fs-xs); color: var(--text-muted); }
 .fa-content { margin-top: var(--space-3); max-height: 400px; overflow-y: auto; }
 .loading-state { padding: var(--space-12); display: flex; justify-content: center; }
+@media (max-width: 1180px) { .room-body { grid-template-columns: minmax(0, 1fr) 240px; } .room-side-left { display: none; } }
+@media (max-width: 820px) { .room-body { grid-template-columns: 1fr; min-height: 560px; } .room-side-right { display: none; } }
 </style>

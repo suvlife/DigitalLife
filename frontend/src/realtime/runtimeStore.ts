@@ -90,6 +90,26 @@ function sortMessages(messages: MessageInfo[]): MessageInfo[] {
   return [...messages].sort(compareMessages);
 }
 
+// 每房间消息上限：超出丢弃最旧，避免长会话消息列表无限增长（审计性能项）
+const ROOM_MESSAGES_LIMIT = 2000;
+
+function appendMessageSorted(currentMessages: MessageInfo[], nextMessage: MessageInfo[]): MessageInfo[];
+function appendMessageSorted(currentMessages: MessageInfo[], nextMessage: MessageInfo): MessageInfo[];
+function appendMessageSorted(currentMessages: MessageInfo[], nextMessage: MessageInfo | MessageInfo[]): MessageInfo[] {
+  const incoming = Array.isArray(nextMessage) ? nextMessage : [nextMessage];
+  let merged = currentMessages;
+  for (const message of incoming) {
+    const last = merged[merged.length - 1];
+    // 有序送达 fast path：新消息不早于末尾消息时直接 append，跳过 O(n log n) 全量排序
+    merged = last === undefined || compareMessages(last, message) <= 0
+      ? [...merged, message]
+      : sortMessages([...merged, message]);
+  }
+  return merged.length > ROOM_MESSAGES_LIMIT
+    ? merged.slice(merged.length - ROOM_MESSAGES_LIMIT)
+    : merged;
+}
+
 function messageIdentity(message: MessageInfo): string {
   if (message.db_id !== null) {
     return `db:${message.db_id}`;
@@ -523,7 +543,7 @@ export function applyRealtimeEvent(event: FrontendRealtimeEvent): void {
         );
     if (!alreadyExists) {
       setRoomEntry(event.roomId, {
-        messages: sortMessages([...currentMessages, nextMessage]),
+        messages: appendMessageSorted(currentMessages, nextMessage),
       });
     }
 

@@ -17,6 +17,21 @@ async def get_rooms_by_team(team_id: int) -> list[GtRoom]:
     )
 
 
+async def get_rooms_by_team_ids(team_ids: list[int]) -> list[GtRoom]:
+    """批量按多个 team_id 查询房间（单条 IN 查询，替代按团队串行循环）。
+
+    排序 (team_id, name) 与按团队顺序逐次调用 get_rooms_by_team 的输出一致。
+    """
+    if not team_ids:
+        return []
+    return list(
+        await GtRoom.select()
+        .where(GtRoom.team_id.in_(team_ids))
+        .order_by(GtRoom.team_id, GtRoom.name)
+        .aio_execute()
+    )
+
+
 async def get_operator_control_room(team_id: int, agent_id: int) -> GtRoom | None:
     """查找 team 下同时包含 OPERATOR(-1) 和指定 agent_id 的 PRIVATE 控制房间。"""
     operator_id = -1

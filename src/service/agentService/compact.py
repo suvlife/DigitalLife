@@ -205,6 +205,13 @@ def _hard_truncate_text_to_tokens(text: str, model: str, max_tokens: int) -> str
     return text[:1] + _TRUNCATE_MARKER
 
 
+def _truncate_messages_to_tokens(
+    messages: list[llmApiUtil.OpenAIMessage], model: str, max_tokens: int
+) -> list[llmApiUtil.OpenAIMessage]:
+    """批量硬截断（同步、CPU 密集）：供事件循环通过 run_in_executor 调用。"""
+    return [_truncate_message_to_tokens(m, model, max_tokens) for m in messages]
+
+
 def _truncate_message_to_tokens(
     msg: llmApiUtil.OpenAIMessage, model: str, max_tokens: int
 ) -> llmApiUtil.OpenAIMessage:
@@ -250,9 +257,11 @@ async def compact_messages(
         RuntimeError: LLM 推理失败、返回为空、或返回了 tool_calls
     """
     if per_message_max_tokens is not None and per_message_max_tokens > 0:
-        messages = [
-            _truncate_message_to_tokens(m, model, per_message_max_tokens) for m in messages
-        ]
+        # token_counter 为 CPU 密集操作，整批下沉线程池，避免阻塞事件循环（审计 M5 截断路径）
+        loop = asyncio.get_running_loop()
+        messages = await loop.run_in_executor(
+            None, _truncate_messages_to_tokens, messages, model, per_message_max_tokens
+        )
     instruction = promptBuilder.build_compact_instruction(max_tokens)
     ctx = GtCoreAgentDialogContext(
         system_prompt=system_prompt,

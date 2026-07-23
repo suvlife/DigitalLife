@@ -119,3 +119,39 @@ class TestCacheStoreOverwrite:
         cache.add(_TestItem(id=1, name="alice"))
         cache.add(_TestItem(id=1, name="bob"))  # 覆盖
         assert cache.get(1).name == "bob"
+
+class TestCacheStoreLru:
+    """真 LRU 淘汰语义（审计修复：由"淘汰最早写入"改为"淘汰最近最少使用"）。"""
+
+    def test_evicts_least_recently_used_not_least_recently_written(self):
+        cache = CacheStore[int, str](ttl_seconds=0, max_size=3)
+        cache.set(1, "a")  # 最早写入
+        cache.set(2, "b")
+        cache.set(3, "c")
+        # 访问 key=1 使其成为最近使用，再写入新 key 时应淘汰 key=2（最久未用），
+        # 旧实现会错误地淘汰最早写入的 key=1
+        assert cache.get(1) == "a"
+        cache.set(4, "d")
+        assert cache.get(1) == "a", "刚访问过的 key 不应被淘汰"
+        assert cache.get(2) is None, "最久未使用的 key 应被淘汰"
+        assert cache.get(3) == "c"
+        assert cache.get(4) == "d"
+
+    def test_set_existing_key_refreshes_recency(self):
+        cache = CacheStore[int, str](ttl_seconds=0, max_size=2)
+        cache.set(1, "a")
+        cache.set(2, "b")
+        cache.set(1, "a2")  # 重写 key=1，刷新其热度
+        cache.set(3, "c")   # 应淘汰 key=2
+        assert cache.get(1) == "a2"
+        assert cache.get(2) is None
+        assert cache.get(3) == "c"
+
+    def test_eviction_is_bounded(self):
+        cache = CacheStore[int, int](ttl_seconds=0, max_size=100)
+        for i in range(1000):
+            cache.set(i, i)
+        assert cache.size() == 100
+        # 最后写入的 100 个应全部在缓存中
+        for i in range(900, 1000):
+            assert cache.get(i) == i

@@ -117,7 +117,7 @@ async def list_activities(
     if agent_id is not None:
         query = query.where(GtAgentActivity.agent_id == agent_id)
     if room_id is not None:
-        from peewee import fn
-        query = query.where(fn.json_extract(GtAgentActivity.metadata, "$.room_id") == room_id)
+        # room_id 冗余列（索引），与 metadata.task_room_id 同源
+        query = query.where(GtAgentActivity.room_id == room_id)
     query = query.order_by(GtAgentActivity.id.desc()).limit(limit)
     return await query.aio_execute()

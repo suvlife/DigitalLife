@@ -8,6 +8,7 @@ web_fetch 使用 Brave Search 的 URL 内容提取或直接 HTTP 抓取 + HTML �
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -451,7 +452,8 @@ async def web_fetch(
         return {"success": False, "message": f"网页抓取请求异常: {e}"}
 
     # HTML 清洗为纯文本
-    raw_content = _strip_html(html)
+    # 大体积 HTML 的正则清洗为 CPU 密集操作，下沉线程池避免阻塞事件循环（审计 M8）
+    raw_content = await asyncio.to_thread(_strip_html, html)
 
     # 截断过长的内容
     truncated = len(raw_content) > max_content_length

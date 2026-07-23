@@ -18,7 +18,7 @@ def test_backup_migrate_and_restore_roundtrip(tmp_path, monkeypatch):
     assert backup.is_file()
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT value FROM sentinel").fetchone()[0] == "before"
-        assert conn.execute("SELECT name FROM _migrations ORDER BY name DESC LIMIT 1").fetchone()[0] == "0018_blog_publication_leases.sql"
+        assert conn.execute("SELECT name FROM _migrations ORDER BY name DESC LIMIT 1").fetchone()[0] == "0019_agent_activity_room_id.sql"
         conn.execute("UPDATE sentinel SET value='after'")
     restore_backup(str(database), str(backup))
     with sqlite3.connect(database) as conn:

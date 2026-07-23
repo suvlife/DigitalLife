@@ -16,6 +16,9 @@ _schedule_state: ScheduleState = ScheduleState.STOPPED
 _schedule_not_running_reason: str = ""  # 调度未运行原因，仅在非 RUNNING 状态时可能有值
 # per-agent 任务创建锁，防止 check-then-insert 竞态导致重复创建 PENDING 任务
 _task_create_locks: dict[int, asyncio.Lock] = {}
+# 锁表有界上限：超过时淘汰未持有的锁（locked() 检查保证不破坏进行中的互斥）。
+# 正常规模按 agent 数天然有界，该上限仅防御异常场景下的无限增长。
+_TASK_CREATE_LOCKS_MAX = 1024
 
 # ---- 房间级熔断（审计 M2 / 关联 C2）----------------------------------------
 # 防止异常/对抗性房间在单个讨论周期内无限调度轮次、无限占用事件循环与 API 配额。
@@ -75,9 +78,14 @@ def _room_breaker_tripped(room_id: int) -> bool:
 
 def _get_task_create_lock(agent_id: int) -> asyncio.Lock:
     """获取（或创建）指定 agent 的任务创建锁。"""
-    if agent_id not in _task_create_locks:
-        _task_create_locks[agent_id] = asyncio.Lock()
-    return _task_create_locks[agent_id]
+    lock = _task_create_locks.get(agent_id)
+    if lock is None:
+        if len(_task_create_locks) >= _TASK_CREATE_LOCKS_MAX:
+            for key in [k for k, v in _task_create_locks.items() if not v.locked()]:
+                _task_create_locks.pop(key, None)
+        lock = asyncio.Lock()
+        _task_create_locks[agent_id] = lock
+    return lock
 
 
 def get_schedule_state() -> ScheduleState:

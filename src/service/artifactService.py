@@ -7,7 +7,7 @@ _write_final_report_artifact 之前完成）可能只有 DB 中的 final_answer 
 文件，导致“历史卷宗无法查看/下载”。这里的 get_dossier 在读取时按需回填该文件，
 使历史卷宗恢复可查可下载。"""
 from __future__ import annotations
-import csv, json, logging, os, re
+import asyncio, csv, json, logging, os, re
 from pathlib import Path
 from dal.db import gtTaskRunManager, gtTeamManager
 from model.dbModel.gtTaskRun import GtTaskRun
@@ -35,6 +35,41 @@ async def _team_workdir_by_id(team_id:int)->Path:
 def _resolve(workdir:Path,relative_path:str)->Path:
     path=(workdir/relative_path).resolve();fileUtil.assert_path_within_sandbox(str(path),str(workdir));return path
 
+# 单文件解析大小上限：超出直接拒绝，避免大文件解析长时间占用线程池与内存
+_EXTRACT_MAX_FILE_BYTES = 20 * 1024 * 1024
+
+
+def _parse_office_file_text(source:Path, ext:str)->str | None:
+    """同步解析 Office/文本文件正文；不支持的扩展名返回 None。
+
+    CPU/IO 密集（docx/xlsx/pptx 解析、大文本读取），必须经 asyncio.to_thread 调用，
+    不得在事件循环内直接执行（审计 M8）。
+    """
+    parts=[]
+    if ext in {'.md','.markdown','.txt','.json','.csv'}:
+        return source.read_text(encoding='utf-8',errors='replace')
+    elif ext=='.docx':
+        from docx import Document
+        doc=Document(source);parts.extend(p.text for p in doc.paragraphs if p.text.strip())
+        for table in doc.tables:
+            parts.extend(' | '.join(cell.text for cell in row.cells) for row in table.rows)
+        return '\n'.join(parts)
+    elif ext in {'.xlsx','.xlsm'}:
+        from openpyxl import load_workbook
+        book=load_workbook(source,data_only=False,read_only=True)
+        for sheet in book.worksheets:
+            parts.append(f'## 工作表：{sheet.title}')
+            for row in sheet.iter_rows(values_only=True):parts.append(' | '.join('' if v is None else str(v) for v in row))
+        return '\n'.join(parts)
+    elif ext=='.pptx':
+        from pptx import Presentation
+        deck=Presentation(source)
+        for index,slide in enumerate(deck.slides,1):
+            parts.append(f'## 第 {index} 页')
+            parts.extend(shape.text for shape in slide.shapes if hasattr(shape,'text') and shape.text.strip())
+        return '\n'.join(parts)
+    return None
+
 async def extract_office_file(path:str,_context:ToolCallContext=None)->dict:
     """读取已上传的 Word、Excel、PPT、Markdown 或文本文件并返回可供分析的正文。
 
@@ -44,30 +79,11 @@ async def extract_office_file(path:str,_context:ToolCallContext=None)->dict:
     if _context is None:return {'success':False,'message':'缺少团队上下文'}
     workdir=await _team_workdir(_context);source=_resolve(workdir,path)
     if not source.is_file():return {'success':False,'message':f'未找到文件: {path}'}
-    ext=source.suffix.lower();parts=[]
-    if ext in {'.md','.markdown','.txt','.json','.csv'}:
-        text=source.read_text(encoding='utf-8',errors='replace')
-    elif ext=='.docx':
-        from docx import Document
-        doc=Document(source);parts.extend(p.text for p in doc.paragraphs if p.text.strip())
-        for table in doc.tables:
-            parts.extend(' | '.join(cell.text for cell in row.cells) for row in table.rows)
-        text='\n'.join(parts)
-    elif ext in {'.xlsx','.xlsm'}:
-        from openpyxl import load_workbook
-        book=load_workbook(source,data_only=False,read_only=True)
-        for sheet in book.worksheets:
-            parts.append(f'## 工作表：{sheet.title}')
-            for row in sheet.iter_rows(values_only=True):parts.append(' | '.join('' if v is None else str(v) for v in row))
-        text='\n'.join(parts)
-    elif ext=='.pptx':
-        from pptx import Presentation
-        deck=Presentation(source)
-        for index,slide in enumerate(deck.slides,1):
-            parts.append(f'## 第 {index} 页')
-            parts.extend(shape.text for shape in slide.shapes if hasattr(shape,'text') and shape.text.strip())
-        text='\n'.join(parts)
-    else:return {'success':False,'message':f'当前不能直接解析 {ext}；请先转换为 docx/xlsx/pptx/md'}
+    size=source.stat().st_size
+    if size>_EXTRACT_MAX_FILE_BYTES:return {'success':False,'message':f'文件过大（{size // 1024 // 1024}MB，上限 20MB），请先拆分或转换'}
+    ext=source.suffix.lower()
+    text=await asyncio.to_thread(_parse_office_file_text, source, ext)
+    if text is None:return {'success':False,'message':f'当前不能直接解析 {ext}；请先转换为 docx/xlsx/pptx/md'}
     limit=120000;return {'success':True,'path':path,'characters':len(text),'truncated':len(text)>limit,'content':text[:limit]}
 
 async def generate_office_file(format:str,title:str,content:str,filename:str='',_context:ToolCallContext=None)->dict:
